@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { I18nProvider, useI18n, looksLikeTimeout } from "./i18n";
+import { I18nProvider, useI18n, looksLikeCanceled, looksLikeTimeout } from "./i18n";
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <I18nProvider>{children}</I18nProvider>
@@ -97,5 +97,21 @@ describe("looksLikeTimeout", () => {
     ["connection refused", false],
   ])("looksLikeTimeout(%j) -> %s", (input, expected) => {
     expect(looksLikeTimeout(input)).toBe(expected);
+  });
+});
+
+describe("looksLikeCanceled", () => {
+  it.each<[string | undefined, boolean]>([
+    [undefined, false],
+    ["", false],
+    ["canceled", true],
+    ["Canceled", true], // case-insensitive
+    ["cancelled", true], // British spelling
+    // Older jobs restored from disk can still carry the raw Go chain.
+    ["audio track 0: segment 10 failed: context canceled", true],
+    ["segment 10 failed: 403 Forbidden", false],
+    ["cancellation policy download failed", false],
+  ])("looksLikeCanceled(%j) -> %s", (input, expected) => {
+    expect(looksLikeCanceled(input)).toBe(expected);
   });
 });

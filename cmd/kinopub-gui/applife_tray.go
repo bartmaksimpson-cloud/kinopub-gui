@@ -70,8 +70,8 @@ func runApp(srv *http.Server, ln net.Listener, errCh <-chan error, restartCh <-c
 			systray.SetIcon(trayIconPNG)
 		}
 		systray.SetTitle("")
-		systray.SetTooltip("kino.pub downloader")
-		mOpen := systray.AddMenuItem("Open kino.pub", "Open the app in your browser")
+		systray.SetTooltip("kino.watch downloader")
+		mOpen := systray.AddMenuItem("Open kino.watch", "Open the app in your browser")
 		systray.AddSeparator()
 		mQuit := systray.AddMenuItem("Quit", "Stop the server and quit")
 		go func() {

@@ -34,13 +34,9 @@ export function InstallFFmpeg({ className }: { className?: string }) {
         {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
         {installing ? t("Installing ffmpeg…") : t("Install ffmpeg")}
       </button>
-      <p className="text-xs text-slate-500">
-        {installing
-          ? t("Downloading a static build — this can take a minute.")
-          : ffmpegInstall.source
-            ? t("Downloads a static build from {src}.", { src: ffmpegInstall.source })
-            : ""}
-      </p>
+      {/* Only the wait hint while a download is in flight. Naming the upstream
+          build host up front told the user nothing they could act on. */}
+      {installing && <p className="text-xs text-slate-500">{t("Downloading a static build — this can take a minute.")}</p>}
     </div>
   );
 }

@@ -195,6 +195,11 @@ type HLSDownloadResult struct {
 	// AudioTracks are the local audio files downloaded separately (demuxed HLS).
 	// Empty when audio is muxed into the video stream.
 	AudioTracks []HLSAudioTrack
+	// AudioFallback marks the tracks above as a SUBSTITUTE: the requested
+	// voiceover was not among this episode's renditions, so the selection fell
+	// back to another one (see SelectAudioResolved). kino.pub's dub line-up drifts
+	// between seasons, so this is per episode, not per run.
+	AudioFallback bool
 	// TempDir is the directory holding the intermediate files; the caller
 	// should remove it after remuxing.
 	TempDir string
@@ -207,18 +212,18 @@ type HLSAudioTrack struct {
 	Language string // language tag, e.g. "ru"
 }
 
-// PageScraper extracts playlist data from kino.pub pages.
+// PageScraper extracts playlist data from kino.watch pages.
 type PageScraper interface {
 	// ExtractAllSeasons fetches all seasons' playlists from a page URL.
 	ExtractAllSeasons(ctx context.Context, baseURL string) (*PagePlaylist, error)
 }
 
-// PagePlaylist holds extracted playlist data from a kino.pub page.
+// PagePlaylist holds extracted playlist data from a kino.watch page.
 type PagePlaylist struct {
 	ItemID   int
 	Title    string
 	Poster   string
-	Type     string   // kino.pub item type: movie, serial, documovie, …
+	Type     string   // kino.watch item type: movie, serial, documovie, …
 	Genres   []string // genre titles
 	Episodes []PageEpisode
 	Seasons  []PageSeason

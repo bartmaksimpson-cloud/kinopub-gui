@@ -55,7 +55,7 @@ func TestKPDeviceInfo(t *testing.T) {
 
 func TestHandlePreview_Unauthenticated(t *testing.T) {
 	s := newTestServer(t)
-	body, _ := json.Marshal(RunRequest{URL: "https://kino.pub/item/view/1"})
+	body, _ := json.Marshal(RunRequest{URL: "https://kino.watch/item/view/1"})
 	req := httptest.NewRequest("POST", "/api/preview", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	s.handlePreview(w, req)

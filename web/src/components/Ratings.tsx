@@ -8,7 +8,7 @@ function rateColor(v: number): string {
   return "text-slate-400";
 }
 
-// Ratings shows kino.pub local (👍), Kinopoisk and IMDb scores, styled like the
+// Ratings shows kino.watch local (👍), Kinopoisk and IMDb scores, styled like the
 // site: a source mark followed by the number. Shared by the catalog grid and
 // the title-detail card so they look identical.
 export function Ratings({ item, className }: { item: Pick<DiscoverItem, "rating" | "kinopoiskRating" | "imdbRating">; className?: string }) {

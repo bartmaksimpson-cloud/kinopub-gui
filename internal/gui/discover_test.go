@@ -463,7 +463,7 @@ func TestToDiscoverDetail(t *testing.T) {
 	if d.EpisodeCount != 1 {
 		t.Errorf("EpisodeCount = %d, want 1", d.EpisodeCount)
 	}
-	if d.ItemURL != "https://kino.pub/item/view/77" {
+	if d.ItemURL != "https://kino.watch/item/view/77" {
 		t.Errorf("ItemURL = %q", d.ItemURL)
 	}
 	if !reflect.DeepEqual(d.Qualities, []string{"1080p"}) {

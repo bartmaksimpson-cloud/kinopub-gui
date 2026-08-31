@@ -44,8 +44,12 @@ func TestRunHLS_CancelQueuedEpisode(t *testing.T) {
 		if res.Succeeded != 1 {
 			t.Errorf("Succeeded = %d, want 1", res.Succeeded)
 		}
-		if res.Failed != 1 {
-			t.Errorf("Failed = %d, want 1 (the canceled episode)", res.Failed)
+		// A cancel is the user dropping the episode, not a failed download.
+		if res.Failed != 0 {
+			t.Errorf("Failed = %d, want 0 — a cancel is not a failure", res.Failed)
+		}
+		if res.Skipped != 1 {
+			t.Errorf("Skipped = %d, want 1 (the canceled episode)", res.Skipped)
 		}
 		g.mu.Lock()
 		c2 := g.calls[k2]
@@ -95,8 +99,11 @@ func TestRunHLS_CancelActiveEpisode(t *testing.T) {
 		if res.Succeeded != 1 {
 			t.Errorf("Succeeded = %d, want 1 (E02)", res.Succeeded)
 		}
-		if res.Failed != 1 {
-			t.Errorf("Failed = %d, want 1 (the canceled E01)", res.Failed)
+		if res.Failed != 0 {
+			t.Errorf("Failed = %d, want 0 — a cancel is not a failure", res.Failed)
+		}
+		if res.Skipped != 1 {
+			t.Errorf("Skipped = %d, want 1 (the canceled E01)", res.Skipped)
 		}
 		g.mu.Lock()
 		c1 := g.calls[k1]

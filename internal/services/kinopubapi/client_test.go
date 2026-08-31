@@ -13,7 +13,7 @@ import (
 
 // TestEnsureTokenSerializesRefresh proves the fix for the device-lockout bug:
 // a burst of concurrent requests whose access token is expired must trigger
-// exactly ONE refresh (kino.pub invalidates the old refresh token on each
+// exactly ONE refresh (kino.watch invalidates the old refresh token on each
 // refresh, so concurrent refreshes would kill the session).
 func TestEnsureTokenSerializesRefresh(t *testing.T) {
 	var refreshCount int32
@@ -106,7 +106,7 @@ func TestRefreshRejectedIsSentinel(t *testing.T) {
 }
 
 // TestRefreshRejectedOnHTTP4xxNoErrorField verifies the robustness fix: when a
-// kino.pub intermediary (proxy/CDN) returns a 4xx whose JSON body has no
+// kino.watch intermediary (proxy/CDN) returns a 4xx whose JSON body has no
 // "error" field, refresh() must still surface ErrRefreshRejected so the GUI
 // clears the dead session instead of retrying forever.
 func TestRefreshRejectedOnHTTP4xxNoErrorField(t *testing.T) {

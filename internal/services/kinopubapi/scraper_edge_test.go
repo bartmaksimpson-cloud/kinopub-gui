@@ -13,7 +13,7 @@ import (
 )
 
 func TestItemURL(t *testing.T) {
-	if got := ItemURL("38290"); got != "https://kino.pub/item/view/38290" {
+	if got := ItemURL("38290"); got != "https://kino.watch/item/view/38290" {
 		t.Errorf("ItemURL = %q", got)
 	}
 }
@@ -206,7 +206,7 @@ func TestScraperExtractAllSeasons(t *testing.T) {
 	log := &fakeLogger{}
 	s := NewScraper(c, log)
 
-	pl, err := s.ExtractAllSeasons(context.Background(), "https://kino.pub/item/view/38290")
+	pl, err := s.ExtractAllSeasons(context.Background(), "https://kino.watch/item/view/38290")
 	if err != nil {
 		t.Fatalf("ExtractAllSeasons: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestScraperExtractAllSeasons(t *testing.T) {
 func TestScraperExtractAllSeasonsBadURL(t *testing.T) {
 	c := newTestClient(httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})))
 	s := NewScraper(c, nil)
-	_, err := s.ExtractAllSeasons(context.Background(), "https://kino.pub/movies")
+	_, err := s.ExtractAllSeasons(context.Background(), "https://kino.watch/movies")
 	if err == nil || !strings.Contains(err.Error(), "cannot determine item id") {
 		t.Fatalf("error = %v, want cannot determine item id", err)
 	}

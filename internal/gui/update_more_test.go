@@ -171,6 +171,37 @@ func TestUpdateStatus_Caching(t *testing.T) {
 	}
 }
 
+// A failed check must not be trusted for as long as a good one. The tab reloads
+// itself right after a self-update restart, which can abort the check it fired
+// on SSE reconnect; caching that for ten minutes left the update card claiming
+// the release feed was unreachable long after the update had installed fine.
+func TestUpdateStatus_FailedCheckGetsShortTTL(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // fails the GitHub call the way an aborted request does
+
+	u := newUpdateChecker("v1.0.0")
+	st := u.status(ctx, true)
+	if st.Note == "" {
+		t.Fatalf("a failed check should explain itself, got %+v", st)
+	}
+	if u.ttl != failedStatusTTL {
+		t.Errorf("failed check cached for %v, want %v", u.ttl, failedStatusTTL)
+	}
+
+	// Once that short life is over the next check refetches instead of serving
+	// the stale failure. A dev build resolves without touching the network.
+	u = newUpdateChecker("dev")
+	u.cached = &UpdateStatus{Current: "dev", Note: "stale-failure"}
+	u.ttl = failedStatusTTL
+	u.at = time.Now().Add(-failedStatusTTL - time.Second)
+	if st := u.status(context.Background(), false); st.Note == "stale-failure" {
+		t.Error("an expired failure should be refetched, not served from cache")
+	}
+	if u.ttl != statusTTL {
+		t.Errorf("successful check cached for %v, want %v", u.ttl, statusTTL)
+	}
+}
+
 // The binary download must NOT go through the API client: http.Client.Timeout
 // bounds the whole request including the body, and 20s kills a ~10 MB asset on
 // any route slower than ~0.5 MB/s ("context deadline exceeded while reading

@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { JobView } from "./api";
+import { NAV_ABORT_MESSAGE, type JobView } from "./api";
 
 // The store opens an EventSource and calls api.* on mount. Mock both so the
 // provider mounts cleanly and we can drive SSE events to exercise the pure
 // derivation logic (job sorting, upsert, removal) and the toast lifecycle.
 
 // --- mock the api module ----------------------------------------------------
-vi.mock("./api", () => ({
+// Only the network surface (`api`) is replaced; the module's pure helpers — e.g.
+// isNavigationAbort, which toast() consults — are kept real, so the store is
+// tested against the same behaviour it gets in the app.
+vi.mock("./api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api")>()),
   api: {
     checkUpdate: vi.fn().mockResolvedValue({ current: "1.0.0", updateAvailable: false }),
     deps: vi.fn().mockResolvedValue({ installSupported: false }),
@@ -79,6 +83,18 @@ describe("AppProvider job derivation", () => {
     expect(result.current.connected).toBe(false);
     act(() => es.onopen?.());
     expect(result.current.connected).toBe(true);
+  });
+
+  // Until the first snapshot lands the store holds zero values — "no ffmpeg",
+  // "no jobs" — that the UI must not read as facts, or it flashes alarms for the
+  // split second before the real state arrives.
+  it("stays un-ready until the first snapshot arrives", () => {
+    const { result, es } = mountStore();
+    expect(result.current.ready).toBe(false);
+    act(() => es.onopen?.());
+    expect(result.current.ready).toBe(false); // a live link is not yet state
+    act(() => es.emit("snapshot", { version: "1", jobs: [], settings: {} }));
+    expect(result.current.ready).toBe(true);
   });
 
   it("sorts snapshot jobs newest-first by createdAt", () => {
@@ -180,6 +196,21 @@ describe("AppProvider toasts", () => {
     expect(ids[1]).toBeGreaterThan(ids[0]);
     act(() => result.current.dismissToast(ids[0]));
     expect(result.current.toasts.map((t) => t.id)).toEqual([ids[1]]);
+  });
+
+  // Leaving a page cancels its in-flight requests. Those rejections travel the
+  // ordinary `toast(e.message || fallback)` path, so toast() has to recognise
+  // the sentinel — otherwise every navigation pops an error on the new page.
+  it("drops the navigation-abort sentinel instead of showing it", () => {
+    const { result } = mountStore();
+    act(() => result.current.toast(NAV_ABORT_MESSAGE, "error"));
+    expect(result.current.toasts).toHaveLength(0);
+  });
+
+  it("still shows a genuine error", () => {
+    const { result } = mountStore();
+    act(() => result.current.toast("Catalog request failed", "error"));
+    expect(result.current.toasts).toHaveLength(1);
   });
 });
 

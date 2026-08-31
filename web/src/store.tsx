@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   api,
+  isNavigationAbort,
   type FFmpegStatus,
   type JobView,
   type KPStatus,
@@ -17,6 +18,7 @@ import {
   type Snapshot,
   type UpdateStatus,
 } from "./api";
+import { translate } from "./i18n";
 
 export interface Toast {
   id: number;
@@ -26,6 +28,12 @@ export interface Toast {
 
 interface AppContextValue {
   connected: boolean;
+  /**
+   * True once the first snapshot has landed. Before that the store still holds
+   * its zero values (no ffmpeg, no jobs, no settings) — which read as real
+   * facts, so anything that would alarm the user about them has to wait.
+   */
+  ready: boolean;
   version: string;
   jobs: JobView[];
   kpauth: KPStatus;
@@ -53,15 +61,10 @@ const emptySettings: Settings = {
   outputPath: "",
   quality: "1080p",
   container: "mkv",
-  concurrency: 2,
-  retries: 5,
-  minIntervalMs: 0,
   proxy: "",
   verbosity: "normal",
-  noChunked: false,
   theme: "cinematic",
   libraryDirs: null,
-  maxActiveJobs: 0,
 };
 
 function sortJobs(jobs: JobView[]): JobView[] {
@@ -72,6 +75,7 @@ function sortJobs(jobs: JobView[]): JobView[] {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
+  const [ready, setReady] = useState(false);
   const [version, setVersion] = useState("");
   const [jobs, setJobs] = useState<JobView[]>([]);
   const [kpauth, setKpAuth] = useState<KPStatus>(emptyKpAuth);
@@ -99,6 +103,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
 
   const toast = (message: string, kind: Toast["kind"] = "info") => {
+    // A request cancelled because the user left the page is not a failure worth
+    // announcing — and the page that made it is already gone, so the toast would
+    // land on an unrelated screen. Every `toast(e.message || fallback)` call site
+    // funnels through here, so recognising the sentinel once covers them all.
+    if (isNavigationAbort(message)) return;
     const id = ++toastSeq.current;
     setToasts((t) => [...t, { id, kind, message }]);
     window.setTimeout(() => {
@@ -126,6 +135,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFFmpeg(snap.ffmpeg || emptyFFmpeg);
     setSettings(snap.settings || emptySettings);
     setSettingsLoaded(true);
+    setReady(true);
   };
 
   const refresh = () => {
@@ -179,8 +189,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             break;
           }
           case "job_removed": {
-            const id = (parsed.data as { id: string }).id;
-            setJobs((cur) => cur.filter((j) => j.id !== id));
+            const data = parsed.data as { id: string; purgeFailed?: boolean };
+            setJobs((cur) => cur.filter((j) => j.id !== data.id));
+            // The server deletes partial data best-effort; a file held open by
+            // an antivirus/indexer survives the purge, and silence here would
+            // leave gigabytes stranded with nothing ever mentioning them.
+            if (data.purgeFailed) {
+              toast(translate("Some partial download files could not be deleted — check the download folder"), "error");
+            }
             break;
           }
           case "kpauth":
@@ -207,7 +223,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Load the account profile (username + subscription) whenever sign-in state
   // flips to logged-in; clear it on logout. Fed by the SSE kpauth updates.
   //
-  // If the kino.pub host is unreachable (e.g. VPN off) the fetch fails: surface
+  // If the kino.watch host is unreachable (e.g. VPN off) the fetch fails: surface
   // that as an explicit error state rather than leaving kpUser null, which the
   // UI would otherwise mistake for "no subscription". Keep retrying so the card
   // self-heals once connectivity returns.
@@ -227,10 +243,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setKpUser(u);
           setKpUserError(false);
         })
-        .catch(() => {
+        .catch((e) => {
           if (!alive) return;
-          setKpUserError(true);
-          timer = window.setTimeout(load, 15000);
+          // A page switch aborts in-flight reads; that says nothing about
+          // kino.watch being reachable, and flagging it painted an amber
+          // "Can't reach kino.watch" over a healthy session after every
+          // navigation. Just try again shortly.
+          if (!isNavigationAbort(e)) setKpUserError(true);
+          timer = window.setTimeout(load, isNavigationAbort(e) ? 1000 : 15000);
         });
     };
     load();
@@ -243,6 +263,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AppContextValue>(
     () => ({
       connected,
+      ready,
       version,
       jobs,
       kpauth,
@@ -261,7 +282,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast,
       dismissToast,
     }),
-    [connected, version, jobs, kpauth, kpUser, kpUserError, ffmpeg, settings, settingsLoaded, update, ffmpegInstall, toasts],
+    [connected, ready, version, jobs, kpauth, kpUser, kpUserError, ffmpeg, settings, settingsLoaded, update, ffmpegInstall, toasts],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

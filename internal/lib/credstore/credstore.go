@@ -54,7 +54,7 @@ type Credentials struct {
 	Cookie    string `json:"cookie"`
 	UserAgent string `json:"user_agent"`
 
-	// Official kino.pub API (device-code OAuth) token set. Stored alongside the
+	// Official kino.watch API (device-code OAuth) token set. Stored alongside the
 	// cookie so both auth paths share one encrypted file. APIExpiry is unix
 	// seconds; zero means unknown.
 	APIAccessToken  string `json:"api_access_token,omitempty"`

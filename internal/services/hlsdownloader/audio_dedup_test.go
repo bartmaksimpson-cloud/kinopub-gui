@@ -2,7 +2,7 @@ package hlsdownloader
 
 import "testing"
 
-// kino.pub's mixed-codec (4K) master lists each dub twice within one audio group
+// kino.watch's mixed-codec (4K) master lists each dub twice within one audio group
 // (AVC + HEVC), under the identical NAME. audioRenditionsFor must return each
 // distinct dub once so a single picked track isn't downloaded twice.
 func TestAudioRenditionsFor_DeduplicatesMixedCodecTwins(t *testing.T) {

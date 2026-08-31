@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpCircle, Check, FolderOpen, FolderPlus, RefreshCw, Server, Trash2, TriangleAlert } from "lucide-react";
+import {
+  ArrowUpCircle,
+  Check,
+  ChevronRight,
+  FolderOpen,
+  FolderPlus,
+  RefreshCw,
+  Server,
+  Stethoscope,
+  Trash2,
+  TriangleAlert,
+  User as UserIcon,
+} from "lucide-react";
 import { api, type FFmpegStatus, type Settings } from "../api";
 import { useApp } from "../store";
 import { useI18n } from "../i18n";
+import { pushRoute } from "../router";
 import { Field, Spinner, Toggle } from "../components/ui";
 import { DirPicker } from "../components/DirPicker";
 import { InstallFFmpeg } from "../components/InstallFFmpeg";
-import { KinopubLogin } from "../components/KinopubLogin";
+import { LangSwitcher } from "../components/LangSwitcher";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -91,7 +104,9 @@ export function SettingsPage() {
         <SaveStatus state={saveState} />
       </header>
 
-      <KinopubLogin />
+      <AccountLink />
+
+      <InterfaceCard />
 
       <div className="card space-y-4 p-5">
         <Field label={t("Default output folder")}>
@@ -118,34 +133,10 @@ export function SettingsPage() {
               <option value="mp4">MP4</option>
             </select>
           </Field>
-          <Field label={t("Concurrency")}>
-            <input type="number" min={1} max={16} className="input" value={form.concurrency} onChange={(e) => set("concurrency", e.target.value === "" ? 1 : Math.max(1, Number(e.target.value)))} />
-          </Field>
-          <Field label={t("Retries")}>
-            <input type="number" min={0} className="input" value={form.retries} onChange={(e) => set("retries", e.target.value === "" ? 5 : Math.max(0, Number(e.target.value)))} />
-          </Field>
-          <Field label={t("Min interval (ms)")}>
-            <input type="number" min={0} max={60000} className="input" value={form.minIntervalMs} onChange={(e) => set("minIntervalMs", e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)))} />
-          </Field>
           <Field label={t("Proxy")}>
             <input className="input" placeholder="socks5://127.0.0.1:1080" value={form.proxy} onChange={(e) => set("proxy", e.target.value)} />
           </Field>
-          <Field label={t("Max simultaneous downloads")}>
-            <input
-              type="number"
-              min={0}
-              max={16}
-              className="input"
-              value={form.maxActiveJobs}
-              onChange={(e) => set("maxActiveJobs", e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)))}
-            />
-            <p className="mt-1 text-xs text-slate-500">
-              {t("0 = no limit. When set, extra downloads wait in a queue you can reorder.")}
-            </p>
-          </Field>
         </div>
-
-        <Toggle label={t("No chunked download by default")} hint={t("Stream everything through ffmpeg")} checked={form.noChunked} onChange={(v) => set("noChunked", v)} />
       </div>
 
       <div className="card space-y-3 p-5">
@@ -178,6 +169,8 @@ export function SettingsPage() {
         )}
       </div>
 
+      <DoctorLink />
+
       <FFmpegInfo ffmpeg={ffmpeg} />
 
       <UpdateCard />
@@ -189,6 +182,78 @@ export function SettingsPage() {
         onClose={() => setPickLib(false)}
         onSelect={(p) => set("libraryDirs", [...new Set([...libDirs, p])])}
       />
+    </div>
+  );
+}
+
+// AccountLink keeps the kino.watch account discoverable from Settings now that
+// sign-in itself lives on the Profile page — one destination per concern, but
+// still one click away from wherever the user looked first.
+function AccountLink() {
+  const { kpauth, kpUser } = useApp();
+  const { t } = useI18n();
+  const subtitle = !kpauth.loggedIn
+    ? t("Not signed in")
+    : kpUser?.username
+      ? kpUser.username
+      : t("Signed in");
+
+  return (
+    <button
+      type="button"
+      onClick={() => pushRoute({ page: "profile" })}
+      className="card flex w-full items-center gap-3 p-5 text-left transition hover:bg-white/[0.04]"
+    >
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink-800 ring-2 ring-slate-600/60">
+        <UserIcon className="h-[18px] w-[18px] text-slate-300" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-slate-200">{t("kino.watch account")}</span>
+        <span className="block truncate text-xs text-slate-500">{subtitle}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />
+    </button>
+  );
+}
+
+// DoctorLink is the only entry point to the Doctor now that it no longer owns a
+// nav-rail slot: it's maintenance you run occasionally, not a place you live in,
+// and it acts on exactly the folders configured right above it.
+function DoctorLink() {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      onClick={() => pushRoute({ page: "doctor" })}
+      className="card flex w-full items-center gap-3 p-5 text-left transition hover:bg-white/[0.04]"
+    >
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gold-500/[0.1] text-gold-400">
+        <Stethoscope className="h-[18px] w-[18px]" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-slate-200">{t("Check downloads")}</span>
+        <span className="block truncate text-xs text-slate-500">
+          {t("Find missing or broken files and clean up leftovers.")}
+        </span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />
+    </button>
+  );
+}
+
+// InterfaceCard holds the app-wide look-and-feel preferences. The language
+// switch used to live in the top header — it's a set-once preference, not
+// something worth a permanent slot in the chrome, so it belongs here. It's kept
+// in localStorage rather than the server settings, hence no save indicator.
+function InterfaceCard() {
+  const { t } = useI18n();
+  return (
+    <div className="card flex items-center justify-between gap-3 p-5">
+      <div className="min-w-0">
+        <h2 className="text-sm font-semibold text-slate-200">{t("Interface language")}</h2>
+        <p className="text-xs text-slate-500">{t("Applies to this browser.")}</p>
+      </div>
+      <LangSwitcher />
     </div>
   );
 }

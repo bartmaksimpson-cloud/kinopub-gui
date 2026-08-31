@@ -28,7 +28,7 @@ func newTestManager() (*JobManager, *[]string, *sync.Mutex) {
 }
 
 func newTestJob(m *JobManager) *Job {
-	return newJob(m.nextID(), "https://kino.pub/item/view/1", domain.RunConfig{InputURL: "x"})
+	return newJob(m.nextID(), "https://kino.watch/item/view/1", domain.RunConfig{InputURL: "x"})
 }
 
 func snapshotStarted(mu *sync.Mutex, started *[]string) []string {
@@ -345,5 +345,81 @@ func TestSchedulerRaisingLimitDispatchesQueued(t *testing.T) {
 	m.setMaxActive(2) // headroom → the queued job dispatches
 	if got := snapshotStarted(mu, started); len(got) != 2 {
 		t.Fatalf("raising the limit should dispatch the queued job; got %v", got)
+	}
+}
+
+// --- adaptive admission ----------------------------------------------------
+
+// idleFor folds n idle samples into the gauge.
+func idleFor(g *admissionGauge, n int) {
+	for i := 0; i < n; i++ {
+		g.observe(true)
+	}
+}
+
+// busyFor folds n samples where the pipe was fully claimed.
+func busyFor(g *admissionGauge, n int) {
+	for i := 0; i < n; i++ {
+		g.observe(false)
+	}
+}
+
+func TestAdmissionHoldsOneSlotUntilTheWindowIsFull(t *testing.T) {
+	var g admissionGauge
+	idleFor(&g, admissionWindowSamples-1)
+	if got := g.slots(); got != maxActiveDownloads {
+		t.Errorf("slots = %d on a partial window, want %d — the first seconds of a job are just its resolve", got, maxActiveDownloads)
+	}
+	// The sample that fills the window is the one that may grant the slot.
+	idleFor(&g, 1)
+	if got := g.slots(); got != maxAdaptiveDownloads {
+		t.Errorf("slots = %d, want %d once a full window of idle is in", got, maxAdaptiveDownloads)
+	}
+}
+
+func TestAdmissionKeepsOneSlotWhileThePipeIsClaimed(t *testing.T) {
+	var g admissionGauge
+	busyFor(&g, admissionWindowSamples*2)
+	if got := g.slots(); got != maxActiveDownloads {
+		t.Errorf("slots = %d with the pipe saturated, want %d — a second title would only divide it", got, maxActiveDownloads)
+	}
+}
+
+func TestAdmissionThresholdIsTheIdleShare(t *testing.T) {
+	// 9 of 15 samples idle is 60%, exactly the share that buys the slot.
+	var at admissionGauge
+	idleFor(&at, 9)
+	busyFor(&at, 6)
+	if got := at.slots(); got != maxAdaptiveDownloads {
+		t.Errorf("slots = %d at the threshold, want %d", got, maxAdaptiveDownloads)
+	}
+
+	var under admissionGauge
+	idleFor(&under, 8)
+	busyFor(&under, 7)
+	if got := under.slots(); got != maxActiveDownloads {
+		t.Errorf("slots = %d just under the threshold, want %d", got, maxActiveDownloads)
+	}
+}
+
+func TestAdmissionWindowSlidesSoTheSlotIsGivenBack(t *testing.T) {
+	var g admissionGauge
+	idleFor(&g, admissionWindowSamples)
+	if g.slots() != maxAdaptiveDownloads {
+		t.Fatalf("precondition: a full idle window should grant the second slot")
+	}
+	// The title starts downloading in earnest; the idle history ages out.
+	busyFor(&g, admissionWindowSamples)
+	if got := g.slots(); got != maxActiveDownloads {
+		t.Errorf("slots = %d after the window filled with busy samples, want %d", got, maxActiveDownloads)
+	}
+}
+
+func TestAdmissionResetForgetsTheWindow(t *testing.T) {
+	var g admissionGauge
+	idleFor(&g, admissionWindowSamples)
+	g.reset() // e.g. the CDN started throttling, or nothing is running
+	if got := g.slots(); got != maxActiveDownloads {
+		t.Errorf("slots = %d after a reset, want %d", got, maxActiveDownloads)
 	}
 }

@@ -1,4 +1,4 @@
-// Package kinopubapi is a client for the official kino.pub JSON API
+// Package kinopubapi is a client for the official kino.watch JSON API
 // (https://api.service-kp.com — the same API the mobile/TV apps use). It
 // provides device-code OAuth authentication and the catalog/discovery endpoints
 // (search, tops, collections, item details with озвучки) plus an adapter that
@@ -8,7 +8,7 @@ package kinopubapi
 
 import "encoding/json"
 
-// The well-known client credentials embedded in third-party kino.pub clients
+// The well-known client credentials embedded in third-party kino.watch clients
 // (xbmc/forkplayer/etc.). The device-code flow authenticates the user's own
 // paid account, exactly like signing a TV app into the account.
 const (
@@ -45,7 +45,7 @@ type tokenResp struct {
 }
 
 // ---------------------------------------------------------------------------
-// Catalog DTOs (subset of the kino.pub item schema that the UI needs)
+// Catalog DTOs (subset of the kino.watch item schema that the UI needs)
 // ---------------------------------------------------------------------------
 
 // NamedID is the common {id,title} shape used by genres, countries, audio type
@@ -91,8 +91,8 @@ type Item struct {
 	Posters       Posters     `json:"posters"`
 	IMDBRating    float64     `json:"imdb_rating"`
 	KinopoiskRate float64     `json:"kinopoisk_rating"`
-	RatingVotes   int         `json:"rating"`            // kino.pub upvote count (NOT a score)
-	RatingPercent int         `json:"rating_percentage"` // kino.pub liked %, → local 0–10 score
+	RatingVotes   int         `json:"rating"`            // kino.watch upvote count (NOT a score)
+	RatingPercent int         `json:"rating_percentage"` // kino.watch liked %, → local 0–10 score
 	Quality       int         `json:"quality"`           // max resolution (e.g. 2160, 1080)
 	Genres        []NamedID   `json:"genres"`
 	Countries     []NamedID   `json:"countries"`
@@ -186,7 +186,7 @@ type FileURL struct {
 }
 
 // Manifest returns the best HLS manifest URL, preferring hls4 (fMP4) which is
-// what kino.pub's own player and the existing HLS pipeline expect.
+// what kino.watch's own player and the existing HLS pipeline expect.
 func (u FileURL) Manifest() string {
 	switch {
 	case u.HLS4 != "":

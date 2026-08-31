@@ -13,7 +13,10 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/ZioSHik/kinopub-gui/internal/lib/httpx"
 )
 
 // FFmpegStatus reports availability of ffmpeg/ffprobe.
@@ -140,8 +143,8 @@ func openInOS(path string, reveal bool) error {
 // Because this endpoint fetches a URL supplied by the page, it is hardened
 // against SSRF: only http/https is allowed, connections to non-public addresses
 // (loopback, private, link-local) are refused at dial time (which also defeats
-// DNS-rebinding), and the authenticated kino.pub Cookie is attached only when
-// the target host is kino.pub itself — never to arbitrary CDN/third-party hosts.
+// DNS-rebinding), and the authenticated kino.watch Cookie is attached only when
+// the target host is kino.watch itself — never to arbitrary CDN/third-party hosts.
 // The hotlink Referer is harmless and sent to all hosts so CDN posters load.
 func proxyImage(w http.ResponseWriter, r *http.Request, rawURL string) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
@@ -150,7 +153,7 @@ func proxyImage(w http.ResponseWriter, r *http.Request, rawURL string) {
 		return
 	}
 
-	headers := map[string]string{"Referer": "https://kino.pub/"}
+	headers := map[string]string{"Referer": "https://kino.watch/"}
 	ua := defaultUserAgent
 
 	ctx, cancel := contextWithTimeout(15 * time.Second)
@@ -186,17 +189,23 @@ func proxyImage(w http.ResponseWriter, r *http.Request, rawURL string) {
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 16<<20))
 }
 
-// isKinoPubHost reports whether host is kino.pub or a sub-domain of it.
-func isKinoPubHost(host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	return host == "kino.pub" || strings.HasSuffix(host, ".kino.pub")
-}
+// isKinoPubHost reports whether host belongs to the site — kino.watch or the
+// older kino.pub, either one itself or a sub-domain of it.
+func isKinoPubHost(host string) bool { return httpx.IsSiteHost(host) }
 
-// ssrfSafeImageClient returns an HTTP client whose dialer refuses to connect to
-// non-public IP addresses. Resolving and validating happen in the dialer, on the
-// exact address that is then dialed, so there is no rebinding TOCTOU window; it
-// also re-validates on every redirect hop because each hop opens a new dial.
-func ssrfSafeImageClient() *http.Client {
+// ssrfSafeImageClient returns the shared HTTP client whose dialer refuses to
+// connect to non-public IP addresses. Resolving and validating happen in the
+// dialer, on the exact address that is then dialed, so there is no rebinding
+// TOCTOU window; it also re-validates on every redirect hop because each hop
+// opens a new dial.
+//
+// One client — and so one connection pool — is shared by every poster fetch. A
+// fresh client per request would give each of the dozens of posters a catalog
+// grid loads its own pool: nothing reused, a TCP+TLS handshake per image, and a
+// discarded transport left holding an idle connection until it times out.
+var ssrfSafeImageClient = sync.OnceValue(newSSRFSafeImageClient)
+
+func newSSRFSafeImageClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{

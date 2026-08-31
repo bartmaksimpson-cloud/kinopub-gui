@@ -99,17 +99,17 @@ func TestManagerRemoveAndClearFinished(t *testing.T) {
 	m.add(done)
 
 	// Removing a running job is refused.
-	removed, exists := m.remove("run")
+	removed, exists := m.remove("run", false)
 	if removed || !exists {
 		t.Errorf("running job remove = (%v,%v), want (false,true)", removed, exists)
 	}
 	// Removing an unknown job.
-	removed, exists = m.remove("nope")
+	removed, exists = m.remove("nope", false)
 	if removed || exists {
 		t.Errorf("unknown remove = (%v,%v), want (false,false)", removed, exists)
 	}
 	// Removing a finished job succeeds.
-	removed, exists = m.remove("done")
+	removed, exists = m.remove("done", false)
 	if !removed || !exists {
 		t.Errorf("finished remove = (%v,%v), want (true,true)", removed, exists)
 	}

@@ -2,7 +2,12 @@ package domain
 
 // SeriesPlan describes the scope of a download run for progress tracking.
 type SeriesPlan struct {
-	Title              string      // series title for display
+	Title string // series title for display
+	// Dir is the folder this run writes into. The display title is not enough to
+	// derive it — a card started from a search result carries a short title while
+	// the folder is named after the full one from the item page — so the engine
+	// reports the path it actually resolved.
+	Dir                string
 	PosterURL          string      // series poster, when known (used by the GUI)
 	Total              int         // total episodes in the series (including already completed)
 	Seasons            map[int]int // season number → total episode count in that season

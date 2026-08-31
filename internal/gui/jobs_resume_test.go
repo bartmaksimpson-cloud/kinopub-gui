@@ -88,9 +88,10 @@ func TestCancelEpisode(t *testing.T) {
 	if !m.cancelEpisode("job-1", key) {
 		t.Fatal("cancelEpisode returned false for a pending episode of a running job")
 	}
-	ev := j.episodes["S1E2"]
-	if ev.State != epFailed || ev.Error != "canceled" {
-		t.Errorf("canceled row = %q/%q, want failed/canceled", ev.State, ev.Error)
+	// The episode leaves the run for good, so its row leaves the card with it —
+	// it used to linger as a failure offering a Retry nobody asked for.
+	if _, still := j.episodes["S1E2"]; still {
+		t.Error("the canceled episode should be gone from the card")
 	}
 	select {
 	case got := <-j.cancelEp:
@@ -102,11 +103,11 @@ func TestCancelEpisode(t *testing.T) {
 	}
 
 	// A completed episode or a non-running job can't be canceled.
-	ev.State = epCompleted
+	j.episodes["S1E2"] = &EpisodeView{Key: "S1E2", Season: 1, Episode: 2, State: epCompleted}
 	if m.cancelEpisode("job-1", key) {
 		t.Error("cancelEpisode must refuse a completed episode")
 	}
-	ev.State = epPending
+	j.episodes["S1E2"].State = epPending
 	j.status = statusPaused
 	if m.cancelEpisode("job-1", key) {
 		t.Error("cancelEpisode must refuse when the job is not running")

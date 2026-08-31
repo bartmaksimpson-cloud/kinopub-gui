@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// kino.pub serves fMP4/CMAF media playlists (4K/HEVC) that begin with an
+// kino.watch serves fMP4/CMAF media playlists (4K/HEVC) that begin with an
 // EXT-X-MAP init segment carrying the ftyp+moov header. parseMediaPlaylist must
 // capture and resolve its URI so the downloader can prepend it; without the init
 // segment the concatenated fragments are headless and ffmpeg fails to demux them.
@@ -20,17 +20,17 @@ seg_0.m4s
 seg_1.m4s
 #EXT-X-ENDLIST
 `
-	pl, err := parseMediaPlaylist(strings.NewReader(m3u8), "https://cdn.kino.pub/v/720/media.m3u8")
+	pl, err := parseMediaPlaylist(strings.NewReader(m3u8), "https://cdn.kino.watch/v/720/media.m3u8")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if pl.InitURI != "https://cdn.kino.pub/v/720/init.mp4" {
+	if pl.InitURI != "https://cdn.kino.watch/v/720/init.mp4" {
 		t.Errorf("InitURI = %q, want the resolved init.mp4 URL", pl.InitURI)
 	}
 	if len(pl.Segments) != 2 {
 		t.Fatalf("got %d segments, want 2", len(pl.Segments))
 	}
-	if pl.Segments[0].URL != "https://cdn.kino.pub/v/720/seg_0.m4s" {
+	if pl.Segments[0].URL != "https://cdn.kino.watch/v/720/seg_0.m4s" {
 		t.Errorf("segment[0] = %q, want resolved seg_0.m4s", pl.Segments[0].URL)
 	}
 }
@@ -47,7 +47,7 @@ seg_0.ts
 seg_1.ts
 #EXT-X-ENDLIST
 `
-	pl, err := parseMediaPlaylist(strings.NewReader(m3u8), "https://cdn.kino.pub/v/480/media.m3u8")
+	pl, err := parseMediaPlaylist(strings.NewReader(m3u8), "https://cdn.kino.watch/v/480/media.m3u8")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

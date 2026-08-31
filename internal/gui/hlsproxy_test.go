@@ -26,9 +26,9 @@ func newHLSServer() *Server {
 
 func TestSignHLSDeterministicAndUnique(t *testing.T) {
 	s := newHLSServer()
-	a := s.signHLS("https://cdn.kino.pub/a.ts")
-	again := s.signHLS("https://cdn.kino.pub/a.ts")
-	b := s.signHLS("https://cdn.kino.pub/b.ts")
+	a := s.signHLS("https://cdn.kino.watch/a.ts")
+	again := s.signHLS("https://cdn.kino.watch/a.ts")
+	b := s.signHLS("https://cdn.kino.watch/b.ts")
 	if a == "" || a != again {
 		t.Errorf("signature not deterministic: %q vs %q", a, again)
 	}
@@ -37,14 +37,14 @@ func TestSignHLSDeterministicAndUnique(t *testing.T) {
 	}
 	// A different key produces a different signature for the same URL.
 	s2 := &Server{hlsKey: []byte("another-32-byte-key-padding!!!!!")}
-	if s2.signHLS("https://cdn.kino.pub/a.ts") == a {
+	if s2.signHLS("https://cdn.kino.watch/a.ts") == a {
 		t.Error("different keys must yield different signatures")
 	}
 }
 
 func TestProxiedHLSURL(t *testing.T) {
 	s := newHLSServer()
-	raw := "https://cdn.kino.pub/path?x=1&y=2"
+	raw := "https://cdn.kino.watch/path?x=1&y=2"
 	got := s.proxiedHLSURL(raw)
 	if !strings.HasPrefix(got, "/api/hls?u=") {
 		t.Errorf("missing prefix: %q", got)
@@ -60,7 +60,7 @@ func TestProxiedHLSURL(t *testing.T) {
 
 func TestHLSTargetAllowed(t *testing.T) {
 	cases := map[string]bool{
-		"https://cdn.kino.pub/a.ts": true, // hostname
+		"https://cdn.kino.watch/a.ts": true, // hostname
 		"https://8.8.8.8/a.ts":      true, // public IP literal
 		"https://127.0.0.1/a.ts":    false,
 		"https://10.0.0.1/a.ts":     false,
@@ -92,12 +92,12 @@ func TestIsTransientHLS(t *testing.T) {
 }
 
 func TestResolveRef(t *testing.T) {
-	base := mustParseURL(t, "https://cdn.kino.pub/series/master.m3u8")
+	base := mustParseURL(t, "https://cdn.kino.watch/series/master.m3u8")
 	cases := map[string]string{
-		"audio/aud.m3u8":          "https://cdn.kino.pub/series/audio/aud.m3u8",
-		"/abs/seg.ts":             "https://cdn.kino.pub/abs/seg.ts",
+		"audio/aud.m3u8":          "https://cdn.kino.watch/series/audio/aud.m3u8",
+		"/abs/seg.ts":             "https://cdn.kino.watch/abs/seg.ts",
 		"https://other.host/x.ts": "https://other.host/x.ts",
-		"../seg0.ts":              "https://cdn.kino.pub/seg0.ts",
+		"../seg0.ts":              "https://cdn.kino.watch/seg0.ts",
 	}
 	for ref, want := range cases {
 		if got := resolveRef(base, ref); got != want {
@@ -108,7 +108,7 @@ func TestResolveRef(t *testing.T) {
 
 func TestRewriteManifest(t *testing.T) {
 	s := newHLSServer()
-	base := mustParseURL(t, "https://cdn.kino.pub/series/master.m3u8")
+	base := mustParseURL(t, "https://cdn.kino.watch/series/master.m3u8")
 	manifest := strings.Join([]string{
 		"#EXTM3U",
 		`#EXT-X-MEDIA:TYPE=AUDIO,URI="audio/rus.m3u8",NAME="rus"`,
@@ -144,7 +144,7 @@ func TestRewriteManifest(t *testing.T) {
 
 func TestHandleHLSProxy_RejectsBadSignature(t *testing.T) {
 	s := newHLSServer()
-	req := httptest.NewRequest("GET", "/api/hls?u="+"https%3A%2F%2Fcdn.kino.pub%2Fa.ts"+"&s=wrong", nil)
+	req := httptest.NewRequest("GET", "/api/hls?u="+"https%3A%2F%2Fcdn.kino.watch%2Fa.ts"+"&s=wrong", nil)
 	w := httptest.NewRecorder()
 	s.handleHLSProxy(w, req)
 	if w.Code != http.StatusForbidden {
@@ -164,7 +164,7 @@ func TestHandleHLSProxy_RejectsMissingURL(t *testing.T) {
 
 func TestHandleHLSProxy_RejectsBadScheme(t *testing.T) {
 	s := newHLSServer()
-	raw := "ftp://cdn.kino.pub/a.ts"
+	raw := "ftp://cdn.kino.watch/a.ts"
 	req := httptest.NewRequest("GET", "/api/hls?u="+escapeQ(raw)+"&s="+s.signHLS(raw), nil)
 	w := httptest.NewRecorder()
 	s.handleHLSProxy(w, req)
@@ -203,4 +203,72 @@ func TestSlotBodyReleasesOnce(t *testing.T) {
 		t.Fatal("slot was not released on Close")
 	}
 	_ = body.Close() // second close is a no-op for the slot
+}
+
+// Every proxied segment must share ONE client, so it shares one connection pool.
+// A client per request meant no connection was ever reused and each discarded
+// transport stranded an idle connection (and its goroutines) with nothing to
+// reap it — the pool has to outlive the request.
+func TestSSRFSafeHLSClientIsSharedAcrossRequests(t *testing.T) {
+	s := &Server{settings: &settingsStore{cur: Settings{}}, hlsSem: make(chan struct{}, 4)}
+
+	first, err := s.ssrfSafeHLSClient()
+	if err != nil {
+		t.Fatalf("build client: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		got, err := s.ssrfSafeHLSClient()
+		if err != nil {
+			t.Fatalf("build client: %v", err)
+		}
+		if got != first {
+			t.Fatal("a new client per call: every request gets its own connection pool")
+		}
+		if got.Transport != first.Transport {
+			t.Fatal("a new transport per call: connections cannot be reused")
+		}
+	}
+
+	// Idle connections must expire on their own; a zero-value transport keeps
+	// them until the far end gives up, which is never for a well-behaved CDN.
+	tr, ok := first.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport is %T, want *http.Transport", first.Transport)
+	}
+	if tr.IdleConnTimeout <= 0 {
+		t.Error("IdleConnTimeout is unset: idle connections are never reclaimed")
+	}
+	// The per-host idle cap has to clear the proxy's own concurrency, or the
+	// surplus connections are dropped after each response instead of pooled.
+	if tr.MaxIdleConnsPerHost < cap(s.hlsSem) {
+		t.Errorf("MaxIdleConnsPerHost = %d, below the %d concurrent fetches", tr.MaxIdleConnsPerHost, cap(s.hlsSem))
+	}
+}
+
+// Changing the proxy has to produce a client that actually routes through it.
+func TestSSRFSafeHLSClientRebuildsWhenProxyChanges(t *testing.T) {
+	s := &Server{settings: &settingsStore{cur: Settings{}}, hlsSem: make(chan struct{}, 4)}
+
+	direct, err := s.ssrfSafeHLSClient()
+	if err != nil {
+		t.Fatalf("build client: %v", err)
+	}
+
+	s.settings.cur.Proxy = "http://127.0.0.1:8080"
+	viaProxy, err := s.ssrfSafeHLSClient()
+	if err != nil {
+		t.Fatalf("build client: %v", err)
+	}
+	if viaProxy == direct {
+		t.Fatal("client was not rebuilt after the proxy setting changed")
+	}
+
+	// And it stays cached at the new setting.
+	again, err := s.ssrfSafeHLSClient()
+	if err != nil {
+		t.Fatalf("build client: %v", err)
+	}
+	if again != viaProxy {
+		t.Fatal("client is rebuilt on every call once a proxy is configured")
+	}
 }

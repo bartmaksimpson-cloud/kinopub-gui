@@ -49,7 +49,7 @@ func (e *engine) run(ctx context.Context, cfg domain.RunConfig) (domain.RunResul
 		return domain.RunResult{}, fmt.Errorf("downloader not configured")
 	}
 	if cfg.InputURL == "" {
-		return domain.RunResult{}, fmt.Errorf("a kino.pub URL is required")
+		return domain.RunResult{}, fmt.Errorf("a kino.watch URL is required")
 	}
 	return e.runHLS(ctx, cfg)
 }
@@ -59,7 +59,7 @@ func (e *engine) run(ctx context.Context, cfg domain.RunConfig) (domain.RunResul
 func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunResult, error) {
 	log := e.deps.Logger.Component("engine-hls")
 
-	// 1. Extract playlist from page, retrying a few times: kino.pub sits behind
+	// 1. Extract playlist from page, retrying a few times: kino.watch sits behind
 	// Cloudflare and the first request after an idle period often fails
 	// transiently (timeout / 5xx / reset). Without this a flaky first hit fails
 	// the whole download before it starts.
@@ -158,16 +158,32 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		return domain.RunResult{Total: len(selected)}, nil
 	}
 
-	// 5. Persist series metadata.
+	// 5. Prepare series metadata — but do NOT write it yet. SetMetadata creates the
+	// series folder and the state file, and the GUI library is built by scanning
+	// for state files. Writing it here, before a single byte was downloaded, made
+	// every run that resolved and then downloaded nothing (failed, canceled, no
+	// VPN, stopped by the user) leave a state file behind, which the library then
+	// showed as a downloaded title — with zero episodes, filed under "movies" by
+	// the fallback in isMovieDownload. It is persisted by persistSeriesMeta below,
+	// with the first episode that actually completes.
 	seriesMeta := domain.SeriesMetadata{
 		Title:     series.Title,
 		PosterURL: playlist.Poster,
 		InputURL:  cfg.InputURL,
 		Type:      playlist.Type,
 		Genres:    playlist.Genres,
-		UpdatedAt: time.Now(),
 	}
-	_ = e.deps.StateStore.SetMetadata(ctx, series.ID, seriesMeta)
+	var metaOnce sync.Once
+	// persistSeriesMeta writes the series metadata into the state file the first
+	// time it is called, and does nothing on every later call. Safe to call from
+	// the episode workers concurrently; MarkCompleted has already created the file
+	// by then, so this only attaches the metadata block to it.
+	persistSeriesMeta := func() {
+		metaOnce.Do(func() {
+			seriesMeta.UpdatedAt = time.Now()
+			_ = e.deps.StateStore.SetMetadata(ctx, series.ID, seriesMeta)
+		})
+	}
 
 	// 5b. Download series poster for embedding as cover art.
 	var posterPath string
@@ -208,6 +224,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	}
 	plan := domain.SeriesPlan{
 		Title:              series.Title,
+		Dir:                seriesDir,
 		PosterURL:          series.PosterURL,
 		Total:              len(allMatching),
 		Seasons:            countSeasons(allMatching),
@@ -243,7 +260,20 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		inFlight   int
 		winding    bool // set once workers have exited; the control goroutine stops mutating
 	)
+	// A per-episode cancel is the user dropping an episode, not a failure: it is
+	// tallied as SKIPPED so a finished run does not report a phantom failure for
+	// something deliberately removed from the queue.
 	errEpisodeCanceled := fmt.Errorf("canceled")
+
+	// dropCanceledTemp deletes the partial segments of a canceled episode. A
+	// cancel removes the episode from the run for good — its row leaves the card
+	// too — so keeping the .hls-tmp would strand gigabytes with nothing left
+	// pointing at them. (A PAUSE is the opposite: there the data is the point.)
+	dropCanceledTemp := func(ep domain.Episode) {
+		if outPath, err := e.deps.OutputLayout.EpisodePath(cfg.OutputPath, series, ep); err == nil {
+			os.RemoveAll(outPath + ".ts.hls-tmp")
+		}
+	}
 	// epInfo lets the live-retry control reconstruct a pending unit for any
 	// selected episode by key (after it has failed and left the queues).
 	epInfo := make(map[string]struct {
@@ -300,10 +330,11 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		// the episode without starting the attempt.
 		if cancelMark[ks] {
 			delete(cancelMark, ks)
-			failed++
+			skipped++
 			outcomes = append(outcomes, domain.JobOutcome{Key: pe.ep.Key, Err: errEpisodeCanceled, Attempts: pe.attempts})
 			mu.Unlock()
 			epCancel()
+			dropCanceledTemp(pe.ep)
 			e.deps.ProgressReporter.EpisodeFailed(pe.ep.Key, errEpisodeCanceled)
 			return
 		}
@@ -323,14 +354,15 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 
 		// A per-episode cancel stopped this download: tally it as failed
 		// ("canceled") — it is NOT re-parked and does NOT keep the run alive.
-		// Partial segments are kept so a later per-episode Retry resumes them.
+		// Its partial segments are deleted: the episode leaves the run for good.
 		// Cancel wins over a simultaneous pause; success still wins over both if
 		// the download finished in the same instant.
 		if canceledHere && res != epSuccess && ctx.Err() == nil {
 			mu.Lock()
-			failed++
+			skipped++
 			outcomes = append(outcomes, domain.JobOutcome{Key: pe.ep.Key, Err: errEpisodeCanceled, Attempts: pe.attempts})
 			mu.Unlock()
+			dropCanceledTemp(pe.ep)
 			e.deps.ProgressReporter.EpisodeFailed(pe.ep.Key, errEpisodeCanceled)
 			return
 		}
@@ -355,9 +387,25 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			succeeded++
 			outcomes = append(outcomes, domain.JobOutcome{Key: pe.ep.Key, Succeeded: true, Attempts: pe.attempts})
 			mu.Unlock()
+			// Something landed on disk: now the series is a real library entry, so
+			// its metadata (title, poster, type, genres) is worth recording. Called
+			// outside mu — it writes a file.
+			persistSeriesMeta()
 			e.deps.ProgressReporter.EpisodeCompleted(pe.ep.Key)
 
 		case epRetryable:
+			// The run itself is stopping (canceled or paused): this is the
+			// shutdown reaching the download, not a transient failure worth
+			// retrying. Re-park so the post-loop sweep still accounts for the
+			// episode, but report nothing — a deferral here would stamp the row
+			// with the raw "…: context canceled" chain, which the finalizer then
+			// keeps instead of a plain "canceled".
+			if ctx.Err() != nil {
+				mu.Lock()
+				retryQueue = append(retryQueue, pe)
+				mu.Unlock()
+				return
+			}
 			if pe.attempts >= maxEpisodeAttempts {
 				log.Warn("giving up on episode after repeated transient failures",
 					domain.F("episode", epLabel),
@@ -665,11 +713,12 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 				mu.Lock()
 				pe := applyCancelLocked(key)
 				if pe != nil {
-					failed++
+					skipped++
 					outcomes = append(outcomes, domain.JobOutcome{Key: pe.ep.Key, Err: errEpisodeCanceled, Attempts: pe.attempts})
 				}
 				mu.Unlock()
 				if pe != nil {
+					dropCanceledTemp(pe.ep)
 					e.deps.ProgressReporter.EpisodeFailed(pe.ep.Key, errEpisodeCanceled)
 				}
 			case key := <-resumeReq:
@@ -783,6 +832,34 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	sweep(retryQueue) // in-flight episodes re-parked here on stop
 	sweep(newQueue)   // never-started episodes
 	sweep(pausedHold) // episodes held aside by a per-episode pause
+
+	// Nothing landed: don't leave the series folder this run created sitting in the
+	// output directory as an empty shell of a download that never happened. The
+	// cover-art poster is the one file that may be in there on its own, so it goes
+	// first (its own deferred cleanup then no-ops). os.Remove refuses to delete a
+	// non-empty directory, which is exactly the guard we want: a resumable pause
+	// (.hls-tmp segments), an earlier run's episodes, or anything else on disk
+	// keeps the folder.
+	if succeeded == 0 && seriesDir != "" {
+		if posterPath != "" {
+			os.Remove(posterPath)
+		}
+		// Every episode attempt pre-creates its "Season NN" subdirectory
+		// (EnsureDirs), and an empty one left behind would make the os.Remove of
+		// the series folder below fail with ENOTEMPTY — leaving exactly the empty
+		// shell this block exists to clean. Empty subdirectories go first;
+		// os.Remove refuses non-empty ones, so a resumable pause (.hls-tmp
+		// segments), an earlier run's episodes, or anything else real still keeps
+		// the tree.
+		if entries, err := os.ReadDir(seriesDir); err == nil {
+			for _, ent := range entries {
+				if ent.IsDir() {
+					os.Remove(filepath.Join(seriesDir, ent.Name()))
+				}
+			}
+		}
+		os.Remove(seriesDir)
+	}
 
 	result := domain.RunResult{
 		Total:     len(selected),
@@ -968,10 +1045,30 @@ func (e *engine) attemptHLSEpisode(
 		BitRate:    hlsResult.BitrateKbps,
 		PageLink:   ep.PageLink,
 		MediaURL:   manifestURL,
+		// What this episode actually came out in. The dub line-up drifts between
+		// seasons, so it is recorded per episode rather than assumed for the run.
+		Audio:         hlsAudioNames(hlsResult.AudioTracks),
+		AudioFallback: hlsResult.AudioFallback,
 	}
 	_ = e.deps.StateStore.MarkCompleted(ctx, completedInfo)
 
 	return epSuccess, nil
+}
+
+// hlsAudioNames lists the voiceover labels of the downloaded audio tracks, for
+// recording with the episode. Returns nil when the audio was muxed into the
+// video stream (nothing was picked, so there is nothing to record).
+func hlsAudioNames(tracks []domain.HLSAudioTrack) []string {
+	if len(tracks) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tracks))
+	for _, t := range tracks {
+		if t.Name != "" {
+			names = append(names, t.Name)
+		}
+	}
+	return names
 }
 
 // transientErrorMarkers are substrings identifying recoverable network/CDN

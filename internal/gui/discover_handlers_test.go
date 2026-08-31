@@ -3,25 +3,27 @@ package gui
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
-// All discovery handlers resolve the kino.pub client first; with no stored
+// All discovery handlers resolve the kino.watch client first; with no stored
 // credentials they must reply 401 (not signed in), never panic.
 func TestDiscoverHandlers_Unauthenticated(t *testing.T) {
 	s := newTestServer(t)
 	handlers := map[string]http.HandlerFunc{
-		"/api/discover/search?q=x":   s.handleDiscoverSearch,
-		"/api/discover/items":        s.handleDiscoverItems,
-		"/api/discover/collections":  s.handleDiscoverCollections,
-		"/api/discover/countries":    s.handleDiscoverCountries,
-		"/api/discover/history":      s.handleDiscoverHistory,
-		"/api/discover/watching":     s.handleDiscoverWatching,
-		"/api/discover/genres":       s.handleDiscoverGenres,
-		"/api/discover/bookmarks":    s.handleDiscoverBookmarks,
-		"/api/discover/item?id=1":    s.handleDiscoverItem,
-		"/api/discover/similar?id=1": s.handleDiscoverSimilar,
-		"/api/kp/user":               s.handleKPUser,
+		"/api/discover/search?q=x":              s.handleDiscoverSearch,
+		"/api/discover/items":                   s.handleDiscoverItems,
+		"/api/discover/top?kind=hot&type=movie": s.handleDiscoverTop,
+		"/api/discover/collections":             s.handleDiscoverCollections,
+		"/api/discover/countries":               s.handleDiscoverCountries,
+		"/api/discover/history":                 s.handleDiscoverHistory,
+		"/api/discover/watching":                s.handleDiscoverWatching,
+		"/api/discover/genres":                  s.handleDiscoverGenres,
+		"/api/discover/bookmarks":               s.handleDiscoverBookmarks,
+		"/api/discover/item?id=1":               s.handleDiscoverItem,
+		"/api/discover/similar?id=1":            s.handleDiscoverSimilar,
+		"/api/kp/user":                          s.handleKPUser,
 	}
 	for path, h := range handlers {
 		req := httptest.NewRequest("GET", path, nil)
@@ -43,6 +45,27 @@ func TestDiscoverSearch_RequiresQuery(t *testing.T) {
 	s.handleDiscoverSearch(w, req)
 	if w.Code != http.StatusUnauthorized && w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 401 or 400", w.Code)
+	}
+}
+
+// Both inputs are validated before the client is resolved: the kind becomes a
+// URL path segment upstream, and a type-less top list is rejected by the API
+// itself — catching it here keeps it a 400 rather than an upstream 502.
+func TestDiscoverTop_RejectsBadInput(t *testing.T) {
+	s := newTestServer(t)
+	for _, q := range []string{
+		"kind=&type=movie",
+		"kind=views-&type=movie",
+		"kind=" + url.QueryEscape("../user") + "&type=movie",
+		"kind=hot",          // no type
+		"kind=hot&type=%20", // blank type
+	} {
+		req := httptest.NewRequest("GET", "/api/discover/top?"+q, nil)
+		w := httptest.NewRecorder()
+		s.handleDiscoverTop(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, w.Code)
+		}
 	}
 }
 

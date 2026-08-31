@@ -1,6 +1,6 @@
-// The kino.pub catalog categories, mirroring the site's category sidebar.
+// The kino.watch catalog categories, mirroring the site's category sidebar.
 //
-// kino.pub's sidebar is a curated mix: most entries are real API *content types*
+// kino.watch's sidebar is a curated mix: most entries are real API *content types*
 // (movie, serial, tvshow, concert, documovie, docuserial), while Anime and Sport
 // are *genre shortcuts* that span several types (verified against the live API:
 // anime = genre 25; sport = genres 20 (movie) + 71 (docu)). Genres themselves are
@@ -22,7 +22,7 @@ export interface Category {
   key: string; // stable id stored in FilterState.category
   label: string; // i18n source string
   icon: LucideIcon;
-  type: string; // kino.pub content type ("" for genre-based categories)
+  type: string; // kino.watch content type ("" for genre-based categories)
   genre: string; // fixed genre id / CSV for genre-based categories ("" otherwise)
   genreType: string; // type whose genre list to show as sub-genres ("" = none)
 }

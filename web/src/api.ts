@@ -85,10 +85,21 @@ export interface JobView {
   finishedAt?: string;
   plan?: PlanView;
   episodes: EpisodeView[];
+  /** The run's explicit episode selection ("S1E2" keys) before it resolves. */
+  selectedEpisodes?: string[];
   summary?: SummaryView;
   error?: string;
   pendingAudio?: AudioRequestView | null;
   logs: LogEntry[];
+}
+
+// Leftovers is the partial download data a job still holds on disk (.hls-tmp
+// segment dirs, .tmp part files) — what removing its card would strand.
+export interface Leftovers {
+  bytes: number;
+  items: number;
+  // conflict: another job can still resume the same files, so they stay put.
+  conflict: boolean;
 }
 
 export interface AuthStatus {
@@ -125,15 +136,10 @@ export interface Settings {
   outputPath: string;
   quality: string;
   container: string;
-  concurrency: number;
-  retries: number;
-  minIntervalMs: number;
   proxy: string;
   verbosity: string;
-  noChunked: boolean;
   theme: string;
   libraryDirs: string[] | null;
-  maxActiveJobs: number;
 }
 
 export interface Snapshot {
@@ -145,7 +151,7 @@ export interface Snapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Official kino.pub API (device-code auth + discovery)
+// Official kino.watch API (device-code auth + discovery)
 // ---------------------------------------------------------------------------
 
 export interface KPStatus {
@@ -257,6 +263,11 @@ export interface NamedRef {
   title: string;
 }
 
+// kino.watch's own chart lists (/v1/items/{fresh,hot,popular}). They are ranked
+// server-side, so they can't be reproduced by sorting the catalog — and they
+// take a content type only, no genre/year/rating narrowing.
+export type TopKind = "fresh" | "hot" | "popular";
+
 export interface ItemsQuery {
   type?: string;
   sort?: string;
@@ -278,9 +289,6 @@ export interface RunRequest {
   outputPath: string;
   quality: string;
   container: string;
-  concurrency: number;
-  retries: number;
-  minIntervalMs: number;
   proxy: string;
   seasons: string;
   episodes: string;
@@ -289,7 +297,6 @@ export interface RunRequest {
   audioSpecs?: AudioSpec[];
   audioMenu: boolean;
   force: boolean;
-  noChunked: boolean;
   dryRun: boolean;
   ffmpegArgs: string;
   ffmpegPath: string;
@@ -373,6 +380,10 @@ export interface DownloadedEpisode {
   episode: number;
   resolution?: string;
   exists: boolean;
+  // The voiceover this episode actually came out in (HLS track names), and
+  // whether it was a substitute for one the episode did not offer.
+  audio?: string[];
+  audioFallback?: boolean;
 }
 
 export interface DownloadedResponse {
@@ -406,6 +417,8 @@ export interface DoctorReport {
   healthy: number;
   fixed: boolean;
   hasIssues: boolean;
+  /** Repair/cleanup was asked for but refused: unfinished downloads use this folder. */
+  repairBlocked?: boolean;
   issues: DoctorIssue[] | null;
   logs?: LogEntry[];
 }
@@ -421,13 +434,120 @@ export interface FSListing {
   dirs: FSEntry[];
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
+// A request that never settles is worse than one that fails: the browser allows
+// only a handful of connections per origin, so a few hung calls starve the pool
+// and everything after them — including a plain page reload — queues behind them.
+// Nothing this API does is legitimately slower than a minute, so bound them all.
+const REQUEST_TIMEOUT_MS = 60_000;
+
+const ABORT_NAVIGATION = "navigation";
+const ABORT_TIMEOUT = "timeout";
+
+// A request still waiting for a response, with the abort cause tracked on our
+// side as well as on signal.reason: WebKit only added AbortSignal.reason in
+// Safari 15.4, and on macOS 12.0–12.2 (which this app explicitly supports)
+// abort(reason) is silently ignored — classification would otherwise fall
+// through to a raw AbortError toast on every navigation.
+type PendingRequest = { ctrl: AbortController; cause: string };
+
+// Requests still waiting for a response. Tracked so navigation can hand their
+// connections back. Only reads live here — see req() for why mutations are
+// never navigation-aborted.
+const inFlight = new Set<PendingRequest>();
+
+// abortPendingRequests cancels every request still in flight.
+//
+// Over HTTP/1.1 a browser opens only ~6 connections per origin, and a request
+// blocked on an unreachable upstream holds one for its entire timeout. Measured
+// against this app: with 8 such requests outstanding, an endpoint the server
+// answers in 13ms had still not returned after 15 seconds. So leaving a page has
+// to release its sockets, not merely drop its React state — otherwise clicking
+// through a few tabs stalls everything that comes after.
+export function abortPendingRequests() {
+  for (const p of inFlight) {
+    p.cause = ABORT_NAVIGATION;
+    p.ctrl.abort(ABORT_NAVIGATION);
+  }
+  inFlight.clear();
+}
+
+// The message a navigation-aborted request rejects with. It is a sentinel rather
+// than prose because it rides the app's ordinary `toast(e.message || fallback)`
+// path, where toast() recognises and drops it — so leaving a page still shows no
+// error for the requests that leaving it cancelled.
+//
+// The alternative — never settling the promise — also stayed silent, but every
+// caller then sat suspended on it forever, pinning its async frame and whatever
+// that closed over (page props, loaded items) for the life of the tab. One
+// abandoned frame per cancelled request, and a tab is left open for hours.
+export const NAV_ABORT_MESSAGE = "kp:navigation-aborted";
+
+// isNavigationAbort reports whether a caught value is that sentinel. It accepts
+// the raw error and a bare message string, since both forms travel through the
+// error paths (usePaged hands `e.message` to its onAppendError).
+export function isNavigationAbort(e: unknown): boolean {
+  const msg = typeof e === "string" ? e : e instanceof Error ? e.message : "";
+  return msg === NAV_ABORT_MESSAGE;
+}
+
+interface ReqOpts {
+  /**
+   * Client-side deadline; 0 disables it. Reserved for operations the server
+   * deliberately budgets minutes for (ffmpeg install, self-update, doctor):
+   * aborting those at the blanket 60s reported a failure while the work kept
+   * running server-side — the user retried a job that was already underway.
+   */
+  timeoutMs?: number;
+}
+
+async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpts = {}): Promise<T> {
+  const ctrl = new AbortController();
+  const pending: PendingRequest = { ctrl, cause: "" };
+  // Only reads are navigation-abortable. A mutation (sign-in, delete+purge, a
+  // doctor run) is an action the user asked for: killing it on a page switch
+  // silently cancels it server-side too (handlers run on r.Context()) with no
+  // feedback anywhere. Reads are re-issued by the next page; mutations are few,
+  // short, and their effects matter.
+  if (method === "GET") inFlight.add(pending);
+  const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(() => {
+          pending.cause = pending.cause || ABORT_TIMEOUT;
+          ctrl.abort(ABORT_TIMEOUT);
+        }, timeoutMs)
+      : undefined;
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+    // The body is read inside the same guard as the headers: a response that
+    // stalls mid-body is just as hung as one that never answered, and reading it
+    // after the finally below would escape both the timeout (timer cleared) and
+    // the navigation abort (controller already dropped from inFlight), pinning
+    // one of the ~6 per-origin sockets forever.
+    text = await res.text();
+  } catch (e) {
+    const cause = pending.cause || (ctrl.signal as { reason?: unknown }).reason;
+    if (cause === ABORT_NAVIGATION) {
+      // The caller navigated away, so its component is unmounting and nothing is
+      // waiting for this answer. Reject with the sentinel rather than a real
+      // error: it settles the promise — releasing the caller's suspended frame —
+      // while the error surfaces recognise it and stay quiet, so no stale page's
+      // failure is announced on whatever page is now on screen.
+      throw new Error(NAV_ABORT_MESSAGE);
+    }
+    if (cause === ABORT_TIMEOUT) throw new Error(`Request timed out: ${method} ${path}`);
+    throw e;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    inFlight.delete(pending);
+  }
   let data: unknown = null;
   if (text) {
     try {
@@ -450,9 +570,15 @@ export const api = {
   state: () => req<Snapshot>("GET", "/api/state"),
   ffmpeg: () => req<FFmpegStatus>("GET", "/api/ffmpeg"),
   deps: () => req<DepsView>("GET", "/api/deps"),
-  installDeps: () => req<DepsView>("POST", "/api/deps/install"),
+  // The server budgets these ten minutes on a detached context (a 40–80 MB
+  // ffmpeg build or an app binary over a slow route): no client-side deadline,
+  // or a slow install is reported failed while it keeps running server-side.
+  installDeps: () => req<DepsView>("POST", "/api/deps/install", undefined, { timeoutMs: 0 }),
   checkUpdate: (force = false) => req<UpdateStatus>("GET", `/api/update${force ? "?force=1" : ""}`),
-  applyUpdate: () => req<{ updated: boolean; version: string; restarting: boolean }>("POST", "/api/update/apply"),
+  applyUpdate: () =>
+    req<{ updated: boolean; version: string; restarting: boolean }>("POST", "/api/update/apply", undefined, {
+      timeoutMs: 0,
+    }),
   getSettings: () => req<Settings>("GET", "/api/settings"),
   saveSettings: (s: Settings) => req<Settings>("PUT", "/api/settings", s),
   preview: (r: Partial<RunRequest>) => req<PreviewResponse>("POST", "/api/preview", r),
@@ -473,11 +599,20 @@ export const api = {
     req<{ ok: boolean }>("POST", `/api/jobs/${id}/cancel-episode`, { season, episode }),
   resumeEpisode: (id: string, season: number, episode: number) =>
     req<{ ok: boolean }>("POST", `/api/jobs/${id}/resume-episode`, { season, episode }),
-  deleteJob: (id: string) => req<{ removed: boolean }>("DELETE", `/api/jobs/${id}`),
+  // purge also deletes the partial download data the job was holding for a
+  // resume — ask the user first, it can be gigabytes (which is also why the
+  // deadline is generous: the server walks and deletes them synchronously).
+  deleteJob: (id: string, purge = false) =>
+    req<{ removed: boolean }>("DELETE", `/api/jobs/${id}${purge ? "?purge=1" : ""}`, undefined, {
+      timeoutMs: 300_000,
+    }),
+  jobLeftovers: (id: string) => req<Leftovers>("GET", `/api/jobs/${id}/leftovers`),
   clearJobs: () => req<{ removed: number }>("POST", "/api/jobs/clear"),
   answerAudio: (id: string, indices: number[]) =>
     req<{ ok: boolean }>("POST", `/api/jobs/${id}/audio`, { indices }),
-  doctor: (r: DoctorRequest) => req<DoctorReport>("POST", "/api/doctor", r),
+  // The doctor runs on the request context with a 5-minute server budget; a
+  // client-side abort would cancel a repair mid-run.
+  doctor: (r: DoctorRequest) => req<DoctorReport>("POST", "/api/doctor", r, { timeoutMs: 0 }),
   library: () => req<LibraryResponse>("GET", "/api/library"),
   libraryDownloaded: (id: string) =>
     req<DownloadedResponse>("GET", `/api/library/downloaded?id=${encodeURIComponent(id)}`),
@@ -487,7 +622,7 @@ export const api = {
   openPath: (path: string, reveal = false) => req<{ ok: boolean }>("POST", "/api/open", { path, reveal }),
   fs: (path: string) => req<FSListing>("GET", `/api/fs?path=${encodeURIComponent(path)}`),
 
-  // Official kino.pub API auth (device-code).
+  // Official kino.watch API auth (device-code).
   kpStatus: () => req<KPStatus>("GET", "/api/kp/status"),
   kpUser: () => req<KPUser>("GET", "/api/kp/user"),
   kpLogin: () => req<KPStatus>("POST", "/api/kp/login"),
@@ -527,6 +662,13 @@ export const api = {
     if (query.subtitles) p.set("subtitles", "1");
     if (query.page) p.set("page", String(query.page));
     return req<DiscoverPage>("GET", `/api/discover/items?${p.toString()}`);
+  },
+  // A kino.watch chart. type narrows it to movies/serials/… and is the only
+  // narrowing the endpoint accepts; "" means all types.
+  discoverTop: (kind: TopKind, type = "", page = 1) => {
+    const p = new URLSearchParams({ kind, page: String(page) });
+    if (type) p.set("type", type);
+    return req<DiscoverPage>("GET", `/api/discover/top?${p.toString()}`);
   },
   discoverCollections: (sort = "", page = 1) =>
     req<{ items: DiscoverCollection[] }>(

@@ -55,13 +55,23 @@ func assetName() string {
 	return name
 }
 
+// How long a fetched status stays fresh. A failed check gets a much shorter
+// life than a good one: a transient error (GitHub hiccup, the tab reloading
+// mid-request after a self-update restart) must not sit in the update card for
+// ten minutes pretending the app can't reach the release feed.
+const (
+	statusTTL       = 10 * time.Minute
+	failedStatusTTL = 30 * time.Second
+)
+
 // updateChecker fetches and briefly caches the latest release.
 type updateChecker struct {
 	current string
 	mu      sync.Mutex
 	cached  *UpdateStatus
 	at      time.Time
-	applyMu sync.Mutex // serializes apply, so two clicks can't race the replace
+	ttl     time.Duration // freshness of the cached entry; 0 means statusTTL
+	applyMu sync.Mutex    // serializes apply, so two clicks can't race the replace
 }
 
 func newUpdateChecker(current string) *updateChecker {
@@ -94,33 +104,43 @@ func (u *updateChecker) isDevBuild() bool {
 // status returns the cached update status, refreshing it when stale or forced.
 func (u *updateChecker) status(ctx context.Context, force bool) UpdateStatus {
 	u.mu.Lock()
-	if !force && u.cached != nil && time.Since(u.at) < 10*time.Minute {
+	ttl := u.ttl
+	if ttl == 0 {
+		ttl = statusTTL
+	}
+	if !force && u.cached != nil && time.Since(u.at) < ttl {
 		st := *u.cached
 		u.mu.Unlock()
 		return st
 	}
 	u.mu.Unlock()
 
-	st := u.fetch(ctx)
+	st, err := u.fetch(ctx)
 
 	u.mu.Lock()
 	u.cached = &st
 	u.at = time.Now()
+	u.ttl = statusTTL
+	if err != nil {
+		u.ttl = failedStatusTTL
+	}
 	u.mu.Unlock()
 	return st
 }
 
-func (u *updateChecker) fetch(ctx context.Context) UpdateStatus {
+// fetch queries the release feed. It returns the status to show plus the error
+// behind it (if any), so the caller can decide how long to trust the result.
+func (u *updateChecker) fetch(ctx context.Context) (UpdateStatus, error) {
 	st := UpdateStatus{Current: u.current, AssetName: assetName()}
 	if u.isDevBuild() {
 		st.Note = "development build — updates are only available for released versions"
-		return st
+		return st, nil
 	}
 
 	rel, err := u.latestRelease(ctx)
 	if err != nil {
 		st.Note = "could not check for updates: " + err.Error()
-		return st
+		return st, err
 	}
 	st.Latest = rel.TagName
 	st.ReleaseURL = rel.HTMLURL
@@ -136,10 +156,10 @@ func (u *updateChecker) fetch(ctx context.Context) UpdateStatus {
 	}
 	if !st.Supported {
 		st.Note = fmt.Sprintf("no %s asset in the latest release", want)
-		return st
+		return st, nil
 	}
 	st.UpdateAvailable = isNewer(rel.TagName, u.current)
-	return st
+	return st, nil
 }
 
 func (u *updateChecker) latestRelease(ctx context.Context) (*ghRelease, error) {

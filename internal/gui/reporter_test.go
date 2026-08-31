@@ -1,7 +1,9 @@
 package gui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ func TestClampPct(t *testing.T) {
 // eventReporter without any network/engine.
 func newReporterJob() (*JobManager, *Job, *eventReporter) {
 	m := newJobManager(newHub())
-	j := newJob("job-1", "https://kino.pub/item/view/1", domain.RunConfig{})
+	j := newJob("job-1", "https://kino.watch/item/view/1", domain.RunConfig{})
 	m.add(j)
 	return m, j, newEventReporter(m, j)
 }
@@ -128,6 +130,42 @@ func TestReporterEpisodeFailed_SetsFailed(t *testing.T) {
 	}
 }
 
+// A stop the user asked for must not surface as an internal Go error chain:
+// whatever the engine was doing when the context died, the row reads "canceled".
+func TestReporterFoldsCancellationIntoCanceled(t *testing.T) {
+	wrapped := fmt.Errorf("audio track 0: %w", fmt.Errorf("segment 10 failed: %w", context.Canceled))
+
+	t.Run("failed", func(t *testing.T) {
+		_, j, r := newReporterJob()
+		key := domain.EpisodeKey{Season: 1, Episode: 1}
+		r.EpisodeStarted(key)
+		r.EpisodeFailed(key, wrapped)
+		if got := j.episodes["S1E1"].Error; got != errCanceled {
+			t.Errorf("Error = %q, want %q", got, errCanceled)
+		}
+	})
+
+	t.Run("deferred", func(t *testing.T) {
+		_, j, r := newReporterJob()
+		key := domain.EpisodeKey{Season: 1, Episode: 1}
+		r.EpisodeStarted(key)
+		r.EpisodeDeferred(key, wrapped, 1)
+		if got := j.episodes["S1E1"].Error; got != errCanceled {
+			t.Errorf("Error = %q, want %q", got, errCanceled)
+		}
+	})
+
+	t.Run("real errors are untouched", func(t *testing.T) {
+		_, j, r := newReporterJob()
+		key := domain.EpisodeKey{Season: 1, Episode: 1}
+		r.EpisodeStarted(key)
+		r.EpisodeFailed(key, errors.New("segment 10 failed: 403 Forbidden"))
+		if got := j.episodes["S1E1"].Error; got != "segment 10 failed: 403 Forbidden" {
+			t.Errorf("Error = %q, want the original message", got)
+		}
+	})
+}
+
 func TestReporterByteProgress(t *testing.T) {
 	_, j, r := newReporterJob()
 	key := domain.EpisodeKey{Season: 1, Episode: 1}
@@ -214,5 +252,37 @@ func TestReporterUpdateSpeed_NegativeInstClampedToZero(t *testing.T) {
 	r.updateSpeed(ev, 500, 2000)
 	if ev.SpeedBps != 0 {
 		t.Errorf("negative instantaneous speed should clamp to 0, got %v", ev.SpeedBps)
+	}
+}
+
+// Seeding the plan must not disturb an episode the user is holding. A run
+// started to release ONE episode of a paused job re-pauses the rest, so
+// resetting them here would show them queued while the engine holds them — and
+// throw away the progress they are holding on to.
+func TestReporterStart_KeepsHeldEpisodesHeld(t *testing.T) {
+	_, j, r := newReporterJob()
+	j.episodes["S1E1"] = &EpisodeView{Key: "S1E1", Season: 1, Episode: 1, State: epPaused, Percent: 42, Bytes: 4200}
+	j.episodes["S1E2"] = &EpisodeView{Key: "S1E2", Season: 1, Episode: 2, State: epFailed, Percent: 7, Error: "boom"}
+
+	r.Start(domain.SeriesPlan{
+		Title: "Show",
+		Total: 2,
+		Planned: []domain.PlannedEpisode{
+			{Key: domain.EpisodeKey{Season: 1, Episode: 1}},
+			{Key: domain.EpisodeKey{Season: 1, Episode: 2}},
+		},
+	})
+
+	held := j.episodes["S1E1"]
+	if held.State != epPaused {
+		t.Errorf("held episode = %q, want it left paused", held.State)
+	}
+	if held.Percent != 42 || held.Bytes != 4200 {
+		t.Errorf("held episode lost its progress: %+v", held)
+	}
+	// Everything else is a fresh attempt and does get reset.
+	fresh := j.episodes["S1E2"]
+	if fresh.State != epPending || fresh.Percent != 0 || fresh.Error != "" {
+		t.Errorf("planned episode = %+v, want it reset to pending", fresh)
 	}
 }

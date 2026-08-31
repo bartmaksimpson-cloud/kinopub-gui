@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowUp, Check, Folder, FolderOpen } from "lucide-react";
-import { api, type FSListing } from "../api";
+import { api, isNavigationAbort, type FSListing } from "../api";
 import { useI18n } from "../i18n";
 import { Modal, Spinner } from "./ui";
 
@@ -26,7 +26,7 @@ export function DirPicker({
     api
       .fs(path)
       .then(setListing)
-      .catch((e) => setError(String(e.message || e)))
+      .catch((e) => !isNavigationAbort(e) && setError(String(e.message || e)))
       .finally(() => setLoading(false));
   };
 

@@ -14,9 +14,13 @@ import (
 // NewDialer is the exported alias used by other packages.
 func NewDialer() *net.Dialer { return newDialer() }
 
+// dialTimeout matches the non-Android dialer: see dialer_other.go for why a
+// blocked connect must fail fast rather than pin a socket for half a minute.
+const dialTimeout = 8 * time.Second
+
 func newDialer() *net.Dialer {
 	return &net.Dialer{
-		Timeout:   30 * time.Second,
+		Timeout:   dialTimeout,
 		KeepAlive: 30 * time.Second,
 		Resolver: &net.Resolver{
 			PreferGo: true,

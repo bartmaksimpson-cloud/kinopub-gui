@@ -161,8 +161,19 @@ func preferRank(t AudioTrackInfo, prefer []string) int {
 //     fall back to a single best remaining track: prefer tracks matching a
 //     Prefer hint, then the one highest in the source list.
 func SelectAudio(tracks []AudioTrackInfo, pref AudioPreference) []int {
+	idx, _ := SelectAudioResolved(tracks, pref)
+	return idx
+}
+
+// SelectAudioResolved is SelectAudio plus the one thing the caller cannot infer
+// from the indices alone: whether the requested voiceover was actually found.
+// When it was not, the returned track is a SUBSTITUTE picked by the fallback —
+// a different studio, usually in the same language. That happens per episode
+// (kino.pub's dub line-up drifts between seasons), so a series can end up mixed,
+// and both the log and the state file want to say which episodes those are.
+func SelectAudioResolved(tracks []AudioTrackInfo, pref AudioPreference) (indices []int, fellBack bool) {
 	if len(tracks) == 0 {
-		return nil
+		return nil, false
 	}
 
 	// 0. Exact spec selection (from the GUI picker) supersedes Include/Exclude.
@@ -180,7 +191,7 @@ func SelectAudio(tracks []AudioTrackInfo, pref AudioPreference) []int {
 			}
 		}
 		if len(matched) > 0 {
-			return matched
+			return matched, false
 		}
 		best := make([]int, len(tracks))
 		for i := range tracks {
@@ -193,7 +204,7 @@ func SelectAudio(tracks []AudioTrackInfo, pref AudioPreference) []int {
 			}
 			return best[a] < best[b]
 		})
-		return []int{best[0]}
+		return []int{best[0]}, true
 	}
 
 	// 1. Apply excludes.
@@ -213,7 +224,7 @@ func SelectAudio(tracks []AudioTrackInfo, pref AudioPreference) []int {
 
 	// 2. No positive filter → keep everything that survived excludes.
 	if len(pref.Include) == 0 {
-		return remaining
+		return remaining, false
 	}
 
 	// 3. Keep includes among the remaining tracks.
@@ -224,7 +235,7 @@ func SelectAudio(tracks []AudioTrackInfo, pref AudioPreference) []int {
 		}
 	}
 	if len(matched) > 0 {
-		return matched
+		return matched, false
 	}
 
 	// 4. Fallback: pick the single best remaining track.
@@ -236,7 +247,7 @@ func SelectAudio(tracks []AudioTrackInfo, pref AudioPreference) []int {
 		}
 		return best[a] < best[b]
 	})
-	return []int{best[0]}
+	return []int{best[0]}, true
 }
 
 // DeriveAudioPrefer inspects the available tracks and returns the canonical

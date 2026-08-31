@@ -33,7 +33,7 @@ func randomKey(n int) []byte {
 
 // HLS playback proxy for the in-app player.
 //
-// The browser cannot fetch kino.pub's CDN directly: the CDN may omit CORS
+// The browser cannot fetch kino.watch's CDN directly: the CDN may omit CORS
 // headers, and segment hosts often differ from the manifest host. So manifests
 // and segments are proxied through this localhost server (same-origin for the
 // browser), and every child URL inside a manifest is rewritten to point back
@@ -44,7 +44,7 @@ func randomKey(n int) []byte {
 
 var hlsAttrURIRe = regexp.MustCompile(`URI="([^"]+)"`)
 
-// hlsUserAgent matches the official kino.pub Kodi addon's User-Agent, so the CDN
+// hlsUserAgent matches the official kino.watch Kodi addon's User-Agent, so the CDN
 // treats the player's segment fetches like the sanctioned client.
 const hlsUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
 
@@ -134,8 +134,36 @@ func hlsTargetAllowed(rawURL string) bool {
 	return true
 }
 
-// ssrfSafeHLSClient returns an HTTP client for fetching HLS resources that is
-// hardened against SSRF while preserving proxy/VPN playback:
+// ssrfSafeHLSClient returns the shared client for fetching HLS resources.
+//
+// One client — and so one connection pool — serves every proxied fetch, so
+// segments reuse connections instead of paying a fresh TCP+TLS handshake each.
+// Building one per request also stranded every discarded transport's idle
+// connections, and the goroutines reading them, with nothing left to reap them.
+// It is rebuilt only when the configured proxy changes, and the superseded
+// client's idle connections are closed rather than abandoned.
+func (s *Server) ssrfSafeHLSClient() (*http.Client, error) {
+	proxy := s.settings.get().Proxy
+
+	s.hlsClientMu.Lock()
+	defer s.hlsClientMu.Unlock()
+	if s.hlsClientCached != nil && s.hlsClientProxy == proxy {
+		return s.hlsClientCached, nil
+	}
+
+	hc, err := buildSSRFSafeHLSClient(proxy)
+	if err != nil {
+		return nil, err
+	}
+	if s.hlsClientCached != nil {
+		s.hlsClientCached.CloseIdleConnections()
+	}
+	s.hlsClientCached, s.hlsClientProxy = hc, proxy
+	return hc, nil
+}
+
+// buildSSRFSafeHLSClient constructs a client hardened against SSRF while
+// preserving proxy/VPN playback:
 //
 //   - Direct mode: the transport's dialer is replaced with ssrfSafeDial, which
 //     resolves the target hostname and refuses to connect to any non-public IP.
@@ -146,8 +174,8 @@ func hlsTargetAllowed(rawURL string) bool {
 //     check still blocks IP-literal targets before the proxy is contacted.
 //   - Both modes: CheckRedirect caps hops at 5 and rejects any redirect whose
 //     Location host is a non-public IP literal.
-func (s *Server) ssrfSafeHLSClient() (*http.Client, error) {
-	prov, err := proxyprovider.New(s.settings.get().Proxy)
+func buildSSRFSafeHLSClient(proxy string) (*http.Client, error) {
+	prov, err := proxyprovider.New(proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +204,7 @@ func (s *Server) ssrfSafeHLSClient() (*http.Client, error) {
 	return &hc, nil
 }
 
-// fetchHLS fetches an upstream HLS resource from kino.pub's CDN, bounded by the
+// fetchHLS fetches an upstream HLS resource from kino.watch's CDN, bounded by the
 // concurrency semaphore and retrying transient failures. hls.js loads every
 // rendition playlist at once; the CDN rate-limits that burst with 403s/429s that
 // succeed on a prompt retry (the exact URL that 403s plays fine moments later).
@@ -214,7 +242,7 @@ func (s *Server) fetchHLS(ctx context.Context, raw, rangeHeader string) (*http.R
 			req.Header.Set("Range", rangeHeader) // forward Range so the player can seek
 		}
 		req.Header.Set("User-Agent", hlsUserAgent)
-		req.Header.Set("Referer", "https://kino.pub/")
+		req.Header.Set("Referer", "https://kino.watch/")
 		resp, derr := hc.Do(req)
 		if derr != nil {
 			<-s.hlsSem

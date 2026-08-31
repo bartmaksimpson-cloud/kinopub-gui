@@ -289,7 +289,7 @@ func TestChunked_applyAuth_CookieOnlyForKinoPub(t *testing.T) {
 	auth := domain.RequestAuth{
 		UserAgent: "UA/1",
 		Cookie:    "sid=1",
-		Headers:   map[string]string{"Referer": "https://kino.pub/"},
+		Headers:   map[string]string{"Referer": "https://kino.watch/"},
 	}
 	c := newTestChunked(t, auth)
 
@@ -302,15 +302,29 @@ func TestChunked_applyAuth_CookieOnlyForKinoPub(t *testing.T) {
 		if req.Header.Get("User-Agent") != "UA/1" {
 			t.Error("expected User-Agent set")
 		}
-		if req.Header.Get("Referer") != "https://kino.pub/" {
+		if req.Header.Get("Referer") != "https://kino.watch/" {
 			t.Error("expected Referer header set")
 		}
 	})
-	t.Run("kino.pub host gets cookie", func(t *testing.T) {
+	t.Run("kino.watch host gets cookie", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "https://api.kino.watch/x", nil)
+		c.applyAuth(req)
+		if req.Header.Get("Cookie") != "sid=1" {
+			t.Errorf("kino.watch request should carry Cookie, got %q", req.Header.Get("Cookie"))
+		}
+	})
+	t.Run("legacy kino.pub host gets cookie", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, "https://api.kino.pub/x", nil)
 		c.applyAuth(req)
 		if req.Header.Get("Cookie") != "sid=1" {
 			t.Errorf("kino.pub request should carry Cookie, got %q", req.Header.Get("Cookie"))
+		}
+	})
+	t.Run("look-alike host gets no cookie", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "https://kino.watch.evil.io/x", nil)
+		c.applyAuth(req)
+		if req.Header.Get("Cookie") != "" {
+			t.Error("look-alike host must not carry Cookie")
 		}
 	})
 }

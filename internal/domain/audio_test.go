@@ -252,3 +252,54 @@ func TestAudioPreference_IsAll(t *testing.T) {
 		t.Error("Exclude AudioPreference should not be IsAll")
 	}
 }
+
+// SelectAudioResolved reports whether the requested voiceover was actually
+// found. The flag is what lets an episode be marked as "came out in a different
+// dub" instead of the substitution passing silently.
+func TestSelectAudioResolved_ReportsSubstitution(t *testing.T) {
+	pref := AudioPreference{Include: []string{"anilibria"}, Prefer: []string{"rus"}}
+
+	t.Run("found as named", func(t *testing.T) {
+		got, fellBack := SelectAudioResolved(tracksA, pref)
+		if fellBack {
+			t.Error("AniLibria is present — not a substitution")
+		}
+		if !reflect.DeepEqual(got, []int{0}) {
+			t.Errorf("indices = %v, want [0]", got)
+		}
+	})
+
+	t.Run("found under a drifted name", func(t *testing.T) {
+		_, fellBack := SelectAudioResolved(tracksB, pref)
+		if fellBack {
+			t.Error("the same studio renamed is still a match, not a substitution")
+		}
+	})
+
+	t.Run("missing falls back and says so", func(t *testing.T) {
+		got, fellBack := SelectAudioResolved(tracksC, pref)
+		if !fellBack {
+			t.Error("AniLibria is absent here — the picked track is a substitute")
+		}
+		// One track only, and in the requested language rather than the original.
+		if len(got) != 1 || tracksC[got[0]].Language != "rus" {
+			t.Errorf("fallback = %v, want a single RUS track", got)
+		}
+	})
+
+	t.Run("keep-all is never a substitution", func(t *testing.T) {
+		if _, fellBack := SelectAudioResolved(tracksC, AudioPreference{}); fellBack {
+			t.Error("no preference means nothing was requested, so nothing was substituted")
+		}
+	})
+
+	t.Run("specs that match nothing substitute", func(t *testing.T) {
+		specs := AudioPreference{Specs: []AudioSpec{{Require: []string{"anilibria"}}}, Prefer: []string{"rus"}}
+		if _, fellBack := SelectAudioResolved(tracksC, specs); !fellBack {
+			t.Error("an exact spec matching nothing must report the fallback")
+		}
+		if _, fellBack := SelectAudioResolved(tracksA, specs); fellBack {
+			t.Error("an exact spec that matches is not a substitution")
+		}
+	})
+}

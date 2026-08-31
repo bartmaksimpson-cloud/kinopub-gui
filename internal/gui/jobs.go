@@ -3,13 +3,18 @@ package gui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/app/kinopub"
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/logx"
+	"github.com/ZioSHik/kinopub-gui/internal/services/hlsdownloader"
 	"github.com/ZioSHik/kinopub-gui/internal/services/kinopubapi"
 )
 
@@ -23,6 +28,11 @@ const (
 	statusCanceled  = "canceled"
 	statusPaused    = "paused"
 )
+
+// errCanceled is the error text a job or episode carries when the user stopped
+// it. It is an outcome, not a failure, and the UI renders it as such — see
+// errText for how engine errors are folded into it.
+const errCanceled = "canceled"
 
 // Episode lifecycle states surfaced to the UI.
 const (
@@ -118,9 +128,15 @@ type JobView struct {
 	CreatedAt    time.Time         `json:"createdAt"`
 	StartedAt    *time.Time        `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time        `json:"finishedAt,omitempty"`
-	Plan         *PlanView         `json:"plan,omitempty"`
-	Episodes     []EpisodeView     `json:"episodes"`
-	Summary      *SummaryView      `json:"summary,omitempty"`
+	Plan     *PlanView     `json:"plan,omitempty"`
+	Episodes []EpisodeView `json:"episodes"`
+	// SelectedEpisodes is the run's explicit episode selection ("S1E2" keys),
+	// exposed so the browser half of the duplicate rule (web/src/lib/queue.ts)
+	// can reason about a job that has not resolved its plan yet the same way the
+	// server's queueCoverage does — instead of locking the whole title while a
+	// one-episode job waits for a slot.
+	SelectedEpisodes []string     `json:"selectedEpisodes,omitempty"`
+	Summary          *SummaryView `json:"summary,omitempty"`
 	Error        string            `json:"error,omitempty"`
 	PendingAudio *AudioRequestView `json:"pendingAudio,omitempty"`
 	Logs         []LogEntry        `json:"logs"`
@@ -136,6 +152,10 @@ type Job struct {
 	title      string
 	posterURL  string
 	outputPath string
+	// seriesDir is the folder the engine reported writing into. It cannot be
+	// derived from title + outputPath: a job started from a search result keeps
+	// that view's short title while the folder carries the full one.
+	seriesDir string
 	dryRun     bool
 	quality    string
 	createdAt  time.Time
@@ -183,11 +203,21 @@ type Job struct {
 	// episode. Consumed (cleared) at the start of each run. Guarded by mu.
 	retryOnly []domain.EpisodeKey
 
+	// canceledEps records episode rows removed by a per-episode cancel, keyed by
+	// epKey. The engine acknowledges every cancel through the generic
+	// ProgressReporter.EpisodeFailed("canceled"), whose ensureEpisode would
+	// otherwise re-create — resurrect — the very row cancelEpisode just deleted.
+	// The reporter consumes an entry to swallow that ack (or, when the download
+	// finished in the same instant, to restore the plan counts the cancel
+	// subtracted). Cleared at the start of every run. Guarded by mu.
+	canceledEps map[string]bool
+
 	cancel          context.CancelFunc
 	cancelRequested bool            // set if canceled before its engine started
 	urgent          bool            // scheduler: may bypass maxActive (guarded by JobManager.mu)
 	done            <-chan struct{} // closed when the job's context is canceled/finished
 	dirty           bool            // pending broadcast
+	removed         bool            // card deleted from the manager; resume/rerun must not revive it (guarded by mu)
 }
 
 func newJob(id, url string, cfg domain.RunConfig) *Job {
@@ -254,36 +284,68 @@ func (j *Job) snapshotLocked() JobView {
 	logs := make([]LogEntry, len(j.logs))
 	copy(logs, j.logs)
 
+	// The plan is copied, not shared: JobViews are json.Marshal-ed by SSE and
+	// handler goroutines with no lock held, and cancelEpisode edits the plan's
+	// counts (including the Seasons map) in place under j.mu — a shared map is
+	// a fatal concurrent map read/write waiting for the next per-episode cancel.
+	var plan *PlanView
+	if j.plan != nil {
+		p := *j.plan
+		if len(p.Seasons) > 0 {
+			seasons := make(map[int]int, len(p.Seasons))
+			for k, v := range p.Seasons {
+				seasons[k] = v
+			}
+			p.Seasons = seasons
+		}
+		plan = &p
+	}
+
+	var selected []string
+	if len(j.cfg.SelectedEpisodes) > 0 {
+		selected = make([]string, 0, len(j.cfg.SelectedEpisodes))
+		for _, k := range j.cfg.SelectedEpisodes {
+			selected = append(selected, epKey(k))
+		}
+		sort.Strings(selected)
+	}
+
 	view := JobView{
-		ID:           j.id,
-		URL:          j.url,
-		Status:       j.status,
-		Title:        j.title,
-		PosterURL:    j.posterURL,
-		OutputPath:   j.outputPath,
-		DryRun:       j.dryRun,
-		Quality:      j.quality,
-		CreatedAt:    j.createdAt,
-		StartedAt:    j.startedAt,
-		FinishedAt:   j.finishedAt,
-		Plan:         j.plan,
-		Episodes:     eps,
-		Summary:      j.summary,
-		Error:        j.errMsg,
-		PendingAudio: j.pendingAudio,
-		Logs:         logs,
+		ID:               j.id,
+		URL:              j.url,
+		Status:           j.status,
+		Title:            j.title,
+		PosterURL:        j.posterURL,
+		OutputPath:       j.outputPath,
+		DryRun:           j.dryRun,
+		Quality:          j.quality,
+		CreatedAt:        j.createdAt,
+		StartedAt:        j.startedAt,
+		FinishedAt:       j.finishedAt,
+		Plan:             plan,
+		Episodes:         eps,
+		SelectedEpisodes: selected,
+		Summary:          j.summary,
+		Error:            j.errMsg,
+		PendingAudio:     j.pendingAudio,
+		Logs:             logs,
 	}
 	return view
 }
 
 func (j *Job) addLog(e LogEntry) {
 	j.mu.Lock()
+	j.addLogLocked(e)
+	j.mu.Unlock()
+}
+
+// addLogLocked appends a log line for a caller that already holds j.mu.
+func (j *Job) addLogLocked(e LogEntry) {
 	j.logs = append(j.logs, e)
 	if len(j.logs) > maxJobLogs {
 		j.logs = j.logs[len(j.logs)-maxJobLogs:]
 	}
 	j.dirty = true
-	j.mu.Unlock()
 }
 
 func (j *Job) finished() bool {
@@ -320,12 +382,21 @@ type JobManager struct {
 	running   int
 	pending   []*Job
 	startFn   func(*Job)
+
+	// limiter is the ONE segment-throughput controller every download in this
+	// process fetches through. Sharing it is what makes the job and episode
+	// counts safe to raise: the socket budget is decided by measurement in one
+	// place instead of being multiplied by however many downloads are alive.
+	limiter *hlsdownloader.Limiter
 }
 
 func newJobManager(hub *Hub) *JobManager {
 	m := &JobManager{
 		jobs: make(map[string]*Job),
 		hub:  hub,
+		// No handlers: the controller's debug chatter belongs to no single job's
+		// card, and there is no log view to send it to.
+		limiter: hlsdownloader.NewLimiter(0, logx.New(nil)),
 	}
 	go m.flushLoop()
 	return m
@@ -351,6 +422,10 @@ func (m *JobManager) attachStore(store *jobStore) {
 		}
 	}
 	m.mu.Unlock()
+	// Queues written before downloads were checked for overlap can hold two cards
+	// for the same episodes. Resuming both would put two engines on one set of
+	// files, so collapse them now, while nothing is running yet.
+	m.dedupeQueue()
 	go m.persistLoop()
 }
 
@@ -412,6 +487,106 @@ func (m *JobManager) setMaxActive(n int) {
 	m.maxActive = n
 	m.mu.Unlock()
 	m.dispatch()
+}
+
+// startAdaptiveAdmission begins tuning how many jobs may run at once from what
+// the shared segment controller measures. The server starts it; tests that want
+// a deterministic queue simply don't.
+func (m *JobManager) startAdaptiveAdmission() { go m.admissionLoop() }
+
+// admissionLoop raises the job limit while the download pipe is provably going
+// unused, and lowers it as soon as it is not.
+//
+// The signal is deliberately "slots nobody is claiming", not "the link is fast".
+// The segment budget is already shared and already tuned to the link by the
+// controller, so a second title cannot buy extra bandwidth — the only thing it
+// can buy is the capacity the running title is leaving idle while it remuxes
+// with ffmpeg, scrapes, or resolves a manifest. That is measurable directly, so
+// it is measured directly rather than guessed from a speed number.
+//
+// It is measured over a window rather than instantly: every job spends its first
+// seconds resolving with an idle pipe, and admitting a second title on that
+// alone would quietly make two-at-a-time the norm and cost the fast first
+// watchable file the single slot is there to protect.
+//
+// Nothing is ever preempted. Lowering the limit only stops NEW jobs from being
+// dispatched; a title admitted a moment ago still runs to completion.
+func (m *JobManager) admissionLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			go m.admissionLoop()
+		}
+	}()
+	t := time.NewTicker(admissionPoll)
+	defer t.Stop()
+
+	var gauge admissionGauge
+	for range t.C {
+		m.mu.RLock()
+		running := m.running
+		cur := m.maxActive
+		m.mu.RUnlock()
+
+		st := m.limiter.Stats()
+		switch {
+		case running == 0:
+			// Nothing to measure, and no gap worth filling: every session starts
+			// again from the conservative single slot.
+			gauge.reset()
+		case st.Throttled:
+			// The CDN is pushing back — the last thing to do is send more work.
+			gauge.reset()
+		default:
+			gauge.observe(st.InFlight < st.Limit)
+		}
+
+		if want := gauge.slots(); cur != want {
+			m.setMaxActive(want)
+		}
+	}
+}
+
+// admissionGauge turns a sliding window of samples into the number of jobs
+// allowed to run at once. Split out of admissionLoop so the policy is testable
+// without a ticker or a live download.
+type admissionGauge struct {
+	ring [admissionWindowSamples]bool
+	idx  int
+	seen int
+	idle int
+}
+
+// observe folds in one sample; idle means the controller was holding slots that
+// nobody was claiming at that instant.
+func (g *admissionGauge) observe(idle bool) {
+	if g.seen == admissionWindowSamples && g.ring[g.idx] {
+		g.idle-- // the sample dropping out of the far end of the window
+	}
+	g.ring[g.idx] = idle
+	if idle {
+		g.idle++
+	}
+	g.idx = (g.idx + 1) % admissionWindowSamples
+	if g.seen < admissionWindowSamples {
+		g.seen++
+	}
+}
+
+// reset forgets the window: used when there is nothing running to measure, and
+// when the CDN is throttling us — there the answer is "no" whatever the history.
+func (g *admissionGauge) reset() { *g = admissionGauge{} }
+
+// slots reports how many jobs may run at once given what has been observed. A
+// partial window never grants the second slot: the early samples of any job are
+// the seconds it spends resolving, which say nothing about a pipe going unused.
+func (g *admissionGauge) slots() int {
+	if g.seen < admissionWindowSamples {
+		return maxActiveDownloads
+	}
+	if float64(g.idle)/float64(g.seen) >= admissionIdleShare {
+		return maxAdaptiveDownloads
+	}
+	return maxActiveDownloads
 }
 
 // submit registers a job and queues it for dispatch. front=true inserts it at
@@ -603,6 +778,390 @@ func (m *JobManager) outputPaths() []string {
 	return paths
 }
 
+// runSignature identifies a download by the parameters that decide WHAT is
+// fetched and WHERE it lands: the source URL, the destination folder and the
+// episode selection. Two runs sharing a signature write the same files, the same
+// partial segments and the same state file, so the second one is a duplicate
+// rather than a new download.
+//
+// Quality, container, audio tracks and the force flag are deliberately NOT part
+// of it. They change how an episode is fetched, not which file it overwrites, so
+// treating "same series, same folder, different quality" as a distinct job would
+// license exactly the collision this guard exists to prevent. DryRun is part of
+// it: a dry run writes nothing and must not block (or be blocked by) a real
+// download of the same title.
+func runSignature(cfg domain.RunConfig) string {
+	out := cfg.OutputPath
+	if out != "" {
+		out = filepath.Clean(out)
+	}
+	return strings.Join([]string{
+		downloadTarget(cfg.InputURL),
+		out,
+		fmt.Sprintf("dry=%t", cfg.DryRun),
+		episodeSelectionKey(cfg),
+	}, "|")
+}
+
+// downloadTarget canonicalizes WHICH title a run is for. The same item arrives
+// under many spellings — a bare numeric id from an old card, http vs https, a
+// trailing slash, query noise — and comparing raw InputURL strings let a second
+// engine onto the same series folder and state file, the exact collision the
+// duplicate guard exists to prevent. The kino.watch item id is the identity
+// whenever one can be read (matching how the frontend matches jobs to titles);
+// otherwise the raw URL stands.
+func downloadTarget(inputURL string) string {
+	if id := kinopubapi.ItemIDFromURL(inputURL); id != "" {
+		return "item:" + id
+	}
+	return inputURL
+}
+
+// episodeSelectionKey renders a run's episode selection as a stable string. An
+// explicit per-episode list wins over the season/episode expressions, mirroring
+// how the engine applies them (see domain.RunConfig.SelectedEpisodes).
+func episodeSelectionKey(cfg domain.RunConfig) string {
+	if len(cfg.SelectedEpisodes) > 0 {
+		keys := make([]string, 0, len(cfg.SelectedEpisodes))
+		for _, k := range cfg.SelectedEpisodes {
+			keys = append(keys, epKey(k))
+		}
+		sort.Strings(keys)
+		return "eps:" + strings.Join(keys, ",")
+	}
+	return "sel:" + selectionKey(cfg.SeasonSel) + "/" + selectionKey(cfg.EpisodeSel)
+}
+
+// selectionKey renders a domain.Selection deterministically (its Values is a map,
+// whose iteration order is not).
+func selectionKey(s domain.Selection) string {
+	if s.All {
+		return "*"
+	}
+	vals := make([]int, 0, len(s.Values))
+	for v, on := range s.Values {
+		if on {
+			vals = append(vals, v)
+		}
+	}
+	sort.Ints(vals)
+	parts := make([]string, 0, len(vals)+len(s.Ranges))
+	for _, v := range vals {
+		parts = append(parts, strconv.Itoa(v))
+	}
+	ranges := append([]domain.SelectionRange(nil), s.Ranges...)
+	sort.Slice(ranges, func(a, b int) bool {
+		if ranges[a].Lo != ranges[b].Lo {
+			return ranges[a].Lo < ranges[b].Lo
+		}
+		return ranges[a].Hi < ranges[b].Hi
+	})
+	for _, r := range ranges {
+		parts = append(parts, fmt.Sprintf("%d-%d", r.Lo, r.Hi))
+	}
+	return strings.Join(parts, ",")
+}
+
+// isActiveStatus reports whether a job still owns its download — waiting for a
+// slot, resolving, running, or paused part-way through (resumable, holding its
+// partial segments).
+func isActiveStatus(s string) bool {
+	switch s {
+	case statusQueued, statusResolving, statusRunning, statusPaused:
+		return true
+	}
+	return false
+}
+
+// findActiveDuplicate returns the active job that would download exactly what cfg
+// asks for. Queuing a second one puts two engines on one output folder and one
+// state file — they overwrite each other's episodes and each other's progress —
+// so the answer to "download this again" is the card that is already there.
+//
+// Finished cards (completed / failed / canceled) are not duplicates: they own
+// nothing on disk any more, and re-adding a title whose card is still on screen
+// is a legitimate request. A failed one is better served by its Retry button,
+// but that stays the user's call.
+func (m *JobManager) findActiveDuplicate(cfg domain.RunConfig) (JobView, bool) {
+	sig := runSignature(cfg)
+	m.mu.RLock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	m.mu.RUnlock()
+	// Oldest first, so the card the user is pointed at is the original.
+	sort.Slice(jobs, func(a, b int) bool { return jobs[a].createdAt.Before(jobs[b].createdAt) })
+	for _, j := range jobs {
+		j.mu.Lock()
+		match := isActiveStatus(j.status) && runSignature(j.cfg) == sig
+		var view JobView
+		if match {
+			view = j.snapshotLocked()
+		}
+		j.mu.Unlock()
+		if match {
+			return view, true
+		}
+	}
+	return JobView{}, false
+}
+
+// queueCoverage reports what active jobs already claim for the same download
+// target as cfg — same source URL, same output folder, hence the same files and
+// the same state file. It returns the episode keys those jobs will still
+// produce, whether one of them owns the title as a whole, and the oldest of them
+// so the caller can point the user at the card that already exists.
+//
+// This is the partial-overlap counterpart to findActiveDuplicate: queuing
+// episodes 1-5 of a series whose episodes 1-10 are already downloading is not an
+// exact duplicate — the two runs have different signatures — but it still puts
+// two engines on the same five files.
+//
+// "Still produce" excludes failed episodes: they left nothing behind to collide
+// with, and asking for them again is a legitimate way out of a failure. A job
+// that has not resolved its plan yet lists no episodes, so it counts as owning
+// the whole title — the conservative answer, since there is no way to say yet
+// which episodes it is about to take. Dry runs write nothing and are ignored in
+// both directions.
+func (m *JobManager) queueCoverage(cfg domain.RunConfig) (covered map[string]bool, whole bool, owner JobView, found bool) {
+	covered = make(map[string]bool)
+	if cfg.DryRun {
+		return covered, false, JobView{}, false
+	}
+	want := filepath.Clean(cfg.OutputPath)
+	wantURL := downloadTarget(cfg.InputURL)
+	m.mu.RLock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	m.mu.RUnlock()
+	// Oldest first, so the card the user is pointed at is the original.
+	sort.Slice(jobs, func(a, b int) bool { return jobs[a].createdAt.Before(jobs[b].createdAt) })
+	for _, j := range jobs {
+		j.mu.Lock()
+		if !isActiveStatus(j.status) || j.cfg.DryRun ||
+			downloadTarget(j.cfg.InputURL) != wantURL || filepath.Clean(j.cfg.OutputPath) != want {
+			j.mu.Unlock()
+			continue
+		}
+		if !found {
+			owner, found = j.snapshotLocked(), true
+		}
+		mine, mineWhole := jobCoverageLocked(j)
+		for key := range mine {
+			covered[key] = true
+		}
+		whole = whole || mineWhole
+		j.mu.Unlock()
+	}
+	return covered, whole, owner, found
+}
+
+// jobCoverageLocked reports the episodes one job will still produce, and whether
+// its reach is unknown — an unresolved run with no explicit selection, which will
+// take whatever the title turns out to contain. Caller must hold j.mu.
+func jobCoverageLocked(j *Job) (keys map[string]bool, whole bool) {
+	keys = make(map[string]bool)
+	switch {
+	case len(j.episodes) > 0:
+		// A resolved plan is the truth, and it outranks the selection it came
+		// from: a failed episode left nothing to collide with, so it is fair game
+		// to queue again.
+		for key, ev := range j.episodes {
+			if ev.State != epFailed {
+				keys[key] = true
+			}
+		}
+	case len(j.cfg.SelectedEpisodes) > 0:
+		for _, k := range j.cfg.SelectedEpisodes {
+			keys[epKey(k)] = true
+		}
+	default:
+		whole = true
+	}
+	return keys, whole
+}
+
+// dedupeQueue collapses cards that duplicate each other's work, keeping the
+// oldest of each pair. It exists for queues written BEFORE downloads were checked
+// for overlap on the way in: a card for episodes 1-5 could be added next to one
+// for 1-10, and resuming both after a restart would put two engines on the same
+// five files. The guard in handleCreateJob keeps new ones from appearing; this
+// cleans up what is already on disk.
+//
+// A later card that adds nothing is removed. One that adds something is kept but
+// trimmed to the episodes no earlier card is taking, so "the rest of the season"
+// survives the cleanup instead of being thrown away with the overlap. Finished
+// cards are history and are left alone. Returns how many cards were dropped.
+func (m *JobManager) dedupeQueue() int {
+	m.mu.RLock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	m.mu.RUnlock()
+	// Running cards go first, then oldest to newest. A download that is fetching
+	// files this second cannot be the one asked to give way, however young it is —
+	// so it stakes its claim before anyone else, and the card that has to yield is
+	// whichever one is not running. Among the rest, the original keeps its work and
+	// later copies give way.
+	running := make(map[*Job]bool, len(jobs))
+	for _, j := range jobs {
+		j.mu.Lock()
+		running[j] = j.status == statusRunning
+		j.mu.Unlock()
+	}
+	sort.Slice(jobs, func(a, b int) bool {
+		if running[jobs[a]] != running[jobs[b]] {
+			return running[jobs[a]]
+		}
+		return jobs[a].createdAt.Before(jobs[b].createdAt)
+	})
+
+	type target struct{ url, out string }
+	claimed := make(map[target]map[string]bool)
+	whole := make(map[target]bool)
+	var drop []*Job
+
+	for _, j := range jobs {
+		j.mu.Lock()
+		if !isActiveStatus(j.status) || j.cfg.DryRun {
+			j.mu.Unlock()
+			continue
+		}
+		t := target{downloadTarget(j.cfg.InputURL), filepath.Clean(j.cfg.OutputPath)}
+		mine, mineWhole := jobCoverageLocked(j)
+		seen, exists := claimed[t]
+		// The first card for a target keeps everything, and so does one that is
+		// running right now — it owns those files this second. Both only add to
+		// what the cards behind them must stay off.
+		if !exists || j.status == statusRunning {
+			if !exists {
+				claimed[t] = mine
+			} else {
+				for key := range mine {
+					seen[key] = true
+				}
+			}
+			whole[t] = whole[t] || mineWhole
+			j.mu.Unlock()
+			continue
+		}
+		// Either side's reach is unknown, so there is no safe way to split the
+		// work between the two cards: the older one keeps it.
+		if whole[t] || mineWhole {
+			j.mu.Unlock()
+			drop = append(drop, j)
+			continue
+		}
+		// Nothing overlaps: the card is kept whole, its scope untouched. This also
+		// covers a restored card whose scope came from a season/episode expression
+		// (resolved rows, empty SelectedEpisodes) — computing "remaining" from the
+		// selection alone would count such a card as empty and delete it along
+		// with the episodes only it was going to download.
+		overlaps := false
+		for key := range mine {
+			if seen[key] {
+				overlaps = true
+				break
+			}
+		}
+		if !overlaps {
+			for key := range mine {
+				seen[key] = true
+			}
+			j.mu.Unlock()
+			continue
+		}
+		// What this card still owns: every episode no older card is taking. For a
+		// resolved card that is its rows (a failed row it can retry included, a
+		// completed one is done and adds no future work); otherwise the explicit
+		// selection.
+		remaining := make([]domain.EpisodeKey, 0, len(mine))
+		if len(j.episodes) > 0 {
+			for key, ev := range j.episodes {
+				if !seen[key] && ev.State != epCompleted {
+					remaining = append(remaining, domain.EpisodeKey{Season: ev.Season, Episode: ev.Episode})
+				}
+			}
+		} else {
+			for _, k := range j.cfg.SelectedEpisodes {
+				if !seen[epKey(k)] {
+					remaining = append(remaining, k)
+				}
+			}
+		}
+		if len(remaining) == 0 {
+			j.mu.Unlock()
+			drop = append(drop, j)
+			continue
+		}
+		sort.Slice(remaining, func(a, b int) bool {
+			if remaining[a].Season != remaining[b].Season {
+				return remaining[a].Season < remaining[b].Season
+			}
+			return remaining[a].Episode < remaining[b].Episode
+		})
+		// Trim the card to what it still owns, handing the overlap back to the
+		// older card that already claims it. The explicit selection replaces any
+		// season/episode expression: the expression's reach includes the episodes
+		// just handed away.
+		j.cfg.SelectedEpisodes = remaining
+		for key, ev := range j.episodes {
+			if seen[key] && ev.State != epCompleted {
+				delete(j.episodes, key)
+			}
+		}
+		j.addLogLocked(LogEntry{
+			Time:    time.Now(),
+			Level:   "INFO",
+			Message: "dropped the episodes an older card in the queue is already downloading",
+		})
+		for _, k := range remaining {
+			seen[epKey(k)] = true
+		}
+		j.mu.Unlock()
+	}
+
+	if len(drop) == 0 {
+		return 0
+	}
+	m.mu.Lock()
+	for _, j := range drop {
+		delete(m.jobs, j.id)
+	}
+	m.mu.Unlock()
+	m.markPersistDirty()
+	return len(drop)
+}
+
+// isFinishedStatus reports whether a job is done for good. A failed job is NOT
+// finished in this sense: its card keeps a Retry button, and the retry continues
+// the partial segments it left behind.
+func isFinishedStatus(s string) bool {
+	return s == statusCompleted || s == statusCanceled
+}
+
+// liveOutputPaths returns the distinct output directories of jobs that still
+// have somewhere to go — queued, resolving, running, paused or retryable. The
+// partial files under them (`<episode>.tmp`, `<episode>.ts.hls-tmp`) are resume
+// data, not litter, so the doctor must not touch these folders: cleaning them
+// would silently throw away everything those downloads have fetched so far.
+func (m *JobManager) liveOutputPaths() []string {
+	seen := make(map[string]bool)
+	var paths []string
+	for _, v := range m.list() {
+		if isFinishedStatus(v.Status) || v.OutputPath == "" || seen[v.OutputPath] {
+			continue
+		}
+		seen[v.OutputPath] = true
+		paths = append(paths, v.OutputPath)
+	}
+	return paths
+}
+
 func (m *JobManager) list() []JobView {
 	m.mu.RLock()
 	jobs := make([]*Job, 0, len(m.jobs))
@@ -620,21 +1179,51 @@ func (m *JobManager) list() []JobView {
 	return views
 }
 
-// remove deletes a finished job; returns false if it is still running.
-func (m *JobManager) remove(id string) (bool, bool) {
+// remove deletes a finished job; returns false if it is still running. When
+// purge is set, the partial download data the job was holding for a resume
+// (.hls-tmp segment dirs, .tmp part files) is deleted with it — otherwise the
+// card disappears and those gigabytes stay on disk with nothing pointing at
+// them, recoverable only by hand through the doctor.
+func (m *JobManager) remove(id string, purge bool) (bool, bool) {
 	m.mu.Lock()
 	j, ok := m.jobs[id]
 	if !ok {
 		m.mu.Unlock()
 		return false, false
 	}
-	if !j.finished() && j.status != statusPaused {
+	// j.status belongs to j.mu (run finalization, pause/resume write it there),
+	// so it must be read under it. Marking removed in the same critical section
+	// closes the resume race: a resumeJob that fetched this *Job before the
+	// delete below would otherwise flip it back to queued and put a fresh engine
+	// on the very files purgeTemp is about to delete.
+	j.mu.Lock()
+	active := !j.finished() && j.status != statusPaused
+	if !active {
+		j.removed = true
+	}
+	j.mu.Unlock()
+	if active {
 		m.mu.Unlock()
 		return false, true // exists but active (running/queued) — must be stopped first
 	}
 	delete(m.jobs, id)
 	m.mu.Unlock()
-	m.hub.broadcast(Event{Type: "job_removed", Data: map[string]string{"id": id}})
+
+	// After the card is gone, so a resume can no longer pick the job back up and
+	// start writing the very files being deleted.
+	var freed int64
+	var failedPurge int
+	if purge {
+		freed, failedPurge = m.purgeTemp(j)
+	}
+	// The purge outcome rides on the removal event: reporting a clean removal
+	// while gigabytes stayed behind (a file held open, a permissions change)
+	// would leave the data stranded with nothing in the UI ever mentioning it.
+	m.hub.broadcast(Event{Type: "job_removed", Data: map[string]any{
+		"id":          id,
+		"freedBytes":  freed,
+		"purgeFailed": failedPurge > 0,
+	}})
 	// Persist synchronously so a removed card can't be resurrected by a restart
 	// that happens before the next persist tick.
 	m.markPersistDirty()
@@ -647,7 +1236,13 @@ func (m *JobManager) clearFinished() int {
 	m.mu.Lock()
 	removed := make([]string, 0)
 	for id, j := range m.jobs {
-		if j.finished() {
+		j.mu.Lock()
+		fin := j.finished()
+		if fin {
+			j.removed = true // a concurrent retry must not revive a deleted card
+		}
+		j.mu.Unlock()
+		if fin {
 			delete(m.jobs, id)
 			removed = append(removed, id)
 		}
@@ -684,6 +1279,7 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 	j.cancel = cancel
 	j.done = ctx.Done()
 	j.status = statusResolving
+	j.canceledEps = nil // cancel acks belong to the run they were issued in
 	now := time.Now()
 	j.startedAt = &now
 	if title != "" {
@@ -721,10 +1317,10 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 	}
 
 	if apiClient == nil {
-		m.failJob(j, "not signed in to kino.pub — sign in in Settings to download")
+		m.failJob(j, "not signed in to kino.watch — sign in in Settings to download")
 		return
 	}
-	deps, err := buildEngineDeps(cfg, apiClient, logger, reporter, chooser, j.prioritize, j.pauseEp, j.resumeEp, j.retryEp, j.cancelEp, j.paused.Load)
+	deps, err := buildEngineDeps(cfg, apiClient, logger, reporter, chooser, j.prioritize, j.pauseEp, j.resumeEp, j.retryEp, j.cancelEp, j.paused.Load, m.limiter)
 	if err != nil {
 		m.failJob(j, "setup failed: "+err.Error())
 		return
@@ -764,7 +1360,7 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 	case ctx.Err() != nil:
 		j.status = statusCanceled
 		if j.errMsg == "" {
-			j.errMsg = "canceled"
+			j.errMsg = errCanceled
 		}
 	case runErr != nil:
 		j.status = statusFailed
@@ -782,6 +1378,41 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 	}
 	j.mu.Unlock()
 	m.publishNow(j)
+}
+
+// nothingLeftButPausedLocked reports whether the engine has nothing left to do
+// because every episode still to download is held by a per-episode pause.
+// Completed and failed ones are finished; a paused one is only waiting for the
+// user. Caller must hold j.mu.
+func nothingLeftButPausedLocked(j *Job) bool {
+	held := 0
+	for _, ev := range j.episodes {
+		switch ev.State {
+		case epPending, epRunning, epDeferred:
+			return false // still work the engine can pick up
+		case epPaused:
+			held++
+		}
+	}
+	return held > 0
+}
+
+// autoPauseIfAllHeld pauses the JOB once every episode left is individually
+// paused. The engine deliberately keeps such a run alive — it polls so a resume
+// can be picked up — but from the outside the card claimed to be downloading
+// while nothing moved, and the run kept occupying one of the active-download
+// slots, holding the next queued job behind something doing no work.
+//
+// Pausing for real stops the run, frees the slot and preserves the partial
+// segments; Resume (whole job or a single episode) starts a fresh run.
+func (m *JobManager) autoPauseIfAllHeld(j *Job) {
+	j.mu.Lock()
+	live := j.status == statusRunning || j.status == statusResolving
+	hold := live && nothingLeftButPausedLocked(j)
+	j.mu.Unlock()
+	if hold {
+		m.pauseJob(j.id)
+	}
 }
 
 // settlePausedEpisodesLocked freezes every non-completed episode of a paused job
@@ -813,7 +1444,7 @@ func settleUnfinishedEpisodesLocked(j *Job, canceled bool) {
 			ev.SpeedBps = 0
 			ev.ETASeconds = 0
 			if ev.Error == "" && canceled {
-				ev.Error = "canceled"
+				ev.Error = errCanceled
 			}
 		}
 	}
@@ -877,7 +1508,7 @@ func (m *JobManager) cancelJob(id string) bool {
 		j.mu.Lock()
 		j.status = statusCanceled
 		if j.errMsg == "" {
-			j.errMsg = "canceled"
+			j.errMsg = errCanceled
 		}
 		fin := time.Now()
 		j.finishedAt = &fin
@@ -971,7 +1602,7 @@ func (m *JobManager) resumeJob(id string) bool {
 		return false
 	}
 	j.mu.Lock()
-	if j.status != statusPaused {
+	if j.removed || j.status != statusPaused {
 		j.mu.Unlock()
 		return false
 	}
@@ -1025,6 +1656,8 @@ func (m *JobManager) pauseEpisode(id string, key domain.EpisodeKey) bool {
 	default:
 	}
 	m.publishNow(j)
+	// That may have been the last episode the engine had left to work on.
+	m.autoPauseIfAllHeld(j)
 	return true
 }
 
@@ -1046,10 +1679,25 @@ func (m *JobManager) cancelEpisode(id string, key domain.EpisodeKey) bool {
 		(ev.State == epPending || ev.State == epDeferred || ev.State == epRunning || ev.State == epPaused)
 	ch := j.cancelEp
 	if live && cancelable {
-		ev.State = epFailed
-		ev.Error = "canceled"
-		ev.SpeedBps = 0
-		ev.ETASeconds = 0
+		// A canceled episode leaves the run for good, so its row goes with it
+		// rather than sitting in the card as a failure with a Retry nobody asked
+		// for. The plan total drops too, so "N of M episodes" counts what is
+		// actually left to do. A whole-job Retry re-seeds the row from the plan.
+		delete(j.episodes, epKey(key))
+		// Remember the removal: the engine's ack (EpisodeFailed "canceled") must
+		// not resurrect the row — see eventReporter.EpisodeFailed.
+		if j.canceledEps == nil {
+			j.canceledEps = make(map[string]bool)
+		}
+		j.canceledEps[epKey(key)] = true
+		if j.plan != nil {
+			if j.plan.Total > 0 {
+				j.plan.Total--
+			}
+			if n, ok := j.plan.Seasons[key.Season]; ok && n > 0 {
+				j.plan.Seasons[key.Season] = n - 1
+			}
+		}
 	}
 	j.mu.Unlock()
 	if !live || !cancelable {
@@ -1072,6 +1720,7 @@ func (m *JobManager) resumeEpisode(id string, key domain.EpisodeKey) bool {
 	}
 	j.mu.Lock()
 	live := j.status == statusRunning || j.status == statusResolving
+	parked := j.status == statusPaused
 	ev := j.episodes[epKey(key)]
 	resumable := ev != nil && ev.State == epPaused
 	ch := j.resumeEp
@@ -1079,6 +1728,11 @@ func (m *JobManager) resumeEpisode(id string, key domain.EpisodeKey) bool {
 		ev.State = epPending // engine flips it to running when it actually starts
 	}
 	j.mu.Unlock()
+	// No engine to tell: pausing the last active episode paused the job itself,
+	// so resuming just this one means starting a run scoped to it.
+	if !live && parked && resumable {
+		return m.resumeEpisodeParked(id, key)
+	}
 	if !live || !resumable {
 		return false
 	}
@@ -1087,6 +1741,62 @@ func (m *JobManager) resumeEpisode(id string, key domain.EpisodeKey) bool {
 	default:
 	}
 	m.publishNow(j)
+	return true
+}
+
+// resumeEpisodeParked releases one episode of a job that has no engine running:
+// the last per-episode pause paused the whole job, so this starts a fresh run.
+//
+// The run covers the WHOLE job, not just this episode, and the still-held
+// siblings are re-paused in it. Scoping the run to the one episode looked
+// simpler but left the others outside it entirely — the engine builds its
+// episode table from the run's scope, so a later "resume" for one of them
+// reached an engine that had never heard of it, and the row sat pending until
+// the run ended. Replaying the pauses instead rebuilds the hold list, which
+// lives and dies with the run that owns it.
+func (m *JobManager) resumeEpisodeParked(id string, key domain.EpisodeKey) bool {
+	j, ok := m.get(id)
+	if !ok {
+		return false
+	}
+	j.mu.Lock()
+	ev := j.episodes[epKey(key)]
+	if j.removed || j.status != statusPaused || ev == nil || ev.State != epPaused {
+		j.mu.Unlock()
+		return false
+	}
+	ev.State = epPending
+	ev.Error = ""
+	var hold []domain.EpisodeKey
+	for _, other := range j.episodes {
+		if other != ev && other.State == epPaused {
+			hold = append(hold, domain.EpisodeKey{Season: other.Season, Episode: other.Episode})
+		}
+	}
+	j.paused.Store(false)
+	j.cancelRequested = false
+	j.status = statusQueued
+	j.errMsg = ""
+	j.finishedAt = nil
+	j.summary = nil
+	j.retryOnly = nil // whole job: the held siblings must be IN the run to stay held
+	j.mu.Unlock()
+
+	// Drain first (stale keys from the previous run), then queue this run's holds
+	// so the engine applies them before a worker can pick those episodes up.
+	drainEpisodeControls(j)
+	for _, k := range hold {
+		select {
+		case j.pauseEp <- k:
+		default:
+		}
+	}
+
+	m.mu.Lock()
+	m.pending = append(m.pending, j)
+	m.mu.Unlock()
+	m.publishNow(j)
+	m.dispatch()
 	return true
 }
 
@@ -1135,7 +1845,7 @@ func (m *JobManager) rerunJob(id string) bool {
 		return false
 	}
 	j.mu.Lock()
-	if !j.finished() && j.status != statusPaused {
+	if j.removed || (!j.finished() && j.status != statusPaused) {
 		j.mu.Unlock()
 		return false
 	}
@@ -1169,6 +1879,10 @@ func (m *JobManager) rerunJobEpisode(id string, key domain.EpisodeKey) bool {
 		return false
 	}
 	j.mu.Lock()
+	if j.removed {
+		j.mu.Unlock()
+		return false
+	}
 	resetRow := func() {
 		if ev := j.episodes[epKey(key)]; ev != nil {
 			ev.State = epPending

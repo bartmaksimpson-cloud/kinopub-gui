@@ -12,7 +12,7 @@ import (
 func testPersistedJob(id, status string) persistedJob {
 	return persistedJob{
 		ID:        id,
-		URL:       "https://kino.pub/item/view/409",
+		URL:       "https://kino.watch/item/view/409",
 		Status:    status,
 		Title:     "Fear and Loathing",
 		Quality:   "1080p",
@@ -23,12 +23,31 @@ func testPersistedJob(id, status string) persistedJob {
 		},
 		Titles: map[string]string{"S1E1": "Серия 1"},
 		Cfg: domain.RunConfig{
-			InputURL:   "https://kino.pub/item/view/409",
+			InputURL:   "https://kino.watch/item/view/409",
 			OutputPath: "/tmp/out",
 			Quality:    "1080p",
 			UseAPI:     true,
 			AudioPref:  domain.AudioPreference{Specs: []domain.AudioSpec{{Require: []string{"дубляж"}}}},
 		},
+	}
+}
+
+// A queue saved before the domain rename holds kino.pub links. They still
+// resolve, but the card must show the current domain — restoring rewrites them,
+// so the next save migrates the stored queue.
+func TestRestoreJobCanonicalizesLegacyDomain(t *testing.T) {
+	p := testPersistedJob("job-legacy", statusPaused)
+	p.URL = "https://kino.pub/item/view/409"
+	p.Cfg.InputURL = "https://kino.pub/item/view/409"
+
+	j := restoreJob(p)
+
+	const want = "https://kino.watch/item/view/409"
+	if j.url != want {
+		t.Errorf("job url = %q, want %q", j.url, want)
+	}
+	if j.cfg.InputURL != want {
+		t.Errorf("cfg.InputURL = %q, want %q", j.cfg.InputURL, want)
 	}
 }
 
@@ -145,8 +164,8 @@ func TestPersistNowWritesAndSkipsDryRun(t *testing.T) {
 	m := newJobManager(newHub())
 	m.attachStore(store)
 
-	real := newJob("job-1", "https://kino.pub/item/view/1", domain.RunConfig{InputURL: "https://kino.pub/item/view/1"})
-	dry := newJob("job-2", "https://kino.pub/item/view/2", domain.RunConfig{InputURL: "https://kino.pub/item/view/2", DryRun: true})
+	real := newJob("job-1", "https://kino.watch/item/view/1", domain.RunConfig{InputURL: "https://kino.watch/item/view/1"})
+	dry := newJob("job-2", "https://kino.watch/item/view/2", domain.RunConfig{InputURL: "https://kino.watch/item/view/2", DryRun: true})
 	m.add(real)
 	m.add(dry)
 	m.markPersistDirty()
@@ -181,7 +200,7 @@ func TestRemovePersistsSynchronously(t *testing.T) {
 		t.Fatalf("precondition: expected 1 persisted job, got %d", len(got))
 	}
 
-	if ok, _ := m.remove("job-1"); !ok {
+	if ok, _ := m.remove("job-1", false); !ok {
 		t.Fatal("remove failed")
 	}
 	if got := store.load(); len(got) != 0 {

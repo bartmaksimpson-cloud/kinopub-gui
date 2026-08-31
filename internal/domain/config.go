@@ -67,10 +67,10 @@ type RunConfig struct {
 	DryRun      bool          // (Req 15.6)
 	GracePeriod time.Duration // default 30s (Req 4.7)
 
-	// Authentication / request shaping. kino.pub sits behind Cloudflare and may
+	// Authentication / request shaping. kino.watch sits behind Cloudflare and may
 	// return HTTP 403 for unauthenticated requests. These fields let the user
 	// supply credentials captured from a logged-in browser session so the tool
-	// and ffmpeg can issue requests that pass Cloudflare and kino.pub auth.
+	// and ffmpeg can issue requests that pass Cloudflare and kino.watch auth.
 	Cookie    string            // raw Cookie header value applied to all requests
 	UserAgent string            // User-Agent applied to all requests (must match the cf_clearance UA)
 	Headers   map[string]string // extra HTTP headers applied to all requests
@@ -97,7 +97,7 @@ type RunConfig struct {
 	// before defaulting to "keep all". Zero means use the package default.
 	AudioMenuTimeout time.Duration
 
-	// UseAPI selects the official kino.pub JSON API as the catalog/source for
+	// UseAPI selects the official kino.watch JSON API as the catalog/source for
 	// this run (resolving InputURL's item id via the API and emitting hls4
 	// manifests) instead of cookie-based page scraping. The download pipeline is
 	// otherwise identical. Honored by the GUI's dependency wiring.
@@ -106,7 +106,7 @@ type RunConfig struct {
 
 // RequestAuth carries credentials and request-shaping headers applied to every
 // outbound HTTP request (and propagated to ffmpeg). It exists so the tool can
-// reuse a logged-in browser session to pass Cloudflare and kino.pub auth.
+// reuse a logged-in browser session to pass Cloudflare and kino.watch auth.
 type RequestAuth struct {
 	Cookie    string            // raw Cookie header value
 	UserAgent string            // User-Agent (must match the cf_clearance UA)

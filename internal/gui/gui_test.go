@@ -33,13 +33,17 @@ func TestIsLoopbackHost(t *testing.T) {
 
 func TestIsKinoPubHost(t *testing.T) {
 	cases := map[string]bool{
-		"kino.pub":         true,
-		"KINO.PUB":         true,
-		"cdn.kino.pub":     true,
-		"a.b.kino.pub":     true,
-		"kino.pub.evil.io": false,
-		"notkino.pub":      false,
-		"evil.com":         false,
+		"kino.watch":         true,
+		"KINO.WATCH":         true,
+		"cdn.kino.watch":     true,
+		"a.b.kino.watch":     true,
+		"kino.pub":           true, // the older domain is still the site
+		"cdn.kino.pub":       true,
+		"kino.watch.evil.io": false,
+		"kino.pub.evil.io":   false,
+		"notkino.watch":      false,
+		"notkino.pub":        false,
+		"evil.com":           false,
 	}
 	for host, want := range cases {
 		if got := isKinoPubHost(host); got != want {
@@ -100,7 +104,7 @@ func TestBuildRunConfig(t *testing.T) {
 
 	t.Run("explicit episode keys become SelectedEpisodes", func(t *testing.T) {
 		cfg, err := buildRunConfig(RunRequest{
-			URL:         "https://kino.pub/item/view/1",
+			URL:         "https://kino.watch/item/view/1",
 			EpisodeKeys: []string{"S1E1", "S1E2"},
 		})
 		if err != nil {
@@ -113,7 +117,7 @@ func TestBuildRunConfig(t *testing.T) {
 
 	t.Run("maps container and verbosity", func(t *testing.T) {
 		cfg, err := buildRunConfig(RunRequest{
-			URL:       "https://kino.pub/item/view/1",
+			URL:       "https://kino.watch/item/view/1",
 			Quality:   "1080p",
 			Container: "mp4",
 			Verbosity: "verbose",
@@ -130,7 +134,7 @@ func TestBuildRunConfig(t *testing.T) {
 	})
 
 	t.Run("unknown container defaults to mkv", func(t *testing.T) {
-		cfg, err := buildRunConfig(RunRequest{URL: "https://kino.pub/item/view/1"})
+		cfg, err := buildRunConfig(RunRequest{URL: "https://kino.watch/item/view/1"})
 		if err != nil {
 			t.Fatalf("buildRunConfig: %v", err)
 		}
@@ -141,7 +145,7 @@ func TestBuildRunConfig(t *testing.T) {
 
 	t.Run("invalid season selection propagates error", func(t *testing.T) {
 		if _, err := buildRunConfig(RunRequest{
-			URL:     "https://kino.pub/item/view/1",
+			URL:     "https://kino.watch/item/view/1",
 			Seasons: "not-a-number",
 		}); err == nil {
 			t.Fatal("expected error for invalid seasons, got nil")
@@ -256,7 +260,7 @@ func TestOpenPathAllowed(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	lib := t.TempDir()
 	srv := NewServer("test", nil)
-	saved, err := srv.settings.save(Settings{OutputPath: lib, Container: "mkv", Concurrency: 2})
+	saved, err := srv.settings.save(Settings{OutputPath: lib, Container: "mkv"})
 	if err != nil {
 		t.Fatalf("save settings: %v", err)
 	}
@@ -283,7 +287,7 @@ func TestIsMovieDownload(t *testing.T) {
 		s    LibrarySeries
 		want bool
 	}{
-		// Stored kino.pub type wins, regardless of structure.
+		// Stored kino.watch type wins, regardless of structure.
 		{"type movie", LibrarySeries{Type: "movie", Episodes: []LibraryEpisode{ep(1, 1)}}, true},
 		{"type documovie", LibrarySeries{Type: "documovie", Episodes: []LibraryEpisode{ep(1, 1), ep(1, 2)}}, true},
 		{"type 4k movie", LibrarySeries{Type: "4k", Episodes: []LibraryEpisode{ep(1, 1)}}, true},

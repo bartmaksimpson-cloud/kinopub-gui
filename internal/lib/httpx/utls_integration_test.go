@@ -21,12 +21,12 @@ import (
 	"time"
 )
 
-// liveHosts are stable HTTPS endpoints. kino.pub is the real target this
+// liveHosts are stable HTTPS endpoints. kino.watch is the real target this
 // transport exists for (a Cloudflare 403/challenge still proves the handshake +
 // round trip worked); the others are fallbacks so the test is meaningful even if
-// kino.pub is blocked from the test network.
+// kino.watch is blocked from the test network.
 var liveHosts = []string{
-	"https://kino.pub",
+	"https://kino.watch",
 	"https://www.cloudflare.com",
 	"https://example.com",
 }

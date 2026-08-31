@@ -15,7 +15,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import { api } from "../api";
+import { api, isNavigationAbort } from "../api";
 import { useI18n } from "../i18n";
 
 interface AudioOpt {
@@ -36,7 +36,7 @@ export interface PlayerEpisode {
 const AUDIO_PREF_KEY = "kp.player.audioPref";
 const SKIP_SECONDS = 15;
 const HIDE_DELAY = 2600;
-// How often (in playback seconds) to report progress to kino.pub while playing.
+// How often (in playback seconds) to report progress to kino.watch while playing.
 const MARK_INTERVAL = 20;
 
 function audioKey(name: string): string {
@@ -44,7 +44,7 @@ function audioKey(name: string): string {
 }
 
 // codecSupported reports whether the browser can decode a level's video codec.
-// kino.pub's mixed-playlist 4K master lists each rung twice (HEVC + H.264);
+// kino.watch's mixed-playlist 4K master lists each rung twice (HEVC + H.264);
 // Chromium without hardware HEVC returns false for hvc1, so we keep the
 // universally-playable H.264 variant.
 function codecSupported(videoCodec?: string): boolean {
@@ -318,7 +318,7 @@ export function Player({
           retries = 0;
           setLoading(false);
           readAudio(hls);
-          // kino.pub's mixed 4K master lists every rung twice — HEVC + H.264.
+          // kino.watch's mixed 4K master lists every rung twice — HEVC + H.264.
           // Drop the HEVC twins so BOTH adaptive (Auto) and manual selection only
           // ever pick decodable H.264 levels: isTypeSupported lies about HEVC on
           // machines that advertise but can't actually decode it (a hard stall).
@@ -388,7 +388,10 @@ export function Player({
         setResumeAt(rt);
         start(s.playUrl);
       })
-      .catch((e) => alive && setError(e.message || tRef.current("Failed to load stream")));
+      .catch(
+        (e) =>
+          alive && !isNavigationAbort(e) && setError(e.message || tRef.current("Failed to load stream")),
+      );
 
     return () => {
       alive = false;

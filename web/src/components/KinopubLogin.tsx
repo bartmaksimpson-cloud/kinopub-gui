@@ -18,7 +18,7 @@ export function KinopubLogin() {
     try {
       const st = await api.kpLogin();
       setKpAuthLocal(st);
-      toast(t("Enter the code on kino.pub/device to finish signing in"), "info");
+      toast(t("Enter the code on kino.watch/device to finish signing in"), "info");
     } catch (e: any) {
       toast(e.message || t("Login failed"), "error");
     } finally {
@@ -39,7 +39,7 @@ export function KinopubLogin() {
   return (
     <div className="card p-5">
       <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-slate-200">
-        <KeyRound className="h-4 w-4 text-gold-400" /> {t("kino.pub account (API)")}
+        <KeyRound className="h-4 w-4 text-gold-400" /> {t("kino.watch account (API)")}
       </h2>
       <p className="mb-4 text-xs text-slate-500">
         {t("Sign in once with a device code to search the catalog, preview voiceovers, and download titles.")}
@@ -48,7 +48,7 @@ export function KinopubLogin() {
       {kpauth.loggedIn ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-4 py-3">
           <span className="flex items-center gap-2 text-sm font-medium text-emerald-300">
-            <CheckCircle2 className="h-4 w-4" /> {t("Signed in to kino.pub")}
+            <CheckCircle2 className="h-4 w-4" /> {t("Signed in to kino.watch")}
           </span>
           <button className="btn-ghost px-3 py-1.5 text-xs" onClick={logout}>
             <LogOut className="h-3.5 w-3.5" /> {t("Logout")}
@@ -64,12 +64,12 @@ export function KinopubLogin() {
               {kpauth.userCode}
             </code>
             <a
-              href={kpauth.verificationUri || "https://kino.pub/device"}
+              href={kpauth.verificationUri || "https://kino.watch/device"}
               target="_blank"
               rel="noreferrer"
               className="btn-ghost px-3 py-2 text-sm"
             >
-              <ExternalLink className="h-4 w-4" /> {kpauth.verificationUri || "kino.pub/device"}
+              <ExternalLink className="h-4 w-4" /> {kpauth.verificationUri || "kino.watch/device"}
             </a>
           </div>
           <p className="flex items-center gap-2 text-xs text-slate-500">
@@ -81,7 +81,7 @@ export function KinopubLogin() {
         <div className="space-y-3">
           <button className="btn-primary" onClick={start} disabled={starting}>
             {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-            {t("Sign in to kino.pub")}
+            {t("Sign in to kino.watch")}
           </button>
           {kpauth.error && <p className="text-xs text-ember-400">{kpauth.error}</p>}
         </div>

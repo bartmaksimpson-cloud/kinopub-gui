@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/httpx"
 )
 
 const (
@@ -347,13 +348,14 @@ func (c *ChunkedDownloader) probeSize(ctx context.Context, url string) (int64, e
 // applyAuth sets authentication headers on the request.
 // NOTE: Cookie is NOT sent to CDN hosts (cdntogo.net, etc.) — it causes
 // throttling and timeouts. Only User-Agent and extra headers (Referer) are sent.
-// Cookie is only needed for kino.pub domain requests.
+// Cookie is only needed for requests to the site's own domains.
 func (c *ChunkedDownloader) applyAuth(req *http.Request) {
 	if c.auth.UserAgent != "" {
 		req.Header.Set("User-Agent", c.auth.UserAgent)
 	}
-	// Only send Cookie to kino.pub, not to CDN hosts.
-	if c.auth.Cookie != "" && strings.Contains(req.URL.Host, "kino.pub") {
+	// Only send Cookie to the site itself (kino.watch and the older kino.pub),
+	// not to CDN hosts — and never to a look-alike such as kino.watch.evil.io.
+	if c.auth.Cookie != "" && httpx.IsSiteHost(req.URL.Host) {
 		req.Header.Set("Cookie", c.auth.Cookie)
 	}
 	for k, v := range c.auth.Headers {

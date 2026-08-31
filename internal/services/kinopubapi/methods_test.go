@@ -148,6 +148,72 @@ func TestItemsRequestAndDecode(t *testing.T) {
 	}
 }
 
+func TestParseTopKind(t *testing.T) {
+	for in, want := range map[string]TopKind{
+		"fresh":      TopFresh,
+		"hot":        TopHot,
+		"popular":    TopPopular,
+		"  hot  ":    TopHot,
+		"":           "",
+		"views-":     "",
+		"HOT":        "",
+		"../../user": "", // it lands in the URL path, so anything unknown is rejected
+	} {
+		got, ok := ParseTopKind(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("ParseTopKind(%q) = (%q, %v), want (%q, %v)", in, got, ok, want, want != "")
+		}
+	}
+}
+
+func TestTopHitsShortcutEndpoint(t *testing.T) {
+	h := &recordingHandler{body: `{"items":[{"id":7,"title":"Hot one"}],"pagination":{"current":2,"total":9}}`}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	page, err := c.Top(context.Background(), TopHot, "serial", 2, 30)
+	if err != nil {
+		t.Fatalf("Top: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Title != "Hot one" {
+		t.Errorf("items = %+v", page.Items)
+	}
+	// The whole point: a dedicated endpoint, not /v1/items with a sort.
+	if !strings.HasSuffix(h.lastReq.URL.Path, "/v1/items/hot") {
+		t.Errorf("path = %q, want /v1/items/hot", h.lastReq.URL.Path)
+	}
+	if h.lastURL.Get("type") != "serial" {
+		t.Errorf("type = %q", h.lastURL.Get("type"))
+	}
+	if h.lastURL.Get("page") != "2" || h.lastURL.Get("perpage") != "30" {
+		t.Errorf("page/perpage = %q/%q", h.lastURL.Get("page"), h.lastURL.Get("perpage"))
+	}
+	if h.lastURL.Get("sort") != "" {
+		t.Errorf("sort must not be sent to a top list, got %q", h.lastURL.Get("sort"))
+	}
+}
+
+// The API requires a type (callers are expected to supply one — see the gui
+// handler), but the client must not send it blank if they don't: an empty param
+// is omitted rather than sent as "type=".
+func TestTopOmitsEmptyType(t *testing.T) {
+	h := &recordingHandler{body: `{"items":[]}`}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	if _, err := c.Top(context.Background(), TopPopular, "", 0, 0); err != nil {
+		t.Fatalf("Top: %v", err)
+	}
+	if !strings.HasSuffix(h.lastReq.URL.Path, "/v1/items/popular") {
+		t.Errorf("path = %q", h.lastReq.URL.Path)
+	}
+	if _, ok := h.lastURL["type"]; ok {
+		t.Errorf("type must be omitted when empty, got %q", h.lastURL.Get("type"))
+	}
+}
+
 func TestSearchTrimsAndSetsField(t *testing.T) {
 	h := &recordingHandler{body: `{"items":[{"id":1,"title":"X"}]}`}
 	srv := httptest.NewServer(h)

@@ -7,12 +7,12 @@ import (
 
 func TestItemIDFromURL(t *testing.T) {
 	cases := map[string]string{
-		"https://kino.pub/item/view/38290":      "38290",
-		"https://kino.pub/item/view/38290/s1e2": "38290",
+		"https://kino.watch/item/view/38290":      "38290",
+		"https://kino.watch/item/view/38290/s1e2": "38290",
 		"38290":                                 "38290",
-		"http://kino.pub/item/view/7/season/2":  "7",
+		"http://kino.watch/item/view/7/season/2":  "7",
 		"":                                      "",
-		"https://kino.pub/movies":               "",
+		"https://kino.watch/movies":               "",
 	}
 	for in, want := range cases {
 		if got := ItemIDFromURL(in); got != want {

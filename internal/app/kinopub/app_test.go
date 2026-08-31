@@ -68,9 +68,11 @@ func (m *mockProgressReporter) EpisodeFailed(key domain.EpisodeKey, err error) {
 func (m *mockProgressReporter) Stop() { m.stopped = true }
 
 type mockStateStore struct {
-	mu        sync.Mutex // guards completed against concurrent worker writes
+	mu        sync.Mutex // guards completed/metadata against concurrent worker writes
 	state     domain.DownloadState
 	completed map[domain.EpisodeKey]bool
+	metaCalls int                    // how many times SetMetadata was called
+	meta      *domain.SeriesMetadata // the last metadata written
 }
 
 func (m *mockStateStore) Load(ctx context.Context, series domain.SeriesID) (domain.DownloadState, error) {
@@ -86,7 +88,19 @@ func (m *mockStateStore) MarkCompleted(ctx context.Context, info domain.Complete
 	return nil
 }
 func (m *mockStateStore) SetMetadata(ctx context.Context, series domain.SeriesID, meta domain.SeriesMetadata) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.metaCalls++
+	m.meta = &meta
 	return nil
+}
+
+// metadataWrites reports how many times SetMetadata was called, read under the
+// lock (episode workers call it concurrently).
+func (m *mockStateStore) metadataWrites() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.metaCalls
 }
 func (m *mockStateStore) IsCompleted(state domain.DownloadState, key domain.EpisodeKey) bool {
 	return false

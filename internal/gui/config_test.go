@@ -36,14 +36,11 @@ func TestSplitShellArgs(t *testing.T) {
 
 func TestDefaultSettings(t *testing.T) {
 	s := defaultSettings()
-	if s.Quality != "1080p" || s.Container != "mkv" || s.Concurrency != 2 || s.Retries != 5 {
+	if s.Quality != "1080p" || s.Container != "mkv" {
 		t.Errorf("unexpected defaults: %+v", s)
 	}
 	if s.Verbosity != "normal" || s.Theme != "cinematic" {
 		t.Errorf("unexpected defaults: %+v", s)
-	}
-	if s.MaxActiveJobs != 0 {
-		t.Errorf("MaxActiveJobs default = %d, want 0 (unlimited)", s.MaxActiveJobs)
 	}
 }
 
@@ -54,16 +51,11 @@ func TestSettingsSaveClamps(t *testing.T) {
 	cases := []struct {
 		name string
 		in   Settings
-		want Settings // only the clamped fields checked below
+		want string // expected container
 	}{
-		{"concurrency too low", Settings{Concurrency: 0, Container: "mkv"}, Settings{Concurrency: 1}},
-		{"concurrency too high", Settings{Concurrency: 99, Container: "mkv"}, Settings{Concurrency: 16}},
-		{"negative retries", Settings{Concurrency: 2, Retries: -3, Container: "mkv"}, Settings{Retries: 0}},
-		{"negative interval", Settings{Concurrency: 2, MinIntervalMS: -5, Container: "mkv"}, Settings{MinIntervalMS: 0}},
-		{"bad container → mkv", Settings{Concurrency: 2, Container: "avi"}, Settings{Container: "mkv"}},
-		{"mp4 preserved", Settings{Concurrency: 2, Container: "mp4"}, Settings{Container: "mp4"}},
-		{"negative maxactive → 0", Settings{Concurrency: 2, Container: "mkv", MaxActiveJobs: -1}, Settings{MaxActiveJobs: 0}},
-		{"maxactive too high → 16", Settings{Concurrency: 2, Container: "mkv", MaxActiveJobs: 99}, Settings{MaxActiveJobs: 16}},
+		{"bad container → mkv", Settings{Container: "avi"}, "mkv"},
+		{"empty container → mkv", Settings{}, "mkv"},
+		{"mp4 preserved", Settings{Container: "mp4"}, "mp4"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -71,20 +63,8 @@ func TestSettingsSaveClamps(t *testing.T) {
 			if err != nil {
 				t.Fatalf("save: %v", err)
 			}
-			if c.want.Concurrency != 0 && got.Concurrency != c.want.Concurrency {
-				t.Errorf("Concurrency = %d, want %d", got.Concurrency, c.want.Concurrency)
-			}
-			if c.name == "negative retries" && got.Retries != 0 {
-				t.Errorf("Retries = %d, want 0", got.Retries)
-			}
-			if c.name == "negative interval" && got.MinIntervalMS != 0 {
-				t.Errorf("MinIntervalMS = %d, want 0", got.MinIntervalMS)
-			}
-			if c.want.Container != "" && got.Container != c.want.Container {
-				t.Errorf("Container = %q, want %q", got.Container, c.want.Container)
-			}
-			if (c.name == "negative maxactive → 0" || c.name == "maxactive too high → 16") && got.MaxActiveJobs != c.want.MaxActiveJobs {
-				t.Errorf("MaxActiveJobs = %d, want %d", got.MaxActiveJobs, c.want.MaxActiveJobs)
+			if got.Container != c.want {
+				t.Errorf("Container = %q, want %q", got.Container, c.want)
 			}
 		})
 	}
@@ -96,17 +76,13 @@ func TestSettingsSavePersistsAndReloads(t *testing.T) {
 	store := newSettingsStore()
 
 	in := Settings{
-		OutputPath:    "/tmp/out",
-		Quality:       "720p",
-		Container:     "mp4",
-		Concurrency:   4,
-		Retries:       3,
-		MinIntervalMS: 250,
-		Proxy:         "socks5://localhost:1080",
-		Verbosity:     "verbose",
-		Theme:         "dark",
-		LibraryDirs:   []string{"/a", "/b"},
-		MaxActiveJobs: 3,
+		OutputPath:  "/tmp/out",
+		Quality:     "720p",
+		Container:   "mp4",
+		Proxy:       "socks5://localhost:1080",
+		Verbosity:   "verbose",
+		Theme:       "dark",
+		LibraryDirs: []string{"/a", "/b"},
 	}
 	if _, err := store.save(in); err != nil {
 		t.Fatalf("save: %v", err)
@@ -118,11 +94,11 @@ func TestSettingsSavePersistsAndReloads(t *testing.T) {
 	if got.OutputPath != "/tmp/out" || got.Quality != "720p" || got.Container != "mp4" {
 		t.Errorf("reloaded mismatch: %+v", got)
 	}
-	if got.Concurrency != 4 || got.Retries != 3 || got.MinIntervalMS != 250 {
-		t.Errorf("reloaded numeric mismatch: %+v", got)
+	if got.Proxy != "socks5://localhost:1080" || got.Verbosity != "verbose" {
+		t.Errorf("reloaded mismatch: %+v", got)
 	}
-	if got.MaxActiveJobs != 3 || !reflect.DeepEqual(got.LibraryDirs, []string{"/a", "/b"}) {
-		t.Errorf("reloaded list/maxactive mismatch: %+v", got)
+	if !reflect.DeepEqual(got.LibraryDirs, []string{"/a", "/b"}) {
+		t.Errorf("reloaded libraryDirs mismatch: %+v", got)
 	}
 }
 
@@ -134,7 +110,10 @@ func TestSettingsLoadMergesDefaults(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	partial := map[string]any{"quality": "480p", "maxActiveJobs": 100} // 100 clamps to 16
+	// "concurrency"/"retries"/"maxActiveJobs" are leftovers from when these were
+	// user-facing knobs; a file written by an older build must still load, with
+	// the retired keys simply dropped.
+	partial := map[string]any{"quality": "480p", "concurrency": 8, "retries": 2, "maxActiveJobs": 100}
 	data, _ := json.Marshal(partial)
 	if err := os.WriteFile(filepath.Join(cfgDir, "gui.json"), data, 0o644); err != nil {
 		t.Fatal(err)
@@ -146,11 +125,8 @@ func TestSettingsLoadMergesDefaults(t *testing.T) {
 		t.Errorf("Quality = %q, want 480p", got.Quality)
 	}
 	// Defaulted fields.
-	if got.Container != "mkv" || got.Concurrency != 2 || got.Retries != 5 {
+	if got.Container != "mkv" || got.Verbosity != "normal" || got.Theme != "cinematic" {
 		t.Errorf("defaults not merged: %+v", got)
-	}
-	if got.MaxActiveJobs != 16 {
-		t.Errorf("MaxActiveJobs = %d, want clamped 16", got.MaxActiveJobs)
 	}
 }
 
@@ -164,15 +140,35 @@ func TestSettingsLoadIgnoresBadJSON(t *testing.T) {
 	store := newSettingsStore()
 	got := store.get()
 	// Falls back to defaults rather than crashing.
-	if got.Quality != "1080p" || got.Concurrency != 2 {
+	if got.Quality != "1080p" || got.Container != "mkv" {
 		t.Errorf("bad JSON should yield defaults, got %+v", got)
+	}
+}
+
+// The download tuning that used to be user-editable is now fixed, so every run
+// gets it regardless of what the UI sends. Pin it here: a regression would
+// silently change how hard every download hits the CDN.
+func TestBuildRunConfig_FixedTuning(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := buildRunConfig(RunRequest{URL: "https://kino.watch/item/view/1"})
+	if err != nil {
+		t.Fatalf("buildRunConfig: %v", err)
+	}
+	if cfg.MaxConcurrency != episodeConcurrency {
+		t.Errorf("MaxConcurrency = %d, want %d", cfg.MaxConcurrency, episodeConcurrency)
+	}
+	if cfg.MaxRetries != episodeRetries {
+		t.Errorf("MaxRetries = %d, want %d", cfg.MaxRetries, episodeRetries)
+	}
+	if cfg.MinIntervalMS != 0 {
+		t.Errorf("MinIntervalMS = %d, want 0 (no artificial throttle)", cfg.MinIntervalMS)
 	}
 }
 
 func TestBuildRunConfig_AudioSpecsSupersede(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	cfg, err := buildRunConfig(RunRequest{
-		URL: "https://kino.pub/item/view/1",
+		URL: "https://kino.watch/item/view/1",
 		AudioSpecs: []AudioSpecDTO{
 			{Require: []string{"LostFilm"}, Forbid: []string{"AC3"}},
 			{Require: nil}, // empty Require → skipped
@@ -192,7 +188,7 @@ func TestBuildRunConfig_AudioSpecsSupersede(t *testing.T) {
 
 func TestBuildRunConfig_DefaultUserAgentAndTimeout(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	cfg, err := buildRunConfig(RunRequest{URL: "https://kino.pub/item/view/1", UserAgent: "  "})
+	cfg, err := buildRunConfig(RunRequest{URL: "https://kino.watch/item/view/1", UserAgent: "  "})
 	if err != nil {
 		t.Fatalf("buildRunConfig: %v", err)
 	}
@@ -219,7 +215,7 @@ func TestBuildRunConfig_VerbosityMapping(t *testing.T) {
 		"weird":   domain.VerbosityNormal,
 	}
 	for in, want := range cases {
-		cfg, err := buildRunConfig(RunRequest{URL: "https://kino.pub/item/view/1", Verbosity: in})
+		cfg, err := buildRunConfig(RunRequest{URL: "https://kino.watch/item/view/1", Verbosity: in})
 		if err != nil {
 			t.Fatalf("buildRunConfig(%q): %v", in, err)
 		}
@@ -232,7 +228,7 @@ func TestBuildRunConfig_VerbosityMapping(t *testing.T) {
 func TestBuildRunConfig_FFmpegArgsSplit(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	cfg, err := buildRunConfig(RunRequest{
-		URL:        "https://kino.pub/item/view/1",
+		URL:        "https://kino.watch/item/view/1",
 		FFmpegArgs: `-threads 2`,
 	})
 	if err != nil {

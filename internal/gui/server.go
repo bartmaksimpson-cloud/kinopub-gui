@@ -34,7 +34,7 @@ type Server struct {
 	restart  func() // set by main to re-exec the freshly installed binary
 	mux      *http.ServeMux
 
-	// kino.pub official-API device login (background poll) state.
+	// kino.watch official-API device login (background poll) state.
 	kpMu    sync.Mutex
 	kpLogin *kpLoginSession
 
@@ -43,19 +43,34 @@ type Server struct {
 	// changes, so a late background refresh can't resurrect a cleared session.
 	kpLogoutGen atomic.Int64
 
+	// backfilling guards the out-of-band library metadata recovery, so repeated
+	// scans can't stack up background workers competing for the shared API
+	// client (whose mutex serializes every other discovery request behind them).
+	backfilling atomic.Bool
+
 	// Cached discovery client (one per server so refreshes serialize). Shared by
 	// discovery, preview and the download engine so all token refreshes funnel
-	// through one client's mutex (kino.pub rotates the refresh token each time).
+	// through one client's mutex (kino.watch rotates the refresh token each time).
 	kpClientMu     sync.Mutex
 	kpClientCached *kinopubapi.Client
 
 	// Per-process secret signing the in-app player's HLS proxy URLs, so the
 	// proxy only fetches URLs this server itself produced (not an open proxy).
 	hlsKey []byte
-	// hlsSem bounds concurrent upstream fetches to kino.pub's CDN: hls.js loads
+	// hlsSem bounds concurrent upstream fetches to kino.watch's CDN: hls.js loads
 	// every audio/video rendition playlist at once, and the CDN rate-limits the
 	// burst with transient 403s. Smoothing the burst keeps playback reliable.
 	hlsSem chan struct{}
+
+	// Cached HLS fetch client, so every proxied segment shares ONE connection
+	// pool. Building a client per request gave each segment its own pool: no
+	// connection was ever reused (a TCP+TLS handshake per segment) and each
+	// discarded transport was left holding an idle connection — with its reader
+	// and writer goroutines — that nothing would ever reap. Keyed by the proxy
+	// setting so a settings change rebuilds it.
+	hlsClientMu     sync.Mutex
+	hlsClientProxy  string
+	hlsClientCached *http.Client
 
 	// uhdOK caches that this device's 4K/HEVC support has been enabled, so the
 	// API includes 2160p files. Enabled lazily on first catalog/stream use.
@@ -84,14 +99,17 @@ func NewServer(version string, static fs.FS) *Server {
 	// Teach the scheduler how to launch a job: resolve the single shared API
 	// client (nil when not signed in → run() fails the job with a clear message)
 	// and start the run goroutine. Sharing one client across discovery and every
-	// download serializes refresh-token rotations through its mutex (kino.pub
+	// download serializes refresh-token rotations through its mutex (kino.watch
 	// invalidates the old token on each refresh, so independent clients would
 	// lock the account out).
 	s.mgr.startFn = func(j *Job) {
 		apiClient, _ := s.kpClient()
 		go s.mgr.run(context.Background(), j, j.cfg, j.seedTitles, j.title, j.posterURL, apiClient)
 	}
-	s.mgr.setMaxActive(s.settings.get().MaxActiveJobs)
+	s.mgr.setMaxActive(maxActiveDownloads)
+	// From here the limit tunes itself: one title at a time by default, a second
+	// lent out while the shared segment controller reports the pipe going unused.
+	s.mgr.startAdaptiveAdmission()
 	// Restore the persisted queue: downloads interrupted by a restart come back
 	// as paused cards (failed ones keep their error) with Resume/Retry working —
 	// the engine skips completed episodes and continues partial .hls-tmp segments.
@@ -106,7 +124,7 @@ func (s *Server) SetRestart(fn func()) { s.restart = fn }
 
 // Handler returns the root http.Handler. There is no auth gate: local features
 // (Library, Doctor, Settings, the folder picker) work without signing in;
-// kino.pub operations (preview/download) fail with a clear error when no
+// kino.watch operations (preview/download) fail with a clear error when no
 // credentials are available, which the UI surfaces and prompts to sign in.
 //
 // All routes sit behind guardLocalOnly, which protects this credential-holding
@@ -175,7 +193,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 
-	// kino.pub official-API (device-code) auth.
+	// kino.watch official-API (device-code) auth.
 	mux.HandleFunc("GET /api/kp/status", s.handleKPStatus)
 	mux.HandleFunc("GET /api/kp/user", s.handleKPUser)
 	mux.HandleFunc("POST /api/kp/login", s.handleKPLogin)
@@ -184,6 +202,7 @@ func (s *Server) routes() {
 	// Discovery (search / tops / catalog / collections / item details).
 	mux.HandleFunc("GET /api/discover/search", s.handleDiscoverSearch)
 	mux.HandleFunc("GET /api/discover/items", s.handleDiscoverItems)
+	mux.HandleFunc("GET /api/discover/top", s.handleDiscoverTop)
 	mux.HandleFunc("GET /api/discover/collections", s.handleDiscoverCollections)
 	mux.HandleFunc("GET /api/discover/collection", s.handleDiscoverCollection)
 	mux.HandleFunc("GET /api/discover/bookmarks", s.handleDiscoverBookmarks)
@@ -216,6 +235,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/jobs/clear", s.handleClearJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
 	mux.HandleFunc("DELETE /api/jobs/{id}", s.handleDeleteJob)
+	mux.HandleFunc("GET /api/jobs/{id}/leftovers", s.handleJobLeftovers)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /api/jobs/{id}/retry", s.handleRetryJob)
 	mux.HandleFunc("POST /api/jobs/{id}/retry-episode", s.handleRetryEpisode)
@@ -358,7 +378,14 @@ func (s *Server) handleDepsInstall(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("force") == "1"
-	writeJSON(w, http.StatusOK, s.updater.status(r.Context(), force))
+	// Detached from the request context on purpose. The UI fires this check the
+	// moment SSE reconnects, and right after a self-update restart the very next
+	// snapshot reloads the tab — which would cancel the in-flight GitHub call and
+	// cache "context canceled" as if the release feed were unreachable. Its own
+	// deadline still bounds the call.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.updater.status(ctx, force))
 }
 
 func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
@@ -399,8 +426,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.mgr.setMaxActive(saved.MaxActiveJobs) // apply new concurrency limit (may dispatch queued jobs)
-	s.invalidateKPClient()                  // proxy may have changed → rebuild the client
+	s.invalidateKPClient() // proxy may have changed → rebuild the client
 	s.hub.broadcast(Event{Type: "settings", Data: saved})
 	writeJSON(w, http.StatusOK, saved)
 }
@@ -452,7 +478,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cfg.InputURL == "" {
-		writeErr(w, http.StatusBadRequest, "a kino.pub URL is required")
+		writeErr(w, http.StatusBadRequest, "a kino.watch URL is required")
 		return
 	}
 	// ffmpeg is required for real downloads (not dry-run).
@@ -460,6 +486,72 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		if _, lookErr := exec.LookPath(cfg.FFmpegPath); lookErr != nil {
 			writeErr(w, http.StatusPreconditionFailed, "ffmpeg not found on PATH — install ffmpeg to download")
 			return
+		}
+	}
+	// The same download must not be queued twice: two engines on one output folder
+	// overwrite each other's files, partial segments and state file. A double click
+	// on Download, or coming back to a title whose download is still running, ends
+	// up here — the existing card is the answer, so point at it instead of adding a
+	// second one. Its id travels in the body so the UI can highlight it.
+	if dup, ok := s.mgr.findActiveDuplicate(cfg); ok {
+		// The same verbatim string as the coverage guard below: the frontend
+		// translates known error strings by exact match, and a dynamic message
+		// here leaked raw English into localized UIs on the most common duplicate
+		// (a double click). The card itself travels as jobId.
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "already in the queue",
+			"jobId": dup.ID,
+		})
+		return
+	}
+	// The exact duplicate above is only half of it: asking for episodes 1-5 of a
+	// series whose 1-10 are already downloading is a different signature and the
+	// same five files. Drop whatever is already coming, so "queue the rest while
+	// this runs" still works, and refuse outright when that leaves nothing — a
+	// request for work that is already underway has no second copy to add.
+	if covered, whole, owner, ok := s.mgr.queueCoverage(cfg); ok {
+		conflict := func() {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": "already in the queue",
+				"jobId": owner.ID,
+			})
+		}
+		// An active job whose reach is unknown may take anything, so nothing can
+		// be proven disjoint from it.
+		if whole {
+			conflict()
+			return
+		}
+		if len(cfg.SelectedEpisodes) == 0 {
+			// A season/episode expression (the Download page's Seasons/Episodes
+			// fields). Its exact episodes are known only after resolve, but the
+			// covered keys are explicit — so overlap is tested against the
+			// expression itself. Seasons="2" while S1E1-E5 downloads overlaps
+			// nothing and is a legitimate new run; an expression that reaches any
+			// covered episode cannot be trimmed (there is no list to trim), so it
+			// is refused and the user pointed at the existing card.
+			for key := range covered {
+				var season, episode int
+				if _, err := fmt.Sscanf(key, "S%dE%d", &season, &episode); err != nil {
+					continue
+				}
+				if cfg.SeasonSel.Matches(season) && cfg.EpisodeSel.Matches(episode) {
+					conflict()
+					return
+				}
+			}
+		} else {
+			remaining := cfg.SelectedEpisodes[:0:0]
+			for _, k := range cfg.SelectedEpisodes {
+				if !covered[epKey(k)] {
+					remaining = append(remaining, k)
+				}
+			}
+			if len(remaining) == 0 {
+				conflict()
+				return
+			}
+			cfg.SelectedEpisodes = remaining
 		}
 	}
 
@@ -686,7 +778,10 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
-	removed, exists := s.mgr.remove(r.PathValue("id"))
+	// "?purge=1" also deletes the partial download data the job was holding for
+	// a resume. Opt-in: the UI asks first, because those files can be gigabytes.
+	purge := r.URL.Query().Get("purge") == "1"
+	removed, exists := s.mgr.remove(r.PathValue("id"), purge)
 	if !exists {
 		writeErr(w, http.StatusNotFound, "job not found")
 		return
@@ -696,6 +791,17 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"removed": true})
+}
+
+// handleJobLeftovers reports how much partial download data removing this job's
+// card would strand on disk, so the UI can offer to take it along.
+func (s *Server) handleJobLeftovers(w http.ResponseWriter, r *http.Request) {
+	view, ok := s.mgr.leftovers(r.PathValue("id"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "job not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (s *Server) handleClearJobs(w http.ResponseWriter, r *http.Request) {
@@ -739,7 +845,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	if req.OutputDir == "" {
 		req.OutputDir = s.settings.get().OutputPath
 	}
-	report, err := runDoctor(r.Context(), req)
+	report, err := runDoctor(r.Context(), req, s.mgr.liveOutputPaths())
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -749,10 +855,42 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	dirs := s.libraryDirs()
-	writeJSON(w, http.StatusOK, scanLibrary(dirs))
+	resp := scanLibrary(dirs)
+	// Downloads made before genres/type were recorded show a bare card. Recover
+	// those fields from the API — but never on the request path: the scan itself
+	// is a local directory walk that takes milliseconds, while kino.watch is
+	// routinely unreachable without a VPN, and waiting on it turned Rescan into a
+	// spinner that hung for minutes. The enrichment is written to the state files,
+	// so the next scan serves it straight from disk.
+	s.startMetadataBackfill(resp.Series)
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleLibraryDownloaded reports which episodes of a kino.pub item are already
+// startMetadataBackfill enriches old library entries out of band. Only one runs
+// at a time; a scan arriving while one is in flight simply skips.
+func (s *Server) startMetadataBackfill(series []LibrarySeries) {
+	targets := needsMetadataBackfill(series)
+	if len(targets) == 0 {
+		return
+	}
+	if !s.backfilling.CompareAndSwap(false, true) {
+		return
+	}
+	client, err := s.kpClient()
+	if err != nil {
+		s.backfilling.Store(false)
+		return
+	}
+	go func() {
+		defer s.backfilling.Store(false)
+		// Bounded so an unreachable kino.watch can't leave this running forever.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		backfillLibraryMetadata(ctx, targets, client)
+	}()
+}
+
+// handleLibraryDownloaded reports which episodes of a kino.watch item are already
 // downloaded, so the title card can mark them.
 func (s *Server) handleLibraryDownloaded(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.URL.Query().Get("id"))

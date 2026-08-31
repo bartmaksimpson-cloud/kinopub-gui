@@ -89,12 +89,12 @@ func clearAPITokens() error {
 }
 
 // persistAPITokens saves a (rotated) token set, logging loudly on failure.
-// kino.pub invalidates the old refresh token on every refresh, so a dropped
+// kino.watch invalidates the old refresh token on every refresh, so a dropped
 // write means the on-disk token is dead and the session is lost on restart — a
 // silent error would be undiagnosable, hence the explicit log.
 func persistAPITokens(tk kinopubapi.Tokens) {
 	if err := saveAPITokens(tk); err != nil {
-		log.Printf("[kp] CRITICAL: failed to persist kino.pub tokens (%v); the session may be lost on restart and re-login required", err)
+		log.Printf("[kp] CRITICAL: failed to persist kino.watch tokens (%v); the session may be lost on restart and re-login required", err)
 	}
 }
 
@@ -109,7 +109,7 @@ func (s *Server) kpHTTPClient() (*http.Client, error) {
 
 // kpClient returns a single cached, authenticated API client. Reusing one
 // instance (rather than building a fresh client per request) is essential:
-// kino.pub rotates the refresh token on every refresh, so all discovery
+// kino.watch rotates the refresh token on every refresh, so all discovery
 // requests must share one client whose internal mutex serializes refreshes.
 // The cache is invalidated on login, logout and settings changes.
 func (s *Server) kpClient() (*kinopubapi.Client, error) {
@@ -120,7 +120,7 @@ func (s *Server) kpClient() (*kinopubapi.Client, error) {
 	}
 	creds, _ := credstore.Load()
 	if !creds.HasAPIToken() {
-		return nil, errors.New("not signed in to kino.pub — open Settings and sign in to the API")
+		return nil, errors.New("not signed in to kino.watch — open Settings and sign in to the API")
 	}
 	hc, err := s.kpHTTPClient()
 	if err != nil {
@@ -149,7 +149,7 @@ func (s *Server) invalidateKPClient() {
 }
 
 // kpFail writes an error for a discovery handler. If the failure means the
-// kino.pub session is dead server-side (refresh rejected / not authenticated),
+// kino.watch session is dead server-side (refresh rejected / not authenticated),
 // it clears the stale tokens and broadcasts so the UI prompts a clean re-login
 // instead of silently failing every request.
 func (s *Server) kpFail(w http.ResponseWriter, err error) {
@@ -157,7 +157,7 @@ func (s *Server) kpFail(w http.ResponseWriter, err error) {
 		_ = clearAPITokens()
 		s.invalidateKPClient()
 		s.hub.broadcast(Event{Type: "kpauth", Data: s.kpStatus()})
-		writeErr(w, http.StatusUnauthorized, "kino.pub session expired — please sign in again")
+		writeErr(w, http.StatusUnauthorized, "kino.watch session expired — please sign in again")
 		return
 	}
 	writeErr(w, http.StatusBadGateway, err.Error())
@@ -206,7 +206,7 @@ func (s *Server) handleKPStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // KPUser is the account profile shown in the sidebar (a stable, frontend-facing
-// projection of the kino.pub /v1/user response).
+// projection of the kino.watch /v1/user response).
 type KPUser struct {
 	Username           string `json:"username"`
 	Avatar             string `json:"avatar,omitempty"`
@@ -345,13 +345,13 @@ func (s *Server) startKPPoller(client *kinopubapi.Client, dc kinopubapi.DeviceCo
 					log.Printf("[kp-login] poll %d: still pending — confirm code %s at %s", polls, dc.UserCode, dc.VerificationURI)
 					continue
 				case errors.Is(err, kinopubapi.ErrDeviceAuthError):
-					// Terminal: kino.pub refused (expired code, access denied,
+					// Terminal: kino.watch refused (expired code, access denied,
 					// device limit, …) — surface it instead of spinning forever.
-					log.Printf("[kp-login] kino.pub refused: %v", err)
+					log.Printf("[kp-login] kino.watch refused: %v", err)
 					s.finishKP(sess, err)
 					return
 				default:
-					// Transport blip (kino.pub often needs a VPN). Retry a few
+					// Transport blip (kino.watch often needs a VPN). Retry a few
 					// times so a single timeout doesn't kill the whole login.
 					transientFails++
 					log.Printf("[kp-login] poll %d: network error (%d/5, retrying): %v", polls, transientFails, err)

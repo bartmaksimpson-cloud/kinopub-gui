@@ -1,29 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bookmark, KeyRound, LayoutGrid, Loader2, RefreshCw, Search, WifiOff, type LucideIcon } from "lucide-react";
-import {
-  api,
-  imgURL,
-  type DiscoverBookmark,
-  type DiscoverCollection,
-  type DiscoverItem,
-  type ItemsQuery,
-  type NamedRef,
-} from "../api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { LayoutGrid, Search, type LucideIcon } from "lucide-react";
+import { api, type DiscoverItem, type ItemsQuery, type NamedRef } from "../api";
 import { CATEGORIES, categoryByKey } from "../categories";
 import { useApp } from "../store";
 import { useI18n } from "../i18n";
-import {
-  bookmarkTitle,
-  collectionTitle,
-  dismiss,
-  pushRoute,
-  rememberBookmarkTitle,
-  rememberCollectionTitle,
-  replaceRoute,
-  useRoute,
-} from "../router";
-import { EmptyState } from "../components/ui";
-import { Ratings } from "../components/Ratings";
+import { dismiss, pushRoute, replaceRoute, useRoute } from "../router";
+import { usePaged } from "../usePaged";
+import { CatalogError, ItemsGrid, ListSpinner, SignInGate, SkeletonGrid } from "../components/catalog";
 import { TitleDetail } from "../components/TitleDetail";
 import {
   FilterPanel,
@@ -33,15 +16,11 @@ import {
   type FilterState,
 } from "../components/FilterPanel";
 
-type Tab = "new" | "collections" | "watching" | "bookmarks" | "history";
-type ColTab = "new" | "popular" | "watched" | "subs";
-type WatchTab = "serials" | "movies";
-
-const COL_SORT: Record<"new" | "popular" | "watched", string> = {
-  new: "created-",
-  popular: "views-",
-  watched: "watchers-",
-};
+// This page used to carry a tab row — Collections, I'm watching, Bookmarks,
+// History — above the search box and the filter panel, neither of which applied
+// to any of those four. Each is now its own rail entry (pages/Collections.tsx,
+// Watching.tsx, Bookmarks.tsx, History.tsx), which leaves the Catalog with one
+// job: find a title in kino.watch's library, by query or by filter.
 
 function filterToQuery(f: FilterState): ItemsQuery {
   // The category fixes the content type (and, for Anime/Sport, a spanning genre);
@@ -63,31 +42,22 @@ function filterToQuery(f: FilterState): ItemsQuery {
   };
 }
 
-export function DiscoverPage({ onStarted, onOpenSettings }: { onStarted: () => void; onOpenSettings: () => void }) {
+// Two escape hatches, two destinations: signing in lives on the Profile page,
+// while the proxy that unblocks kino.watch lives in Settings.
+export function DiscoverPage({
+  onSignIn,
+  onOpenSettings,
+}: {
+  onSignIn: () => void;
+  onOpenSettings: () => void;
+}) {
   const { kpauth, toast } = useApp();
   const { t } = useI18n();
   const loggedIn = kpauth.loggedIn;
 
-  // The open collection and title card live in the URL hash (the single source
-  // of truth), so both survive a reload and browser back/forward.
-  const route = useRoute();
-  const collectionId = route.collectionId ?? null;
-  const bookmarkId = route.bookmarkId ?? null;
-  const detailId = route.itemId ?? null;
-  // Leaving a folder (collection or bookmark) drops back to the bare catalog.
-  const leaveFolder = () => {
-    if (collectionId || bookmarkId) replaceRoute({ page: "discover" });
-  };
-
-  const [tab, setTab] = useState<Tab>("new");
-  const [colTab, setColTab] = useState<ColTab>("new");
-  const [watchTab, setWatchTab] = useState<WatchTab>("serials");
-
-  // Switching a primary tab also closes any open folder.
-  const selectTab = (t: Tab) => {
-    setTab(t);
-    leaveFolder();
-  };
+  // The open title card lives in the URL hash (the single source of truth), so
+  // it survives a reload and browser back/forward.
+  const detailId = useRoute().itemId ?? null;
 
   // Live search (debounced).
   const [search, setSearch] = useState("");
@@ -106,22 +76,9 @@ export function DiscoverPage({ onStarted, onOpenSettings }: { onStarted: () => v
     return () => window.clearTimeout(id);
   }, [filter]);
 
-  const [items, setItems] = useState<DiscoverItem[]>([]);
-  const [collections, setCollections] = useState<DiscoverCollection[]>([]);
-  const [bookmarks, setBookmarks] = useState<DiscoverBookmark[]>([]);
   const [genres, setGenres] = useState<NamedRef[]>([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  // Set when a request fails. A failed *first* load renders a full error panel
-  // (most often kino.pub being unreachable without a VPN); a failed page-append
-  // just toasts, since there's already content on screen.
-  const [error, setError] = useState(false);
 
   const searching = committedSearch.length >= 2;
-  const collectionsListMode =
-    !searching && tab === "collections" && !collectionId && (colTab === "new" || colTab === "popular" || colTab === "watched");
-  const bookmarksListMode = !searching && tab === "bookmarks" && !bookmarkId;
 
   // The active category and the genre group to offer as sub-genres beneath it.
   // Genre-based categories (Anime/Sport) are themselves a genre, so they carry no
@@ -139,127 +96,35 @@ export function DiscoverPage({ onStarted, onOpenSettings }: { onStarted: () => v
     api.discoverGenres(genreType).then((r) => setGenres(r.items || [])).catch(() => setGenres([]));
   }, [loggedIn, genreType]);
 
-  const fetchItems = useCallback(
-    (p: number) => {
-      if (searching) return api.discoverSearch(committedSearch, p);
-      if (collectionId) return api.discoverCollection(collectionId, p);
-      if (bookmarkId) return api.discoverBookmark(bookmarkId, p);
-      if (tab === "history") return api.discoverHistory(p);
-      if (tab === "watching") return api.discoverWatching(false, watchTab, p);
-      if (tab === "collections" && colTab === "subs") return api.discoverWatching(true, "serials", p);
-      return api.discoverItems({ ...filterToQuery(debFilter), page: p });
-    },
-    [searching, committedSearch, collectionId, bookmarkId, tab, watchTab, colTab, debFilter],
+  const load = useCallback(
+    (p: number) =>
+      searching
+        ? api.discoverSearch(committedSearch, p)
+        : api.discoverItems({ ...filterToQuery(debFilter), page: p }),
+    [searching, committedSearch, debFilter],
   );
-
-  const loadPage = useCallback(
-    async (reset: boolean) => {
-      if (!loggedIn) return;
-      const next = reset ? 1 : page + 1;
-      setLoading(true);
-      if (reset) setError(false);
-      try {
-        if (collectionsListMode) {
-          const r = await api.discoverCollections(COL_SORT[colTab as "new" | "popular" | "watched"], next);
-          setCollections((c) => (reset ? r.items : [...c, ...r.items]));
-          setHasMore((r.items?.length ?? 0) > 0 && next < 25);
-          setPage(next);
-        } else if (bookmarksListMode) {
-          // Bookmark folders come back in a single, unpaginated list.
-          const r = await api.discoverBookmarks();
-          setBookmarks(r.items || []);
-          setHasMore(false);
-          setPage(1);
-        } else {
-          const r = await fetchItems(next);
-          setItems((it) => (reset ? r.items : [...it, ...r.items]));
-          setHasMore(r.hasMore);
-          setPage(r.page || next);
-        }
-      } catch (e: any) {
-        setError(true);
-        // First load failed → the error panel below carries the message; a
-        // failed append keeps the existing results and just toasts.
-        if (!reset) toast(e.message || t("Catalog request failed"), "error");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loggedIn, collectionsListMode, bookmarksListMode, colTab, page, fetchItems, toast, t],
-  );
-
-  // Reset + load whenever the data source changes.
   const sourceKey = useMemo(
-    () => JSON.stringify([loggedIn, committedSearch, tab, colTab, watchTab, collectionId, bookmarkId, debFilter]),
-    [loggedIn, committedSearch, tab, colTab, watchTab, collectionId, bookmarkId, debFilter],
+    () => JSON.stringify([committedSearch, debFilter]),
+    [committedSearch, debFilter],
   );
-  useEffect(() => {
-    if (!loggedIn) return;
-    setItems([]);
-    setCollections([]);
-    setBookmarks([]);
-    setPage(1);
-    setHasMore(false);
-    setError(false);
-    loadPage(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey]);
+  const feed = usePaged<DiscoverItem>({
+    enabled: loggedIn,
+    sourceKey,
+    load,
+    onAppendError: (m) => toast(m || t("Catalog request failed"), "error"),
+  });
 
-  // Infinite scroll: observe a sentinel; the ref always holds the latest loader.
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const loadMoreRef = useRef<() => void>(() => {});
-  loadMoreRef.current = () => {
-    if (hasMore && !loading) loadPage(false);
-  };
-  // Re-arm the observer after every append (and once loading settles). An
-  // IntersectionObserver only fires on an off→on-screen transition; a short page
-  // (e.g. Collections, with wide cards) can leave the sentinel permanently in
-  // view, so it never re-fires and paging stalls. Re-observing re-checks the
-  // current intersection and keeps paging until the sentinel scrolls off.
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el || !hasMore) return;
-    const ob = new IntersectionObserver((es) => es[0]?.isIntersecting && loadMoreRef.current(), {
-      rootMargin: "400px",
-    });
-    ob.observe(el);
-    return () => ob.disconnect();
-  }, [hasMore, loading, items.length, collections.length, bookmarks.length]);
-
-  // Picking a category (the catalog's spine) drops to the bare Browse catalog and
-  // clears any sub-genre, since genres are scoped to the new category.
+  // Picking a category (the catalog's spine) clears any sub-genre, since genres
+  // are scoped to the new category, and drops the search that would override it.
   const selectCategory = (key: string) => {
     setFilter((f) => ({ ...f, category: key, genre: "" }));
-    setTab("new");
-    leaveFolder();
     setSearch("");
   };
   const selectGenre = (id: string) => setFilter((f) => ({ ...f, genre: id }));
 
-  // Opening a card or collection pushes a hash route, so the URL reflects the
-  // exact view, a reload restores it, and browser-back closes it. The router
-  // owns all of that — no more synthetic history entries here.
-  const openDetail = (id: string) =>
-    pushRoute({
-      page: "discover",
-      collectionId: collectionId ?? undefined,
-      bookmarkId: bookmarkId ?? undefined,
-      itemId: id,
-    });
-  const openCollection = (c: DiscoverCollection) => {
-    rememberCollectionTitle(c.id, c.title);
-    pushRoute({ page: "discover", collectionId: c.id });
-  };
-  const openBookmark = (b: DiscoverBookmark) => {
-    rememberBookmarkTitle(b.id, b.title);
-    pushRoute({ page: "discover", bookmarkId: b.id });
-  };
-
-  // Touching the filter brings the user to the (catalog) results it controls.
+  // Touching the filter brings the user to the results it controls.
   const onFilterChange = (f: FilterState) => {
     setFilter(f);
-    setTab("new");
-    leaveFolder();
     setSearch("");
   };
 
@@ -267,16 +132,7 @@ export function DiscoverPage({ onStarted, onOpenSettings }: { onStarted: () => v
     return (
       <div className="mx-auto max-w-6xl">
         <Header />
-        <EmptyState
-          icon={<KeyRound className="h-6 w-6" />}
-          title={t("Sign in to kino.pub to browse the catalog")}
-          hint={t("The catalog, search, voiceovers and one-click downloads use the official kino.pub API. Sign in once in Settings.")}
-          action={
-            <button className="btn-primary" onClick={onOpenSettings}>
-              <KeyRound className="h-4 w-4" /> {t("Go to Settings")}
-            </button>
-          }
-        />
+        <SignInGate title={t("Sign in to kino.watch to browse the catalog")} onSignIn={onSignIn} />
       </div>
     );
   }
@@ -290,7 +146,7 @@ export function DiscoverPage({ onStarted, onOpenSettings }: { onStarted: () => v
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
         <input
           className="input pl-9"
-          placeholder={t("Search films and series on kino.pub…")}
+          placeholder={t("Search films and series on kino.watch…")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -305,7 +161,7 @@ export function DiscoverPage({ onStarted, onOpenSettings }: { onStarted: () => v
       </div>
 
       {searching ? (
-        // kino.pub's title search is a dedicated endpoint that can't be narrowed
+        // kino.watch's title search is a dedicated endpoint that can't be narrowed
         // by category/genre/filters, so hide those controls while a query is
         // active (they'd only fight the search) and tell the user how to browse
         // by genre instead — clear the search.
@@ -314,177 +170,67 @@ export function DiscoverPage({ onStarted, onOpenSettings }: { onStarted: () => v
         </p>
       ) : (
         <>
-          {/* Filter lives right under the search and drives the catalog results. */}
-          <FilterPanel value={filter} onChange={onFilterChange} onReset={() => onFilterChange(defaultFilter())} />
-
-          {/* Primary tabs */}
-          <div className="flex flex-wrap items-center gap-2">
-            <SubChip active={tab === "new"} onClick={() => selectTab("new")}>{t("Browse")}</SubChip>
-            <SubChip active={tab === "collections"} onClick={() => selectTab("collections")}>{t("Collections")}</SubChip>
-            <SubChip active={tab === "watching"} onClick={() => selectTab("watching")}>{t("I'm watching")}</SubChip>
-            <SubChip active={tab === "bookmarks"} onClick={() => selectTab("bookmarks")}>{t("Bookmarks")}</SubChip>
-            <SubChip active={tab === "history"} onClick={() => selectTab("history")}>{t("History")}</SubChip>
+          {/* The category bar (mirrors kino.watch's category sidebar), then the
+              selected category's genres. The Fresh/Hot/Popular chips that used to
+              close this page are kino.watch's own charts, which take neither a
+              genre nor a filter — they now live on their own "What's new" page. */}
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+            <CategoryChip active={!filter.category} icon={LayoutGrid} label={t("All")} onClick={() => selectCategory("")} />
+            {CATEGORIES.map((c) => (
+              <CategoryChip
+                key={c.key}
+                active={filter.category === c.key}
+                icon={c.icon}
+                label={t(c.label)}
+                onClick={() => selectCategory(c.key)}
+              />
+            ))}
           </div>
 
-          {/* Browse: the category bar (mirrors kino.pub's category sidebar), then
-              the selected category's genres, then quick sort presets. "Fresh" is
-              the default sort (see defaultFilter), so one sort chip is always lit. */}
-          {tab === "new" && (
-            <>
-              <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-                <CategoryChip active={!filter.category} icon={LayoutGrid} label={t("All")} onClick={() => selectCategory("")} />
-                {CATEGORIES.map((c) => (
-                  <CategoryChip
-                    key={c.key}
-                    active={filter.category === c.key}
-                    icon={c.icon}
-                    label={t(c.label)}
-                    onClick={() => selectCategory(c.key)}
-                  />
-                ))}
-              </div>
-
-              {genreType && genres.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="mr-1 text-xs font-medium text-slate-500">{t("Genres")}:</span>
-                  <GenreChip active={!filter.genre} onClick={() => selectGenre("")}>{t("All genres")}</GenreChip>
-                  {genres.map((g) => (
-                    <GenreChip key={g.id} active={filter.genre === g.id} onClick={() => selectGenre(g.id)}>
-                      {g.title}
-                    </GenreChip>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex flex-wrap gap-2">
-                <SubChip active={filter.sort === "created-"} onClick={() => setFilter((f) => ({ ...f, sort: "created-" }))}>{t("Fresh")}</SubChip>
-                <SubChip active={filter.sort === "views-"} onClick={() => setFilter((f) => ({ ...f, sort: "views-" }))}>{t("Popular")}</SubChip>
-                <SubChip active={filter.sort === "watchers-"} onClick={() => setFilter((f) => ({ ...f, sort: "watchers-" }))}>{t("Hot")}</SubChip>
-              </div>
-            </>
-          )}
-
-          {/* Collections sub-tabs */}
-          {tab === "collections" && !collectionId && (
-            <div className="flex flex-wrap gap-2">
-              <SubChip active={colTab === "new"} onClick={() => setColTab("new")}>{t("New")}</SubChip>
-              <SubChip active={colTab === "popular"} onClick={() => setColTab("popular")}>{t("Popular")}</SubChip>
-              <SubChip active={colTab === "watched"} onClick={() => setColTab("watched")}>{t("Most watched")}</SubChip>
-              <SubChip active={colTab === "subs"} onClick={() => setColTab("subs")}>{t("Subscriptions")}</SubChip>
+          {genreType && genres.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-xs font-medium text-slate-500">{t("Genres")}:</span>
+              <GenreChip active={!filter.genre} onClick={() => selectGenre("")}>{t("All genres")}</GenreChip>
+              {genres.map((g) => (
+                <GenreChip key={g.id} active={filter.genre === g.id} onClick={() => selectGenre(g.id)}>
+                  {g.title}
+                </GenreChip>
+              ))}
             </div>
           )}
 
-          {/* "I'm watching" sub-tabs (serials / movies) */}
-          {tab === "watching" && (
-            <div className="flex flex-wrap gap-2">
-              <SubChip active={watchTab === "serials"} onClick={() => setWatchTab("serials")}>{t("Series")}</SubChip>
-              <SubChip active={watchTab === "movies"} onClick={() => setWatchTab("movies")}>{t("Movies")}</SubChip>
-            </div>
-          )}
-
-          {collectionId && (
-            <div className="flex items-center gap-2 text-sm">
-              <button className="text-gold-300 hover:underline" onClick={() => dismiss({ page: "discover" })}>
-                ← {t("Collections")}
-              </button>
-              <span className="text-slate-500">/</span>
-              <span className="font-medium text-slate-200">{collectionTitle(collectionId) || t("Collection")}</span>
-            </div>
-          )}
-
-          {bookmarkId && (
-            <div className="flex items-center gap-2 text-sm">
-              <button className="text-gold-300 hover:underline" onClick={() => dismiss({ page: "discover" })}>
-                ← {t("Bookmarks")}
-              </button>
-              <span className="text-slate-500">/</span>
-              <span className="font-medium text-slate-200">{bookmarkTitle(bookmarkId) || t("Bookmarks")}</span>
-            </div>
-          )}
+          {/* Fine-grained narrowing comes last: the user picks the shelf
+              (category → genre) first, then the conditions on top of it. */}
+          <FilterPanel value={filter} onChange={onFilterChange} />
         </>
       )}
 
       {/* Content */}
-      {error && items.length === 0 && collections.length === 0 && bookmarks.length === 0 ? (
-        <CatalogError onRetry={() => loadPage(true)} onOpenSettings={onOpenSettings} />
-      ) : loading && items.length === 0 && collections.length === 0 && bookmarks.length === 0 ? (
-        <SkeletonGrid wide={collectionsListMode || bookmarksListMode} />
-      ) : collectionsListMode ? (
-        <CollectionsGrid collections={collections} onOpen={openCollection} />
-      ) : bookmarksListMode ? (
-        <BookmarksGrid folders={bookmarks} onOpen={openBookmark} />
-      ) : tab === "history" && !searching ? (
-        <HistoryView items={items} onOpen={(it) => openDetail(it.id)} />
+      {feed.error && feed.items.length === 0 ? (
+        <CatalogError onRetry={feed.reload} onOpenSettings={onOpenSettings} />
+      ) : feed.loading && feed.items.length === 0 ? (
+        <SkeletonGrid />
+      ) : feed.items.length === 0 ? (
+        <p className="py-10 text-center text-sm text-slate-500">{t("Nothing found.")}</p>
       ) : (
-        <ItemsGrid items={items} onOpen={(it) => openDetail(it.id)} />
+        <ItemsGrid items={feed.items} onOpen={(it) => pushRoute({ page: "discover", itemId: it.id })} />
       )}
 
-      {/* Empty / loader / infinite-scroll sentinel */}
-      {!loading &&
-        !error &&
-        (bookmarksListMode
-          ? bookmarks.length === 0
-          : collectionsListMode
-            ? collections.length === 0
-            : items.length === 0) && (
-          <p className="py-10 text-center text-sm text-slate-500">{t("Nothing found.")}</p>
-        )}
-      {loading && (items.length > 0 || collections.length > 0 || bookmarks.length > 0) && (
-        <div className="flex justify-center py-6 text-slate-400">
-          <Loader2 className="h-5 w-5 animate-spin" />
-        </div>
-      )}
-      <div ref={sentinelRef} className="h-1" />
+      {/* Loader for an in-flight append, then the infinite-scroll sentinel. */}
+      {feed.loading && feed.items.length > 0 && <ListSpinner />}
+      <div ref={feed.sentinelRef} className="h-1" />
 
       {detailId && (
         <TitleDetail
           id={detailId}
-          onClose={() =>
-            dismiss({
-              page: "discover",
-              collectionId: collectionId ?? undefined,
-              bookmarkId: bookmarkId ?? undefined,
-            })
-          }
+          onClose={() => dismiss({ page: "discover" })}
           // A "similar" pick swaps the card in place (one modal = one history
           // entry), so the X button closes cleanly instead of stepping back
           // through every card visited.
-          onPick={(it) =>
-            replaceRoute({
-              page: "discover",
-              collectionId: collectionId ?? undefined,
-              bookmarkId: bookmarkId ?? undefined,
-              itemId: it.id,
-            })
-          }
-          onStarted={onStarted}
+          onPick={(it) => replaceRoute({ page: "discover", itemId: it.id })}
         />
       )}
     </div>
-  );
-}
-
-// CatalogError replaces the grid when a request fails — most commonly because
-// kino.pub is unreachable without a VPN. Offers a one-tap retry and a shortcut
-// to Settings (where the proxy lives).
-function CatalogError({ onRetry, onOpenSettings }: { onRetry: () => void; onOpenSettings: () => void }) {
-  const { t } = useI18n();
-  return (
-    <EmptyState
-      icon={<WifiOff className="h-6 w-6" />}
-      title={t("Couldn't reach kino.pub")}
-      hint={t("If kino.pub is blocked in your region, enable a VPN (or set a proxy in Settings), then try again.")}
-      action={
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          <button className="btn-primary" onClick={onRetry}>
-            <RefreshCw className="h-4 w-4" /> {t("Retry")}
-          </button>
-          <button className="btn-ghost" onClick={onOpenSettings}>
-            {t("Go to Settings")}
-          </button>
-        </div>
-      }
-    />
   );
 }
 
@@ -494,25 +240,14 @@ function Header() {
     <header>
       <h1 className="text-2xl font-bold text-slate-100">{t("Catalog")}</h1>
       <p className="mt-1 text-sm text-slate-400">
-        {t("Search kino.pub, browse tops, collections and history, preview voiceovers — and download in one click.")}
+        {t("Search kino.watch by title, or narrow the whole library down by category, genre and rating.")}
       </p>
     </header>
   );
 }
 
-function SubChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-lg px-3 py-1.5 text-sm transition ${active ? "bg-gold-500/[0.14] text-gold-200" : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-200"}`}
-    >
-      {children}
-    </button>
-  );
-}
-
 // CategoryChip is a content-category pill with its icon, used in the catalog's
-// top category bar (mirrors kino.pub's category sidebar). shrink-0 keeps chips
+// top category bar (mirrors kino.watch's category sidebar). shrink-0 keeps chips
 // from squashing inside the horizontally scrollable bar.
 function CategoryChip({
   active,
@@ -545,142 +280,5 @@ function GenreChip({ active, onClick, children }: { active: boolean; onClick: ()
     >
       {children}
     </button>
-  );
-}
-
-function badgeOf(it: DiscoverItem, t: (k: string, v?: Record<string, string | number>) => string): string {
-  if (it.season && it.season > 0 && it.episode) return t("Season {s}. Episode {e}", { s: it.season, e: it.episode });
-  if (it.episode && it.episode > 1) return t("Episode {n}", { n: it.episode });
-  return it.subtitle || "";
-}
-
-function ItemsGrid({ items, onOpen }: { items: DiscoverItem[]; onOpen: (it: DiscoverItem) => void }) {
-  const { t } = useI18n();
-  return (
-    <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-      {items.map((it) => {
-        const badge = badgeOf(it, t);
-        return (
-          <button key={it.id} onClick={() => onOpen(it)} className="group text-left" title={it.originalTitle || it.title}>
-            <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-ink-700 to-ink-850">
-              <img
-                src={imgURL(it.poster)}
-                alt={it.title}
-                loading="lazy"
-                className="aspect-[2/3] w-full object-cover transition duration-200 group-hover:scale-[1.03]"
-                onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = "hidden")}
-              />
-              {badge && (
-                <span className="absolute bottom-1.5 left-1.5 right-1.5 truncate rounded-md bg-black/75 px-1.5 py-0.5 text-center text-[10px] font-semibold text-emerald-300">
-                  {badge}
-                </span>
-              )}
-            </div>
-            {/* Every meta line is always present (nbsp filler) and the ratings row
-                has a reserved fixed height, so cards are uniformly tall and the
-                grid rows don't jump between titles that have more/less metadata. */}
-            <p className="mt-1.5 truncate text-xs font-semibold text-slate-100">{it.title}</p>
-            <p className="truncate text-[11px] text-slate-500">{it.originalTitle || " "}</p>
-            <p className="text-[11px] text-slate-500">{it.year || " "}</p>
-            <div className="mt-1 flex h-5 items-center overflow-hidden">
-              <Ratings item={it} />
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// SkeletonGrid shows placeholder cards on cold start so the catalog isn't empty
-// while the first page loads.
-function SkeletonGrid({ wide }: { wide?: boolean }) {
-  return (
-    <div className={wide ? "grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4" : "grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6"}>
-      {Array.from({ length: wide ? 8 : 18 }).map((_, i) => (
-        <div key={i} className="animate-pulse">
-          <div className={`${wide ? "aspect-video" : "aspect-[2/3]"} w-full rounded-xl bg-white/[0.05]`} />
-          <div className="mt-1.5 h-3.5 w-3/4 rounded bg-white/[0.05]" />
-          {!wide && (
-            <>
-              {/* Mirror the real card's meta lines (original title, year, ratings)
-                  so the grid height doesn't jump when posters finish loading. */}
-              <div className="mt-1.5 h-2.5 w-1/2 rounded bg-white/[0.04]" />
-              <div className="mt-1.5 h-2.5 w-1/4 rounded bg-white/[0.04]" />
-              <div className="mt-1.5 h-4 w-2/3 rounded bg-white/[0.04]" />
-            </>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// HistoryView groups watch history into per-day sections (newest first).
-function HistoryView({ items, onOpen }: { items: DiscoverItem[]; onOpen: (it: DiscoverItem) => void }) {
-  const { lang } = useI18n();
-  const fmt = new Intl.DateTimeFormat(lang === "ru" ? "ru-RU" : "en-US", { day: "numeric", month: "long", year: "numeric" });
-  const groups: { day: string; items: DiscoverItem[] }[] = [];
-  for (const it of items) {
-    const day = it.watchedAt ? fmt.format(new Date(it.watchedAt * 1000)) : "";
-    const last = groups[groups.length - 1];
-    if (last && last.day === day) last.items.push(it);
-    else groups.push({ day, items: [it] });
-  }
-  return (
-    <div className="space-y-6">
-      {groups.map((g, i) => (
-        <div key={i}>
-          {g.day && <h3 className="mb-2.5 text-sm font-bold text-slate-200">{g.day}</h3>}
-          <ItemsGrid items={g.items} onOpen={onOpen} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// BookmarksGrid shows the account's bookmark folders. Folders have no poster
-// (the API returns only id/title/count), so each card is an icon tile.
-function BookmarksGrid({ folders, onOpen }: { folders: DiscoverBookmark[]; onOpen: (b: DiscoverBookmark) => void }) {
-  const { t } = useI18n();
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-      {folders.map((b) => (
-        <button key={b.id} onClick={() => onOpen(b)} className="group text-left" title={b.title}>
-          <div className="flex aspect-video w-full items-center justify-center rounded-xl bg-gradient-to-br from-ink-700 to-ink-850 transition duration-200 group-hover:from-ink-600 group-hover:to-ink-800">
-            <Bookmark className="h-8 w-8 text-gold-300/70" />
-          </div>
-          <p className="mt-1.5 truncate text-sm font-medium text-slate-200">{b.title}</p>
-          <p className="text-[11px] text-slate-500">{t("{n} titles", { n: b.count })}</p>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function CollectionsGrid({
-  collections,
-  onOpen,
-}: {
-  collections: DiscoverCollection[];
-  onOpen: (c: DiscoverCollection) => void;
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-      {collections.map((c) => (
-        <button key={c.id} onClick={() => onOpen(c)} className="group text-left" title={c.title}>
-          <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-ink-700 to-ink-850">
-            <img
-              src={imgURL(c.poster)}
-              alt={c.title}
-              loading="lazy"
-              className="aspect-video w-full object-cover transition duration-200 group-hover:scale-[1.03]"
-              onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = "hidden")}
-            />
-          </div>
-          <p className="mt-1.5 truncate text-sm font-medium text-slate-200">{c.title}</p>
-        </button>
-      ))}
-    </div>
   );
 }

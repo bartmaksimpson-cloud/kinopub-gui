@@ -4,6 +4,7 @@ package hlsdownloader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,8 +26,9 @@ const (
 	// segmentRetryDelay is the base delay between segment retries.
 	segmentRetryDelay = 2 * time.Second
 
-	// defaultConcurrency is the default number of segments fetched in parallel
-	// across all tracks of an episode.
+	// defaultConcurrency is where the throughput controller STARTS: the number of
+	// segments fetched in parallel across all tracks and all concurrent episodes
+	// before any measurement exists. It ramps from here (see adaptiveLimiter).
 	defaultConcurrency = 4
 )
 
@@ -40,17 +42,52 @@ type Downloader struct {
 
 	mu        sync.RWMutex
 	audioPref domain.AudioPreference
+
+	// limMu guards lazy creation of lim, the throughput controller shared by every
+	// episode this Downloader fetches. It is deliberately NOT per-episode: the
+	// link and the CDN it measures are shared, so two per-episode controllers
+	// would hill-climb against each other over one bottleneck and their limits
+	// would multiply into twice the sockets nobody budgeted for.
+	limMu sync.Mutex
+	lim   *adaptiveLimiter
+}
+
+// sharedLimiter returns the run-wide segment limiter, building it on first use
+// from the configured starting concurrency.
+func (d *Downloader) sharedLimiter() *adaptiveLimiter {
+	d.limMu.Lock()
+	defer d.limMu.Unlock()
+	if d.lim == nil {
+		start := d.concurrency
+		if start < 1 {
+			start = defaultConcurrency
+		}
+		d.lim = newAdaptiveLimiter(start, 1, d.logger)
+	}
+	return d.lim
 }
 
 // Option configures the Downloader.
 type Option func(*Downloader)
 
-// WithConcurrency sets the number of segments fetched in parallel across all
-// tracks (video + audio) of an episode. Values < 1 fall back to the default.
+// WithConcurrency sets the STARTING number of segments fetched in parallel
+// across all tracks (video + audio) of every episode this Downloader runs; the
+// controller tunes it from there. Values < 1 fall back to the default.
 func WithConcurrency(n int) Option {
 	return func(d *Downloader) {
 		if n >= 1 {
 			d.concurrency = n
+		}
+	}
+}
+
+// WithLimiter makes this Downloader fetch through a controller shared with the
+// rest of the process instead of building its own. Use it whenever more than one
+// Downloader can be alive at a time — the link they measure is the same one.
+func WithLimiter(l *Limiter) Option {
+	return func(d *Downloader) {
+		if l != nil {
+			d.lim = l
 		}
 	}
 }
@@ -149,7 +186,7 @@ func audioRenditionsFor(master *MasterPlaylist, selected Variant) []AudioRenditi
 	if selected.AudioGroup == "" {
 		return out
 	}
-	// kino.pub's mixed-codec (4K) masters list each dub twice inside one group —
+	// kino.watch's mixed-codec (4K) masters list each dub twice inside one group —
 	// once for the AVC video, once for the HEVC video — under the identical NAME.
 	// Deduplicate by name+language so a single picked dub isn't downloaded twice.
 	seen := make(map[string]bool)
@@ -215,12 +252,17 @@ func (d *Downloader) downloadEpisodeInternal(
 	// keeps every track.
 	pref := d.audioPreference()
 	audioRenditions := allRenditions
+	// Set when the requested voiceover is not among this episode's tracks and the
+	// selection fell back to a substitute. Recorded with the episode so the card
+	// can say which ones came out in a different dub.
+	audioFellBack := false
 	if !pref.IsAll() && len(allRenditions) > 0 {
 		infos := make([]domain.AudioTrackInfo, len(allRenditions))
 		for i, a := range allRenditions {
 			infos[i] = domain.AudioTrackInfo{Index: i, Name: a.Name, Language: a.Language}
 		}
-		keep := domain.SelectAudio(infos, pref)
+		keep, fellBack := domain.SelectAudioResolved(infos, pref)
+		audioFellBack = fellBack
 		filtered := make([]AudioRendition, 0, len(keep))
 		var keptLabels []string
 		for _, idx := range keep {
@@ -233,6 +275,8 @@ func (d *Downloader) downloadEpisodeInternal(
 			domain.F("available", len(allRenditions)),
 			domain.F("kept", len(audioRenditions)),
 			domain.F("tracks", strings.Join(keptLabels, " | ")),
+			// The chosen voiceover was missing here and a substitute was taken.
+			domain.F("substituted", audioFellBack),
 		)
 	}
 
@@ -378,19 +422,21 @@ func (d *Downloader) downloadEpisodeInternal(
 		reportLocked()
 	}
 
-	// Shared semaphore bounding the number of segments fetched in parallel
-	// across ALL tracks. This lets audio download alongside video instead of
-	// waiting for the video track to finish.
-	concurrency := d.concurrency
-	if concurrency < 1 {
-		concurrency = defaultConcurrency
-	}
+	// Limiter bounding the number of segments fetched in parallel across ALL
+	// tracks — and, because it is shared by the whole Downloader, across every
+	// episode running at the same time. This lets audio download alongside video
+	// instead of waiting for the video track to finish, and it tunes the bound at
+	// runtime from measured throughput: the right number depends on the user's
+	// link, not on us, and one link deserves exactly one controller.
+	lim := d.sharedLimiter()
+	concurrencyStart := lim.current()
 	// Guarantee every track (video + each audio) can have at least one segment
 	// in flight simultaneously, so audio always downloads together with video.
-	if nTracks := 1 + len(audioJobs); concurrency < nTracks {
-		concurrency = nTracks
-	}
-	sem := make(chan struct{}, concurrency)
+	// This raises the floor the controller may never back off past for as long as
+	// this episode is downloading, and drops it again when the episode ends.
+	nTracks := 1 + len(audioJobs)
+	lim.addTracks(nTracks)
+	defer lim.removeTracks(nTracks)
 
 	// downloadTrack fetches every segment of a single track into segDir (with
 	// resume + bounded concurrency), then concatenates them into outPath.
@@ -431,28 +477,27 @@ func (d *Downloader) downloadEpisodeInternal(
 				continue
 			}
 
-			// Acquire a concurrency slot (or stop on cancellation).
-			select {
-			case sem <- struct{}{}:
-			case <-gctx.Done():
-				continue
-			}
-			if gctx.Err() != nil {
-				<-sem // release the slot we just took
+			// Acquire a concurrency slot. This also absorbs any CDN cool-down, so
+			// back-pressure is applied before we open the connection rather than
+			// after the server has already rejected it.
+			if err := lim.acquire(gctx); err != nil {
 				break
 			}
 
 			wg.Add(1)
 			go func(seg Segment, segPath string) {
 				defer wg.Done()
-				defer func() { <-sem }()
 
-				n, err := d.downloadSegment(gctx, seg, segPath)
+				n, err := d.downloadSegment(gctx, seg, segPath, lim)
 				if err != nil {
+					// Release without measuring: a failed attempt's bytes say
+					// nothing about whether the current concurrency is right.
+					lim.release()
 					os.Remove(segPath)
 					setErr(fmt.Errorf("segment %d failed: %w", seg.Index, err))
 					return
 				}
+				lim.done(n)
 				updateTrack(trackIdx, n)
 			}(seg, segPath)
 		}
@@ -472,7 +517,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		if initURI != "" {
 			initPath = filepath.Join(segDir, "init.mp4")
 			if info, statErr := os.Stat(initPath); statErr != nil || info.Size() == 0 {
-				if _, err := d.downloadSegment(ctx, Segment{URL: initURI, Index: -1}, initPath); err != nil {
+				if _, err := d.downloadSegment(ctx, Segment{URL: initURI, Index: -1}, initPath, lim); err != nil {
 					return fmt.Errorf("init segment: %w", err)
 				}
 			}
@@ -571,7 +616,12 @@ func (d *Downloader) downloadEpisodeInternal(
 		domain.F("episode", epLabel),
 		domain.F("quality", selected.Label()),
 		domain.F("audio_tracks", len(resultAudio)),
-		domain.F("concurrency", concurrency),
+		// Where the throughput controller started, where it ended up, and the
+		// highest it dared — the three numbers needed to tell "the link was the
+		// limit" from "we never ramped".
+		domain.F("concurrency_start", concurrencyStart),
+		domain.F("concurrency_final", lim.current()),
+		domain.F("concurrency_peak", lim.peakLimit()),
 		domain.F("size", formatHLSBytes(totalBytes)),
 	)
 
@@ -581,18 +631,39 @@ func (d *Downloader) downloadEpisodeInternal(
 	}
 
 	return &domain.HLSDownloadResult{
-		Resolution:  selected.Resolution,
-		BitrateKbps: selected.BitrateKbps(),
-		Codec:       codec,
-		TotalBytes:  totalBytes,
-		VideoPath:   videoPath,
-		AudioTracks: resultAudio,
-		TempDir:     tmpDir,
+		Resolution:    selected.Resolution,
+		BitrateKbps:   selected.BitrateKbps(),
+		Codec:         codec,
+		TotalBytes:    totalBytes,
+		VideoPath:     videoPath,
+		AudioTracks:   resultAudio,
+		AudioFallback: audioFellBack,
+		TempDir:       tmpDir,
 	}, nil
 }
 
-// downloadSegment downloads a single segment with retries.
-func (d *Downloader) downloadSegment(ctx context.Context, seg Segment, outPath string) (int64, error) {
+// statusError is a non-200 response from the CDN. It carries the parsed
+// Retry-After hint so the retry loop can wait exactly as long as the server
+// asked for instead of guessing with a blind exponential backoff.
+type statusError struct {
+	Code       int
+	RetryAfter time.Duration
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("HTTP %d", e.Code) }
+
+// throttled reports whether the response means "you are going too fast" rather
+// than "something broke". Those are the only ones worth slowing the whole
+// episode down for.
+func (e *statusError) throttled() bool {
+	return e.Code == http.StatusTooManyRequests || e.Code == http.StatusServiceUnavailable
+}
+
+// downloadSegment downloads a single segment with retries. lim may be nil (the
+// init segment is fetched outside the worker pool); when set, throttling
+// responses are reported to it so every worker backs off together instead of
+// each one discovering the limit on its own.
+func (d *Downloader) downloadSegment(ctx context.Context, seg Segment, outPath string, lim *adaptiveLimiter) (int64, error) {
 	var lastErr error
 
 	for attempt := 0; attempt < maxSegmentRetries; attempt++ {
@@ -604,6 +675,14 @@ func (d *Downloader) downloadSegment(ctx context.Context, seg Segment, outPath s
 			delay := segmentRetryDelay * time.Duration(1<<(attempt-1))
 			if delay > 15*time.Second {
 				delay = 15 * time.Second
+			}
+			// A server that told us how long to wait knows better than our curve.
+			var se *statusError
+			if errors.As(lastErr, &se) && se.RetryAfter > delay {
+				delay = se.RetryAfter
+				if delay > maxThrottleCoolDown {
+					delay = maxThrottleCoolDown
+				}
 			}
 			select {
 			case <-ctx.Done():
@@ -618,6 +697,10 @@ func (d *Downloader) downloadSegment(ctx context.Context, seg Segment, outPath s
 		}
 
 		lastErr = err
+		var se *statusError
+		if lim != nil && errors.As(err, &se) && se.throttled() {
+			lim.throttle(se.RetryAfter)
+		}
 		d.logger.Debug("segment retry",
 			domain.F("segment", seg.Index),
 			domain.F("attempt", attempt+1),
@@ -647,7 +730,10 @@ func (d *Downloader) fetchSegment(ctx context.Context, segURL, outPath string) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return 0, &statusError{
+			Code:       resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 
 	f, err := os.Create(outPath)

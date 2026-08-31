@@ -170,15 +170,31 @@ func (p *Provider) systemProxyURL() *url.URL {
 	return nil
 }
 
+// tunePool applies connection-pool limits to t and returns it.
+//
+// A zero-value http.Transport has IdleConnTimeout 0, meaning idle connections
+// are kept until the far end drops them — so nothing this process opens is ever
+// reclaimed on its own initiative. The per-host idle cap defaults to 2, which is
+// below the concurrency the HLS proxy runs at, so without raising it the extra
+// connections are closed after every response instead of being reused.
+func tunePool(t *http.Transport) *http.Transport {
+	t.MaxIdleConns = 32
+	t.MaxIdleConnsPerHost = 8
+	t.IdleConnTimeout = 90 * time.Second
+	t.TLSHandshakeTimeout = 10 * time.Second
+	t.ExpectContinueTimeout = time.Second
+	return t
+}
+
 // buildHTTPClient constructs an *http.Client with the appropriate transport.
 func (p *Provider) buildHTTPClient() *http.Client {
 	switch {
 	case p.proxyURL == nil:
 		// Direct connection — use platform-aware dialer (fixes DNS on Android/Termux).
 		return &http.Client{
-			Transport: &http.Transport{
+			Transport: tunePool(&http.Transport{
 				DialContext: httpx.NewDialer().DialContext,
-			},
+			}),
 			Timeout: 30 * time.Second,
 		}
 
@@ -196,9 +212,9 @@ func (p *Provider) buildHTTPClient() *http.Client {
 func (p *Provider) buildHTTPProxyClient() *http.Client {
 	proxyFunc := p.httpProxyFunc()
 
-	transport := &http.Transport{
+	transport := tunePool(&http.Transport{
 		Proxy: proxyFunc,
-	}
+	})
 
 	return &http.Client{
 		Transport: transport,
@@ -242,7 +258,7 @@ func (p *Provider) buildSOCKS5Client() *http.Client {
 		return &http.Client{Timeout: 30 * time.Second}
 	}
 
-	transport := &http.Transport{
+	transport := tunePool(&http.Transport{
 		DialContext: func(_ context.Context, network, address string) (net.Conn, error) {
 			host, _, _ := net.SplitHostPort(address)
 			if host == "" {
@@ -254,7 +270,7 @@ func (p *Provider) buildSOCKS5Client() *http.Client {
 			}
 			return dialer.Dial(network, address)
 		},
-	}
+	})
 
 	return &http.Client{
 		Transport: transport,

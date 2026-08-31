@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +12,8 @@ import (
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
-	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 	"github.com/ZioSHik/kinopub-gui/internal/services/kinopubapi"
+	"github.com/ZioSHik/kinopub-gui/internal/services/statestore"
 )
 
 const stateFileName = ".kinopub-state.json"
@@ -28,6 +29,10 @@ type LibraryEpisode struct {
 	Bytes       int64     `json:"bytes"`
 	Resolution  string    `json:"resolution,omitempty"`
 	CompletedAt time.Time `json:"completedAt"`
+	// Audio is the voiceover this episode was downloaded with, and AudioFallback
+	// marks it as a substitute taken because the requested one was not offered.
+	Audio         []string `json:"audio,omitempty"`
+	AudioFallback bool     `json:"audioFallback,omitempty"`
 }
 
 // LibrarySeries aggregates one series' completed downloads.
@@ -40,7 +45,7 @@ type LibrarySeries struct {
 	Description   string           `json:"description,omitempty"`
 	PosterURL     string           `json:"posterUrl,omitempty"`
 	InputURL      string           `json:"inputUrl,omitempty"`
-	Type          string           `json:"type,omitempty"`   // kino.pub item type (movie, serial, …)
+	Type          string           `json:"type,omitempty"`   // kino.watch item type (movie, serial, …)
 	IsMovie       bool             `json:"isMovie"`          // movie vs series, for the library split
 	Genres        []string         `json:"genres,omitempty"` // genre titles, for filtering
 	Count         int              `json:"count"`
@@ -55,7 +60,7 @@ type LibraryResponse struct {
 	Dirs   []string        `json:"dirs"`
 }
 
-// DownloadedEpisode is one already-downloaded episode of a kino.pub item, used
+// DownloadedEpisode is one already-downloaded episode of a kino.watch item, used
 // to mark which episodes the title card already has on disk.
 type DownloadedEpisode struct {
 	Key        string `json:"key"`
@@ -63,9 +68,13 @@ type DownloadedEpisode struct {
 	Episode    int    `json:"episode"`
 	Resolution string `json:"resolution,omitempty"`
 	Exists     bool   `json:"exists"`
+	// What the episode actually came out in, so the card can show the voiceover
+	// on disk rather than the last one the user happened to pick elsewhere.
+	Audio         []string `json:"audio,omitempty"`
+	AudioFallback bool     `json:"audioFallback,omitempty"`
 }
 
-// DownloadedResponse lists the episodes of a kino.pub item already downloaded.
+// DownloadedResponse lists the episodes of a kino.watch item already downloaded.
 type DownloadedResponse struct {
 	ID       string              `json:"id"`
 	Dir      string              `json:"dir,omitempty"`
@@ -73,7 +82,7 @@ type DownloadedResponse struct {
 }
 
 // downloadedForItem scans the library roots for downloads belonging to the given
-// kino.pub item id — matched on the recorded series id or, failing that, the id
+// kino.watch item id — matched on the recorded series id or, failing that, the id
 // embedded in the saved InputURL — and returns the episodes already on disk.
 func downloadedForItem(dirs []string, itemID string) DownloadedResponse {
 	resp := DownloadedResponse{ID: itemID, Episodes: []DownloadedEpisode{}}
@@ -94,13 +103,16 @@ func downloadedForItem(dirs []string, itemID string) DownloadedResponse {
 				Episode:    ep.Episode,
 				Resolution: ep.Resolution,
 				Exists:     ep.Exists,
+
+				Audio:         ep.Audio,
+				AudioFallback: ep.AudioFallback,
 			})
 		}
 	}
 	return resp
 }
 
-// seriesMatchesItem reports whether a scanned series belongs to the kino.pub
+// seriesMatchesItem reports whether a scanned series belongs to the kino.watch
 // item id.
 func seriesMatchesItem(s LibrarySeries, itemID string) bool {
 	if s.SeriesID == itemID {
@@ -153,6 +165,112 @@ func scanLibrary(dirs []string) LibraryResponse {
 		return resp.Series[a].UpdatedAt.After(resp.Series[b].UpdatedAt)
 	})
 	return resp
+}
+
+// maxMetadataBackfills bounds how many API lookups one library scan may spend
+// enriching old entries, so a large library of pre-metadata downloads can't turn
+// a rescan into a long stall.
+const maxMetadataBackfills = 12
+
+// backfillLibraryMetadata fills in descriptive fields that were not recorded
+// when an entry was downloaded. Genres and the item type only started being
+// written to state files in later versions, so anything downloaded before that
+// carries neither and its library card has nothing to show. Missing fields are
+// fetched from the API and written back into the state file, so the lookup cost
+// is paid once rather than on every scan.
+//
+// It takes copies of the entries rather than the live scan result: this runs off
+// the request goroutine, and mutating what the handler is already marshalling
+// would be a data race. The enrichment lands in the state files, so the next scan
+// serves it from disk.
+//
+// This is best-effort: a failed lookup or an unwritable state file leaves the
+// entry exactly as it was, and the scan the user already got still stands.
+func backfillLibraryMetadata(ctx context.Context, entries []LibrarySeries, client *kinopubapi.Client) {
+	spent := 0
+	for _, s := range entries {
+		if spent >= maxMetadataBackfills {
+			return
+		}
+		if len(s.Genres) > 0 && s.Type != "" {
+			continue
+		}
+		id := libraryItemID(s)
+		if id == "" {
+			continue
+		}
+		spent++
+		item, err := client.Item(ctx, id)
+		if err != nil {
+			// Give up on the first failure. These calls share one API client
+			// whose mutex serializes every other request behind them, so when
+			// kino.watch is unreachable — the normal case without a VPN —
+			// grinding through the rest would hold the whole app hostage for
+			// one timeout after another.
+			return
+		}
+		genres := s.Genres
+		typ := s.Type
+		if len(genres) == 0 {
+			genres = titleNames(item.Genres)
+		}
+		if typ == "" {
+			typ = item.Type
+		}
+		if len(genres) == 0 && typ == "" {
+			continue // the API had nothing to add either
+		}
+		_ = persistLibraryMetadata(s.StateFile, genres, typ)
+	}
+}
+
+// needsMetadataBackfill returns copies of the entries missing genres or type.
+// Copies, not pointers: see backfillLibraryMetadata.
+func needsMetadataBackfill(series []LibrarySeries) []LibrarySeries {
+	var out []LibrarySeries
+	for _, s := range series {
+		if len(s.Genres) == 0 || s.Type == "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// libraryItemID resolves the kino.watch item id for a scanned entry, preferring
+// the recorded input URL over the series id.
+func libraryItemID(s LibrarySeries) string {
+	if s.InputURL != "" {
+		if id := kinopubapi.ItemIDFromURL(s.InputURL); id != "" {
+			return id
+		}
+	}
+	return s.SeriesID
+}
+
+// persistLibraryMetadata writes recovered genres and type back into a state
+// file, leaving every other field — including UpdatedAt, which orders the
+// library — untouched.
+//
+// It goes through statestore.LockedUpdate: this runs on the background backfill
+// goroutine while an active download for the same series may be recording
+// completions through JSONStore.MarkCompleted, and an unlocked read-modify-write
+// here could land last with a stale Completed map, erasing an episode the
+// engine just finished.
+func persistLibraryMetadata(stateFile string, genres []string, typ string) error {
+	return statestore.LockedUpdate(stateFile, func(state *domain.DownloadState) (bool, error) {
+		if state.Metadata == nil {
+			// Nothing to attach to: such an entry has no recorded title or poster
+			// either, and inventing a metadata block here would be guesswork.
+			return false, nil
+		}
+		if len(state.Metadata.Genres) == 0 {
+			state.Metadata.Genres = genres
+		}
+		if state.Metadata.Type == "" {
+			state.Metadata.Type = typ
+		}
+		return true, nil
+	})
 }
 
 // resolveLibraryDir validates that dir is a real kinopub download folder safe to
@@ -208,52 +326,54 @@ func deleteLibraryEpisode(dir, key string, roots []string) error {
 		return err
 	}
 	stateFile := filepath.Join(abs, stateFileName)
-	data, err := os.ReadFile(stateFile)
+	// The whole read-check-delete-write runs under the statestore path lock, so
+	// a download recording a completion into the same file at the same moment
+	// can neither be lost nor resurrect the record being deleted here.
+	lastOneGone := false
+	err = statestore.LockedUpdate(stateFile, func(state *domain.DownloadState) (bool, error) {
+		rec, ok := state.Completed[key]
+		if !ok {
+			return false, fmt.Errorf("episode %q not found in this download", key)
+		}
+
+		// Resolve the media file relative to the series folder and confine the
+		// deletion to it, so a tampered state file can't point us at an arbitrary
+		// path. A file that's already gone is fine — the goal is that it's absent.
+		fullPath := rec.Path
+		if fullPath != "" && !filepath.IsAbs(fullPath) {
+			fullPath = filepath.Join(abs, fullPath)
+		}
+		if fullPath != "" {
+			clean := filepath.Clean(fullPath)
+			rel, rerr := filepath.Rel(abs, clean)
+			if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return false, fmt.Errorf("episode file is outside its series folder")
+			}
+			if err := os.Remove(clean); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return false, fmt.Errorf("remove episode file: %w", err)
+			}
+		}
+
+		delete(state.Completed, key)
+
+		// Last episode gone → the whole folder goes below, no point writing the
+		// state file it is about to take with it.
+		if len(state.Completed) == 0 {
+			lastOneGone = true
+			return false, nil
+		}
+		return true, nil
+	})
 	if err != nil {
-		return fmt.Errorf("read state: %w", err)
+		return err
 	}
-	var state domain.DownloadState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("parse state: %w", err)
-	}
-	rec, ok := state.Completed[key]
-	if !ok {
-		return fmt.Errorf("episode %q not found in this download", key)
-	}
-
-	// Resolve the media file relative to the series folder and confine the
-	// deletion to it, so a tampered state file can't point us at an arbitrary
-	// path. A file that's already gone is fine — the goal is that it's absent.
-	fullPath := rec.Path
-	if fullPath != "" && !filepath.IsAbs(fullPath) {
-		fullPath = filepath.Join(abs, fullPath)
-	}
-	if fullPath != "" {
-		clean := filepath.Clean(fullPath)
-		rel, rerr := filepath.Rel(abs, clean)
-		if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("episode file is outside its series folder")
-		}
-		if err := os.Remove(clean); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove episode file: %w", err)
-		}
-	}
-
-	delete(state.Completed, key)
-
-	// Last episode gone → remove the whole (now-empty) series folder.
-	if len(state.Completed) == 0 {
+	if lastOneGone {
 		return os.RemoveAll(abs)
 	}
-
-	out, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal state: %w", err)
-	}
-	return fsutil.AtomicWrite(stateFile, out, 0644)
+	return nil
 }
 
-// isSerialType reports whether a kino.pub item type denotes a series (serial,
+// isSerialType reports whether a kino.watch item type denotes a series (serial,
 // docuserial, tvshow) rather than a movie.
 func isSerialType(t string) bool {
 	t = strings.ToLower(t)
@@ -261,7 +381,7 @@ func isSerialType(t string) bool {
 }
 
 // isMovieDownload classifies a scanned download as a movie or a series. New
-// downloads carry the kino.pub item type; for older ones (recorded before the
+// downloads carry the kino.watch item type; for older ones (recorded before the
 // type was persisted) it falls back to a structural heuristic — a single part
 // in a single season looks like a movie.
 func isMovieDownload(s LibrarySeries) bool {
@@ -282,6 +402,17 @@ func readLibraryState(stateFile string) (LibrarySeries, bool) {
 	}
 	var state domain.DownloadState
 	if err := json.Unmarshal(data, &state); err != nil {
+		return LibrarySeries{}, false
+	}
+	// A state file with no completed episode records nothing the user has: a run
+	// that resolved and then downloaded nothing (failed, canceled, stopped before
+	// the first episode) used to leave a metadata-only file behind. The library
+	// scans for state files, so such a file became a phantom card for a title that
+	// was never downloaded — and, having zero episodes, the fallback in
+	// isMovieDownload filed it under "movies". Newer runs no longer write metadata
+	// before the first completion, but old folders (and hand-emptied ones) still
+	// carry these files, so the scan skips them here too.
+	if len(state.Completed) == 0 {
 		return LibrarySeries{}, false
 	}
 	dir := filepath.Dir(stateFile)
@@ -325,8 +456,16 @@ func readLibraryState(stateFile string) (LibrarySeries, bool) {
 			Bytes:       rec.Bytes,
 			Resolution:  rec.Resolution,
 			CompletedAt: rec.CompletedAt,
+
+			Audio:         rec.Audio,
+			AudioFallback: rec.AudioFallback,
 		})
-		item.TotalBytes += rec.Bytes
+		// Only count what is actually on disk. The state file keeps a record for
+		// an episode whose file was deleted by hand, and counting its bytes made
+		// the card claim space the entry no longer occupies.
+		if exists {
+			item.TotalBytes += rec.Bytes
+		}
 		if rec.CompletedAt.After(item.UpdatedAt) {
 			item.UpdatedAt = rec.CompletedAt
 		}

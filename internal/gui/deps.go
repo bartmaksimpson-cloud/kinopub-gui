@@ -1,7 +1,7 @@
 // Package gui implements a self-contained web interface for the kinopub
 // downloader. It drives the same Go engine the CLI used (internal/app/kinopub)
 // through its programmatic entry point, so the GUI gets real structured progress
-// events. Downloads resolve exclusively through the official kino.pub JSON API.
+// events. Downloads resolve exclusively through the official kino.watch JSON API.
 package gui
 
 import (
@@ -28,7 +28,7 @@ import (
 )
 
 // buildEngineDeps constructs the engine dependencies for one run. The source is
-// always the official kino.pub JSON API: an API-backed PageScraper resolves the
+// always the official kino.watch JSON API: an API-backed PageScraper resolves the
 // item, and the HLS downloader streams it. Cookie/RSS sources were removed.
 func buildEngineDeps(
 	cfg domain.RunConfig,
@@ -42,6 +42,7 @@ func buildEngineDeps(
 	retry <-chan domain.EpisodeKey,
 	cancel <-chan domain.EpisodeKey,
 	paused func() bool,
+	limiter *hlsdownloader.Limiter,
 ) (kinopub.Dependencies, error) {
 	proxyProv, err := proxyprovider.New(cfg.ProxyURL)
 	if err != nil {
@@ -52,7 +53,7 @@ func buildEngineDeps(
 	// no cookie is needed for the stream itself.
 	auth := domain.RequestAuth{
 		UserAgent: cfg.UserAgent,
-		Headers:   map[string]string{"Referer": "https://kino.pub/"},
+		Headers:   map[string]string{"Referer": "https://kino.watch/"},
 	}
 	httpClient := httpx.WithAuth(proxyProv.HTTPClient(), auth)
 
@@ -97,12 +98,15 @@ func buildEngineDeps(
 		StateStore:       stateStr,
 		OutputLayout:     layout,
 		PageScraper:      kinopubapi.NewScraper(apiClient, logger),
-		// Segment concurrency is kept at the downloader's modest default (a few
-		// segments per episode); cfg.MaxConcurrency now governs how many
-		// episodes download in parallel (see engine.runHLS), so the two budgets
-		// don't multiply into a CDN flood.
+		// Segment concurrency starts at the downloader's modest default and is
+		// then tuned at runtime from measured throughput by a controller SHARED
+		// across every episode of this job (see hlsdownloader.adaptiveLimiter).
+		// cfg.MaxConcurrency governs how many episodes download in parallel (see
+		// engine.runHLS); because the segment budget is shared rather than
+		// per-episode, the two don't multiply into a CDN flood.
 		HLSDownloader: hlsdownloader.New(httpClient, auth, logger,
-			hlsdownloader.WithProxy(proxyProv.ProxyURL())),
+			hlsdownloader.WithProxy(proxyProv.ProxyURL()),
+			hlsdownloader.WithLimiter(limiter)),
 	}
 
 	if chooser != nil {

@@ -214,7 +214,7 @@ func TestSetMetadataPersistsAndPreservesCompleted(t *testing.T) {
 	meta := domain.SeriesMetadata{
 		Title:       "Метаданные",
 		Description: "desc",
-		InputURL:    "https://kino.pub/item/1",
+		InputURL:    "https://kino.watch/item/1",
 		Type:        "serial",
 		Genres:      []string{"drama", "комедия"},
 		UpdatedAt:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
@@ -320,7 +320,7 @@ func TestMarkCompletedAllFieldsRoundTrip(t *testing.T) {
 		Quality:    "2160p",
 		Resolution: "3840x2160",
 		BitRate:    15000,
-		PageLink:   "https://kino.pub/v/abc",
+		PageLink:   "https://kino.watch/v/abc",
 		MediaURL:   "https://cdn/x.m3u8",
 	}
 	if err := store.MarkCompleted(context.Background(), info); err != nil {

@@ -109,7 +109,7 @@ func newRetryTestEngine(hls domain.HLSDownloader, scraper domain.PageScraper) (*
 // retryTestConfig builds a RunConfig with selection defaults applied so all
 // episodes are considered.
 func retryTestConfig() domain.RunConfig {
-	cfg := domain.RunConfig{InputURL: "https://kino.pub/item/view/42", Quality: "720p"}
+	cfg := domain.RunConfig{InputURL: "https://kino.watch/item/view/42", Quality: "720p"}
 	ApplyDefaults(&cfg)
 	return cfg
 }

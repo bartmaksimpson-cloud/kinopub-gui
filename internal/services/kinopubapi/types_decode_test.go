@@ -193,8 +193,8 @@ func TestRequestDeviceCode(t *testing.T) {
 	if dc.Code != "DEV123" || dc.UserCode != "AB-CD" || dc.ExpiresIn != 600 || dc.Interval != 7 {
 		t.Errorf("device code = %+v", dc)
 	}
-	// verification_uri omitted → default kino.pub/device.
-	if dc.VerificationURI != "https://kino.pub/device" {
+	// verification_uri omitted → default kino.watch/device.
+	if dc.VerificationURI != "https://kino.watch/device" {
 		t.Errorf("verification uri = %q", dc.VerificationURI)
 	}
 }

@@ -27,7 +27,7 @@ const QUALITIES = [
   { v: "360p", label: "360p" },
 ];
 
-export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; onSignIn: () => void }) {
+export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
   const { settings, settingsLoaded, ffmpeg, kpauth, toast } = useApp();
   const { t } = useI18n();
 
@@ -36,16 +36,12 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
     outputPath: settings.outputPath,
     quality: settings.quality,
     container: settings.container,
-    concurrency: settings.concurrency,
-    retries: settings.retries,
-    minIntervalMs: settings.minIntervalMs,
     proxy: settings.proxy,
     seasons: "",
     episodes: "",
     audio: "",
     audioMenu: true,
     force: false,
-    noChunked: settings.noChunked,
     dryRun: false,
     ffmpegArgs: "",
     ffmpegPath: "",
@@ -76,11 +72,7 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
       outputPath: f.outputPath || settings.outputPath,
       quality: settings.quality,
       container: settings.container,
-      concurrency: settings.concurrency,
-      retries: settings.retries,
-      minIntervalMs: settings.minIntervalMs,
       proxy: settings.proxy,
-      noChunked: settings.noChunked,
       verbosity: settings.verbosity,
     }));
   }, [settingsLoaded, settings]);
@@ -109,15 +101,18 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
 
   const errorToast = (msg: string, fallback: string) => {
     if (looksLikeTimeout(msg)) {
-      toast(t("Request timed out — kino.pub may be unreachable without a VPN. Enable a VPN or set a proxy, then retry."), "error");
+      toast(t("Request timed out — kino.watch may be unreachable without a VPN. Enable a VPN or set a proxy, then retry."), "error");
     } else {
-      toast(msg || fallback, "error");
+      // t() passes an unknown string straight through, so a server message that
+      // happens to have a translation (the duplicate guard's "already in the
+      // queue") gets one, and everything else reads as the server wrote it.
+      toast(t(msg) || fallback, "error");
     }
   };
 
   const doPreview = async () => {
     if (!form.url.trim()) {
-      toast(t("Enter a kino.pub URL first"), "error");
+      toast(t("Enter a kino.watch URL first"), "error");
       return;
     }
     setPreviewing(true);
@@ -136,7 +131,7 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
 
   const start = async () => {
     if (!form.url.trim()) {
-      toast(t("Enter a kino.pub URL first"), "error");
+      toast(t("Enter a kino.watch URL first"), "error");
       return;
     }
     if (!ffmpeg.ffmpegFound) {
@@ -160,8 +155,7 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
         seedPoster: preview?.posterUrl || "",
         seedTitles,
       });
-      toast(t("Download started"), "success");
-      onStarted();
+      toast(t("Added to the queue"), "success");
     } catch (e: any) {
       errorToast(e.message, t("Failed to start"));
     } finally {
@@ -174,14 +168,14 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
       <header>
         <h1 className="text-2xl font-bold text-slate-100">{t("Advanced download")}</h1>
         <p className="mt-1 text-sm text-slate-400">
-          {t("Paste a kino.pub link to download it directly. The Catalog is the main way to find titles.")}
+          {t("Paste a kino.watch link to download it directly. The Catalog is the main way to find titles.")}
         </p>
       </header>
 
       <div className="card flex items-start gap-3 border-gold-500/20 bg-gold-500/[0.06] p-4 text-sm text-gold-200">
         <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
-          {t("kino.pub is often unavailable without a VPN. If requests hang or time out, enable a VPN or set a proxy below.")}
+          {t("kino.watch is often unavailable without a VPN. If requests hang or time out, enable a VPN or set a proxy below.")}
         </span>
       </div>
 
@@ -189,7 +183,7 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
         <div className="card flex flex-wrap items-center gap-3 border-white/[0.08] p-4 text-sm text-slate-300">
           <KeyRound className="h-4 w-4 shrink-0 text-gold-400" />
           <span className="min-w-0 flex-1">
-            {t("Sign in to kino.pub (Settings) to resolve and download titles.")}
+            {t("Sign in to kino.watch (Profile) to resolve and download titles.")}
           </span>
           <button className="btn-primary px-3 py-2" onClick={onSignIn}>
             {t("Sign in")}
@@ -198,13 +192,13 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
       )}
 
       <div className="card space-y-4 p-5">
-        <Field label={t("kino.pub link")}>
+        <Field label={t("kino.watch link")}>
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
               <input
                 className="input pl-9"
-                placeholder="https://kino.pub/item/view/38290"
+                placeholder="https://kino.watch/item/view/38290"
                 value={form.url}
                 onChange={(e) => set("url", e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && doPreview()}
@@ -257,35 +251,6 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
                   <option value="mp4">MP4</option>
                 </select>
               </Field>
-              <Field label={t("Concurrency")} hint={t("parallel downloads (1–16)")}>
-                <input
-                  type="number"
-                  min={1}
-                  max={16}
-                  className="input"
-                  value={form.concurrency}
-                  onChange={(e) => set("concurrency", e.target.value === "" ? 1 : Math.max(1, Number(e.target.value)))}
-                />
-              </Field>
-              <Field label={t("Retries")} hint={t("re-attempts per episode after a network error (timeout, reset, 5xx)")}>
-                <input
-                  type="number"
-                  min={0}
-                  className="input"
-                  value={form.retries}
-                  onChange={(e) => set("retries", e.target.value === "" ? 5 : Math.max(0, Number(e.target.value)))}
-                />
-              </Field>
-              <Field label={t("Min interval (ms)")} hint={t("throttle requests (0–60000)")}>
-                <input
-                  type="number"
-                  min={0}
-                  max={60000}
-                  className="input"
-                  value={form.minIntervalMs}
-                  onChange={(e) => set("minIntervalMs", e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)))}
-                />
-              </Field>
               <Field label={t("Proxy")} hint={t("http / https / socks5")}>
                 <input className="input" placeholder="socks5://127.0.0.1:1080" value={form.proxy} onChange={(e) => set("proxy", e.target.value)} />
               </Field>
@@ -293,8 +258,6 @@ export function DownloadPage({ onStarted, onSignIn }: { onStarted: () => void; o
 
             <div className="grid gap-2 sm:grid-cols-2">
               <Toggle label={t("Force re-download")} hint={t("Ignore completed state")} checked={form.force} onChange={(v) => set("force", v)} />
-              <Toggle label={t("No chunked download")} hint={t("Stream everything via ffmpeg")} checked={form.noChunked} onChange={(v) => set("noChunked", v)} />
-              <Toggle label={t("Verbose logs")} hint={t("Show debug-level log lines")} checked={form.verbosity === "verbose"} onChange={(v) => set("verbosity", v ? "verbose" : "normal")} />
             </div>
 
             <Field label={t("Extra ffmpeg args")} hint={t('advanced — e.g. "-c:v libx265 -crf 28"')}>

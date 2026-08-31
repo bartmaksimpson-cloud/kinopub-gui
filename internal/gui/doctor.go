@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -40,11 +41,19 @@ type DoctorReportView struct {
 	Healthy      int               `json:"healthy"`
 	Fixed        bool              `json:"fixed"`
 	HasIssues    bool              `json:"hasIssues"`
-	Issues       []DoctorIssueView `json:"issues"`
-	Logs         []LogEntry        `json:"logs,omitempty"`
+	// RepairBlocked reports that repair/cleanup was requested but refused because
+	// unfinished downloads are writing into the same folder. The check itself
+	// still ran, so the user sees what's wrong — just nothing was deleted.
+	RepairBlocked bool              `json:"repairBlocked,omitempty"`
+	Issues        []DoctorIssueView `json:"issues"`
+	Logs          []LogEntry        `json:"logs,omitempty"`
 }
 
-func runDoctor(ctx context.Context, req DoctorRequest) (*DoctorReportView, error) {
+// runDoctor checks the downloads under req.OutputDir. liveRoots are the output
+// folders of downloads that are not finished (see JobManager.liveOutputPaths);
+// when the checked folder overlaps one of them, the destructive half of the
+// doctor is disabled — see the guard below.
+func runDoctor(ctx context.Context, req DoctorRequest, liveRoots []string) (*DoctorReportView, error) {
 	logger, capture := newCaptureLogger(domain.VerbosityNormal)
 
 	// API-only build: the doctor verifies files against the state file
@@ -53,6 +62,33 @@ func runDoctor(ctx context.Context, req DoctorRequest) (*DoctorReportView, error
 	deps := doctor.Deps{Logger: logger}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
+	// A download that hasn't finished lives in exactly the files the doctor would
+	// delete: the engine writes each episode to "<episode>.tmp" (progressive) or
+	// collects segments in "<episode>.ts.hls-tmp" (HLS), and a paused or failed
+	// job resumes from them. Neither has a finished media file next to it yet,
+	// which is precisely how findOrphanTmps recognizes an orphan — so cleaning
+	// "leftovers" mid-queue would wipe out every megabyte already fetched.
+	// Repair has the same problem from the other side: it rewrites the state file
+	// that the running engine is updating as episodes complete.
+	// So when the folder under the microscope overlaps a live download's output
+	// folder, we still report, but we don't touch anything.
+	blocked := false
+	for _, root := range liveRoots {
+		if pathsOverlap(req.OutputDir, root) {
+			blocked = true
+			break
+		}
+	}
+	if blocked && (req.Fix || req.CleanTmp) {
+		req.Fix = false
+		req.CleanTmp = false
+		logger.Component("doctor").Warn("repair skipped: downloads in progress are using this folder",
+			domain.F("dir", req.OutputDir),
+		)
+	} else {
+		blocked = false // nothing destructive was asked for; don't cry wolf
+	}
 
 	// The state file lives inside each series' own directory, not at the output
 	// root. Discover every series directory under OutputDir and check each, so
@@ -64,7 +100,7 @@ func runDoctor(ctx context.Context, req DoctorRequest) (*DoctorReportView, error
 		dirs = []string{req.OutputDir}
 	}
 
-	view := &DoctorReportView{Fixed: req.Fix}
+	view := &DoctorReportView{Fixed: req.Fix, RepairBlocked: blocked}
 	var firstErr error
 	for _, dir := range dirs {
 		report, err := doctor.Run(ctx, deps, doctor.Options{
@@ -109,6 +145,35 @@ func runDoctor(ctx context.Context, req DoctorRequest) (*DoctorReportView, error
 	}
 	view.Logs = capture.entries
 	return view, nil
+}
+
+// pathsOverlap reports whether two directories are the same or one contains the
+// other. Both are resolved to absolute, cleaned paths first; on case-insensitive
+// filesystems (macOS, Windows) the comparison ignores case, so a differently
+// typed path can't slip past a guard that relies on this.
+func pathsOverlap(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aa, err1 := filepath.Abs(a)
+	bb, err2 := filepath.Abs(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	aa, bb = filepath.Clean(aa), filepath.Clean(bb)
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		aa, bb = strings.ToLower(aa), strings.ToLower(bb)
+	}
+	return aa == bb || isUnder(aa, bb) || isUnder(bb, aa)
+}
+
+// isUnder reports whether child sits inside parent (both cleaned absolute paths).
+func isUnder(child, parent string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // findStateDirs returns the directories under root that contain a kinopub state

@@ -19,7 +19,7 @@ import (
 
 const stateFileName = ".kinopub-state.json"
 
-// pathMutexes serializes read-modify-write updates to each state file across
+// pathLocks serializes read-modify-write updates to each state file across
 // JSONStore instances. Concurrent jobs for the same series — e.g. a per-episode
 // retry running alongside its still-active parent job — each build their own
 // JSONStore over the same file; with only the per-instance mutex their
@@ -27,11 +27,44 @@ const stateFileName = ".kinopub-state.json"
 // lock keyed by the absolute state-file path makes those cycles mutually
 // exclusive. Reads (Load) need no lock: writes land atomically via rename, so a
 // reader always sees a complete old-or-new file.
-var pathMutexes sync.Map // map[string]*sync.Mutex
+//
+// Entries are reference-counted and dropped once the last holder unlocks, so the
+// table stays the size of what is actually being written rather than growing a
+// permanent entry for every series ever downloaded in this process.
+var pathLocks = struct {
+	mu sync.Mutex
+	m  map[string]*pathLock
+}{m: make(map[string]*pathLock)}
 
-func pathMutex(p string) *sync.Mutex {
-	m, _ := pathMutexes.LoadOrStore(p, &sync.Mutex{})
-	return m.(*sync.Mutex)
+type pathLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockPath takes the shared lock for state-file path p and returns the function
+// that releases it. The returned function must be called exactly once.
+func lockPath(p string) func() {
+	pathLocks.mu.Lock()
+	l := pathLocks.m[p]
+	if l == nil {
+		l = &pathLock{}
+		pathLocks.m[p] = l
+	}
+	l.refs++
+	pathLocks.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		pathLocks.mu.Lock()
+		// The entry is only removed by the last holder, and a waiter has already
+		// incremented refs before blocking on l.mu — so an entry can never be
+		// dropped while another goroutine still holds a pointer to it.
+		if l.refs--; l.refs == 0 {
+			delete(pathLocks.m, p)
+		}
+		pathLocks.mu.Unlock()
+	}
 }
 
 // JSONStore persists download state as a JSON file in the series download
@@ -195,10 +228,9 @@ func (s *JSONStore) MarkCompleted(_ context.Context, info domain.CompletedInfo) 
 
 	// Serialize the load→modify→write across any other JSONStore writing the same
 	// file, then load the freshest state under that lock so a sibling job's
-	// completions are preserved (see pathMutexes).
-	pl := pathMutex(s.statePath())
-	pl.Lock()
-	defer pl.Unlock()
+	// completions are preserved (see pathLocks).
+	unlock := lockPath(s.statePath())
+	defer unlock()
 
 	// Load current state (or start fresh).
 	state, _ := s.loadLocked(info.Key.Series)
@@ -215,6 +247,9 @@ func (s *JSONStore) MarkCompleted(_ context.Context, info domain.CompletedInfo) 
 		BitRate:     info.BitRate,
 		PageLink:    info.PageLink,
 		MediaURL:    info.MediaURL,
+
+		Audio:         info.Audio,
+		AudioFallback: info.AudioFallback,
 	}
 
 	state.Completed[episodeKeyString(info.Key)] = rec
@@ -244,9 +279,8 @@ func (s *JSONStore) SetMetadata(_ context.Context, series domain.SeriesID, meta 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	pl := pathMutex(s.statePath())
-	pl.Lock()
-	defer pl.Unlock()
+	unlock := lockPath(s.statePath())
+	defer unlock()
 
 	state, _ := s.loadLocked(series)
 	state.Metadata = &meta
@@ -267,6 +301,43 @@ func (s *JSONStore) SetMetadata(_ context.Context, series domain.SeriesID, meta 
 	}
 
 	return nil
+}
+
+// LockedUpdate runs a read-modify-write of the state file at path under the
+// same shared path lock every JSONStore write takes. Out-of-band writers — the
+// GUI's metadata backfill, per-episode deletion from the library — must go
+// through it: an unlocked load→modify→write racing a concurrent MarkCompleted
+// would land last with a stale Completed map and silently erase a record the
+// engine just wrote.
+//
+// mutate returns whether the (possibly modified) state should be written back;
+// returning false leaves the file untouched. Read or parse failures are
+// returned as-is without calling mutate.
+func LockedUpdate(path string, mutate func(state *domain.DownloadState) (write bool, err error)) error {
+	path = filepath.Clean(path)
+	unlock := lockPath(path)
+	defer unlock()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var state domain.DownloadState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return err
+	}
+	if state.Completed == nil {
+		state.Completed = make(map[string]domain.CompletedRec)
+	}
+	write, err := mutate(&state)
+	if err != nil || !write {
+		return err
+	}
+	out, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("statestore: marshal state: %w", err)
+	}
+	return fsutil.AtomicWrite(path, out, 0644)
 }
 
 // IsCompleted checks whether the given episode is marked as completed in the

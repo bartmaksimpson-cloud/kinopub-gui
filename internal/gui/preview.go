@@ -46,14 +46,14 @@ type PreviewResponse struct {
 }
 
 // preview resolves the series catalog for the browser/dry-run view via the
-// official kino.pub API (an item URL → hls4 playlist).
+// official kino.watch API (an item URL → hls4 playlist).
 func (s *Server) preview(ctx context.Context, req RunRequest) (*PreviewResponse, error) {
 	cfg, err := buildRunConfig(req)
 	if err != nil {
 		return nil, err
 	}
 	if cfg.InputURL == "" {
-		return nil, fmt.Errorf("a kino.pub URL is required")
+		return nil, fmt.Errorf("a kino.watch URL is required")
 	}
 
 	logger, capture := newCaptureLogger(cfg.Verbosity)

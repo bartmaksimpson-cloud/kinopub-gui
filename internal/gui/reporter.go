@@ -1,10 +1,28 @@
 package gui
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 )
+
+// errText renders an engine error for the UI. A download stopped by the user
+// (job or episode cancel, pause) surfaces as a wrapped context.Canceled —
+// "audio track 0: segment 10 failed: context canceled" — which reads like a
+// crash for something the user just asked for. Collapse the whole family to the
+// same plain "canceled" the cancel paths already write, so the card shows an
+// outcome instead of an internal error chain.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return errCanceled
+	}
+	return err.Error()
+}
 
 // eventReporter implements domain.ProgressReporter plus every optional progress
 // sink the engine probes for (ByteProgressSink, SegmentProgressSink,
@@ -31,6 +49,13 @@ func (r *eventReporter) Start(plan domain.SeriesPlan) {
 	r.job.mu.Lock()
 	if plan.Title != "" && r.job.title == "" {
 		r.job.title = plan.Title
+	}
+	// The folder the engine actually resolved. Recorded separately from the title
+	// because a card started from a search result keeps that view's short title
+	// while the folder is named after the full one — deriving the path from
+	// r.job.title would point at a directory that does not exist.
+	if plan.Dir != "" {
+		r.job.seriesDir = plan.Dir
 	}
 	// Surface the poster the engine scraped, so jobs started without a Preview
 	// (which would otherwise seed it) still show cover art.
@@ -62,6 +87,15 @@ func (r *eventReporter) Start(plan domain.SeriesPlan) {
 		if !ok {
 			ev = &EpisodeView{Key: key, Season: pe.Key.Season, Episode: pe.Key.Episode, Title: pe.Title}
 			r.job.episodes[key] = ev
+		}
+		// An episode the user is holding stays held. This run may have been
+		// started to release ONE episode of a paused job, re-pausing the rest —
+		// resetting them here would show them queued while the engine holds them,
+		// and lose the progress they are holding on to. A whole-job resume clears
+		// its paused rows before the run (resetEpisodesForRerunLocked), so only
+		// deliberate holds survive this.
+		if ok && ev.State == epPaused {
+			continue
 		}
 		ev.State = epPending
 		ev.Percent = 0
@@ -106,6 +140,19 @@ func (r *eventReporter) TrackProgress(key domain.EpisodeKey, track domain.TrackR
 
 func (r *eventReporter) EpisodeCompleted(key domain.EpisodeKey) {
 	r.job.mu.Lock()
+	// Success beat a simultaneous per-episode cancel: the file landed on disk,
+	// so the row cancelEpisode deleted comes back (via ensureEpisode below) —
+	// and the plan counts the cancel subtracted come back with it, keeping
+	// "N of M episodes" consistent with the rows on the card.
+	if r.job.canceledEps[epKey(key)] {
+		delete(r.job.canceledEps, epKey(key))
+		if r.job.plan != nil {
+			r.job.plan.Total++
+			if r.job.plan.Seasons != nil {
+				r.job.plan.Seasons[key.Season]++
+			}
+		}
+	}
 	ev := r.job.ensureEpisode(key)
 	ev.State = epCompleted
 	ev.Percent = 100
@@ -114,10 +161,27 @@ func (r *eventReporter) EpisodeCompleted(key domain.EpisodeKey) {
 	ev.Error = ""
 	r.job.mu.Unlock()
 	r.mgr.publishNow(r.job)
+	// This may have been the last episode the engine had to work on, with every
+	// other one held by a per-episode pause. The run would otherwise stay alive
+	// polling for work that only a user can release.
+	r.mgr.autoPauseIfAllHeld(r.job)
 }
 
 func (r *eventReporter) EpisodeFailed(key domain.EpisodeKey, err error) {
 	r.job.mu.Lock()
+	// The engine acknowledges a per-episode cancel through this generic hook.
+	// cancelEpisode already removed the row (and shrank the plan), so falling
+	// through to ensureEpisode would re-create it as a failed row with a Retry —
+	// the exact lingering card entry the cancel exists to remove.
+	if r.job.canceledEps[epKey(key)] {
+		delete(r.job.canceledEps, epKey(key))
+		r.job.mu.Unlock()
+		r.mgr.publishNow(r.job)
+		// The canceled episode may have been the engine's last runnable one, with
+		// every sibling held by a per-episode pause — same check as a failure.
+		r.mgr.autoPauseIfAllHeld(r.job)
+		return
+	}
 	ev := r.job.ensureEpisode(key)
 	// Don't clobber a deferred state with a generic failure; the deferred hook
 	// fires separately. Mark failed only if not already parked for retry.
@@ -127,10 +191,13 @@ func (r *eventReporter) EpisodeFailed(key domain.EpisodeKey, err error) {
 	ev.SpeedBps = 0
 	ev.ETASeconds = 0
 	if err != nil {
-		ev.Error = err.Error()
+		ev.Error = errText(err)
 	}
 	r.job.mu.Unlock()
 	r.mgr.publishNow(r.job)
+	// A failure ends this episode too: if only paused ones are left, the run has
+	// nothing to do and must not sit there holding a download slot.
+	r.mgr.autoPauseIfAllHeld(r.job)
 }
 
 // EpisodeDeferred is the optional hook the engine calls when an episode is
@@ -143,7 +210,7 @@ func (r *eventReporter) EpisodeDeferred(key domain.EpisodeKey, err error, attemp
 	ev.SpeedBps = 0
 	ev.ETASeconds = 0
 	if err != nil {
-		ev.Error = err.Error()
+		ev.Error = errText(err)
 	}
 	r.job.mu.Unlock()
 	r.mgr.publishNow(r.job)

@@ -57,8 +57,8 @@ func TestHandleState(t *testing.T) {
 func TestHandleGetPutSettings(t *testing.T) {
 	s := newTestServer(t)
 
-	// PUT with out-of-range values that should be clamped.
-	in := Settings{Concurrency: 99, Retries: -1, Container: "avi", MaxActiveJobs: 50}
+	// PUT with an unsupported container, which should be clamped to mkv.
+	in := Settings{Container: "avi", Quality: "720p"}
 	body, _ := json.Marshal(in)
 	req := httptest.NewRequest("PUT", "/api/settings", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -68,7 +68,7 @@ func TestHandleGetPutSettings(t *testing.T) {
 	}
 	var saved Settings
 	json.Unmarshal(w.Body.Bytes(), &saved)
-	if saved.Concurrency != 16 || saved.Retries != 0 || saved.Container != "mkv" || saved.MaxActiveJobs != 16 {
+	if saved.Container != "mkv" {
 		t.Errorf("settings not clamped: %+v", saved)
 	}
 
@@ -78,7 +78,7 @@ func TestHandleGetPutSettings(t *testing.T) {
 	s.handleGetSettings(w, req)
 	var got Settings
 	json.Unmarshal(w.Body.Bytes(), &got)
-	if got.Concurrency != 16 {
+	if got.Quality != "720p" || got.Container != "mkv" {
 		t.Errorf("GET settings = %+v", got)
 	}
 }
@@ -138,6 +138,51 @@ func TestHandleDeleteJob_NotFound(t *testing.T) {
 	s.handleDeleteJob(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+// The purge flag rides in the query string, so the wiring from URL to disk is
+// worth one end-to-end pass through the handler.
+func TestHandleDeleteJob_PurgeQueryDeletesPartials(t *testing.T) {
+	root := t.TempDir()
+	_, season := seedPartials(t, root)
+	hlsTmp := filepath.Join(season, "S01E01.mkv.ts.hls-tmp")
+
+	s := newTestServer(t)
+	s.mgr.add(pausedJob("p", root))
+
+	req := httptest.NewRequest("DELETE", "/api/jobs/p?purge=1", nil)
+	req.SetPathValue("id", "p")
+	w := httptest.NewRecorder()
+	s.handleDeleteJob(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if _, err := os.Stat(hlsTmp); !os.IsNotExist(err) {
+		t.Errorf("purge=1 left the segment dir behind: %v", err)
+	}
+}
+
+func TestHandleJobLeftovers(t *testing.T) {
+	root := t.TempDir()
+	seedPartials(t, root)
+
+	s := newTestServer(t)
+	s.mgr.add(pausedJob("p", root))
+
+	req := httptest.NewRequest("GET", "/api/jobs/p/leftovers", nil)
+	req.SetPathValue("id", "p")
+	w := httptest.NewRecorder()
+	s.handleJobLeftovers(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var got LeftoverView
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Bytes != 450 || got.Items != 2 {
+		t.Errorf("leftovers = %+v, want 450 bytes over 2 items", got)
 	}
 }
 
@@ -238,7 +283,7 @@ func TestHandleCreateJob_RequiresURL(t *testing.T) {
 func TestHandleLibrary(t *testing.T) {
 	s := newTestServer(t)
 	lib := t.TempDir()
-	s.settings.save(Settings{OutputPath: lib, Container: "mkv", Concurrency: 2})
+	s.settings.save(Settings{OutputPath: lib, Container: "mkv"})
 	writeStateFile(t, filepath.Join(lib, "Show"), domain.DownloadState{
 		Series:    "1",
 		Completed: map[string]domain.CompletedRec{"S1E1": {Season: 1, Episode: 1}},
@@ -334,7 +379,6 @@ func TestServerLibraryDirsDedup(t *testing.T) {
 		OutputPath:  "/out",
 		LibraryDirs: []string{"/out", "/extra", ""}, // "/out" dup, "" skipped
 		Container:   "mkv",
-		Concurrency: 2,
 	})
 	dirs := s.libraryDirs()
 	if len(dirs) != 2 {

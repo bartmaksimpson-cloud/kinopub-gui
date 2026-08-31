@@ -30,14 +30,14 @@ func TestKPStatus_PendingSession(t *testing.T) {
 	s := &Server{}
 	s.kpLogin = &kpLoginSession{
 		userCode:        "ABCD-1234",
-		verificationURI: "https://kino.pub/device",
+		verificationURI: "https://kino.watch/device",
 		expiresAt:       time.Now().Add(5 * time.Minute),
 	}
 	st := s.kpStatus()
 	if !st.Pending {
 		t.Fatal("expected Pending=true for a live session")
 	}
-	if st.UserCode != "ABCD-1234" || st.VerificationURI != "https://kino.pub/device" {
+	if st.UserCode != "ABCD-1234" || st.VerificationURI != "https://kino.watch/device" {
 		t.Errorf("session fields not surfaced: %+v", st)
 	}
 	if st.ExpiresAt == 0 {

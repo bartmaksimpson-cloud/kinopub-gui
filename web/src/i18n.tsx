@@ -10,17 +10,18 @@ const RU: Record<string, string> = {
   downloader: "загрузчик",
   Download: "Загрузка",
   Queue: "Очередь",
-  Library: "Библиотека",
+  "Offline library": "Офлайн библиотека",
   Doctor: "Доктор",
   Settings: "Настройки",
+  Profile: "Профиль",
   Live: "В сети",
   "Reconnecting…": "Переподключение…",
   "App connected": "Приложение подключено",
   "Reconnecting to app…": "Переподключение к приложению…",
   "Signed in": "Вы вошли",
   "Sign in": "Войти",
-  "in Settings": "в Настройках",
-  "Sign in in Settings": "Войти — в Настройках",
+  "in Profile": "в Профиль",
+  "Sign in in Profile": "Войти — в Профиль",
   "Install in Settings": "Установить в Настройках",
   "ffmpeg missing — install it in Settings": "ffmpeg не найден — установите в Настройках",
   "Expand sidebar": "Развернуть панель",
@@ -28,16 +29,16 @@ const RU: Record<string, string> = {
   "{n} days left": "осталось {n} дн.",
   "No subscription": "Нет подписки",
   "Checking subscription…": "Проверка подписки…",
-  "Can't reach kino.pub": "Нет связи с kino.pub",
+  "Can't reach kino.watch": "Нет связи с kino.watch",
   "ffmpeg ready": "ffmpeg готов",
   "ffmpeg missing": "ffmpeg не найден",
   connected: "подключено",
   reconnecting: "переподключение",
 
   // Auth gate / panel
-  "kino.pub downloader": "kino.pub загрузчик",
-  "Sign in to kino.pub to continue": "Войдите в kino.pub, чтобы продолжить",
-  "kino.pub authentication": "Авторизация kino.pub",
+  "kino.watch downloader": "kino.watch загрузчик",
+  "Sign in to kino.watch to continue": "Войдите в kino.watch, чтобы продолжить",
+  "kino.watch authentication": "Авторизация kino.watch",
   Logout: "Выйти",
   "Credentials saved": "Данные сохранены",
   "Login failed": "Не удалось войти",
@@ -46,10 +47,10 @@ const RU: Record<string, string> = {
 
   // Download page (advanced — reached from the Queue; Catalog is the main flow)
   "Advanced download": "Продвинутая загрузка",
-  "Download by a kino.pub link": "Загрузка по ссылке kino.pub",
-  "Paste a kino.pub link to download it directly. The Catalog is the main way to find titles.":
-    "Вставьте ссылку kino.pub, чтобы скачать напрямую. Основной способ искать тайтлы — Каталог.",
-  "kino.pub link": "Ссылка kino.pub",
+  "Download by a kino.watch link": "Загрузка по ссылке kino.watch",
+  "Paste a kino.watch link to download it directly. The Catalog is the main way to find titles.":
+    "Вставьте ссылку kino.watch, чтобы скачать напрямую. Основной способ искать тайтлы — Каталог.",
+  "kino.watch link": "Ссылка kino.watch",
   Preview: "Предпросмотр",
   Quality: "Качество",
   "Auto (highest)": "Авто (макс.)",
@@ -65,41 +66,38 @@ const RU: Record<string, string> = {
   "e.g. 1,3-5 — or use the browser below": "напр. 1,3-5 — или отметьте ниже",
   Episodes: "Эпизоды",
   "e.g. 1,3-5": "напр. 1,3-5",
-  Concurrency: "Параллельно",
-  "parallel downloads (1–16)": "параллельных загрузок (1–16)",
-  Retries: "Повторы",
-  "Min interval (ms)": "Мин. интервал (мс)",
-  "throttle requests (0–60000)": "ограничение запросов (0–60000)",
-  "Max simultaneous downloads": "Макс. одновременных загрузок",
-  "0 = no limit. When set, extra downloads wait in a queue you can reorder.":
-    "0 = без лимита. Если задать — лишние загрузки встают в очередь, которую можно менять местами.",
   Proxy: "Прокси",
   "http / https / socks5": "http / https / socks5",
   "Interactive audio menu": "Интерактивный выбор аудио",
   "Pick tracks before downloading": "Выбрать дорожки перед загрузкой",
   "Force re-download": "Перекачать заново",
   "Ignore completed state": "Игнорировать «уже скачано»",
-  "No chunked download": "Без chunked-загрузки",
-  "Stream everything via ffmpeg": "Всё через ffmpeg",
-  "Verbose logs": "Подробные логи",
-  "Show debug-level log lines": "Показывать debug-логи",
   "Extra ffmpeg args": "Доп. аргументы ffmpeg",
   'advanced — e.g. "-c:v libx265 -crf 28"': 'продвинутое — напр. "-c:v libx265 -crf 28"',
   "Leave empty to use saved credentials": "Пусто — использовать сохранённые данные",
   "Start download": "Начать загрузку",
   "ffmpeg not detected — required to download": "ffmpeg не найден — нужен для загрузки",
-  "Enter a kino.pub URL first": "Сначала введите ссылку kino.pub",
+  "Enter a kino.watch URL first": "Сначала введите ссылку kino.watch",
   "Preview failed": "Не удалось получить предпросмотр",
   'Resolved “{title}” · {n} episodes': "Найдено «{title}» · эпизодов: {n}",
-  "Download started": "Загрузка запущена",
+  "Added to the queue": "Добавлено в очередь",
+  "In the queue — open": "В очереди — открыть",
+  "Already downloaded — open": "Уже скачано — открыть",
+  "In the queue": "В очереди",
+  "Open the queue": "Открыть очередь",
+  "{n} already in the queue": "{n} уже в очереди",
+  // Verbatim from the server: the duplicate guard in handleCreateJob.
+  "already in the queue": "уже в очереди",
   "Failed to start": "Не удалось запустить",
   "ffmpeg not found — install it to download": "ffmpeg не найден — установите его для загрузки",
 
   // VPN / timeout reminder
-  "kino.pub is often unavailable without a VPN. If requests hang or time out, enable a VPN or set a proxy below.":
-    "kino.pub часто недоступен без VPN. Если запросы зависают или истекает таймаут — включите VPN или укажите прокси ниже.",
-  "Request timed out — kino.pub may be unreachable without a VPN. Enable a VPN or set a proxy, then retry.":
-    "Истёк таймаут — kino.pub может быть недоступен без VPN. Включите VPN или укажите прокси и повторите.",
+  "kino.watch is often unavailable without a VPN. If requests hang or time out, enable a VPN or set a proxy below.":
+    "kino.watch часто недоступен без VPN. Если запросы зависают или истекает таймаут — включите VPN или укажите прокси ниже.",
+  "Request timed out — kino.watch may be unreachable without a VPN. Enable a VPN or set a proxy, then retry.":
+    "Истёк таймаут — kino.watch может быть недоступен без VPN. Включите VPN или укажите прокси и повторите.",
+  "Sign in to kino.watch (Profile) to resolve and download titles.":
+    "Войдите в kino.watch (Профиль), чтобы распознавать ссылки и качать тайтлы.",
 
   // Series browser
   "{n} episodes": "эпизодов: {n}",
@@ -135,9 +133,9 @@ const RU: Record<string, string> = {
   "Resolving source…": "Получение источника…",
   "Preparing…": "Подготовка…",
   "{ok} ok · {failed} failed · {skipped} skipped": "{ok} ок · {failed} ошибок · {skipped} пропущено",
+  "{n} of {m} episodes failed": "не удалось скачать эпизодов: {n} из {m}",
   "Episodes ({n})": "Эпизоды ({n})",
   Log: "Лог",
-  Stop: "Стоп",
   Remove: "Удалить",
   Retry: "Повторить",
   Resume: "Продолжить",
@@ -147,6 +145,10 @@ const RU: Record<string, string> = {
   "{ep} paused": "{ep} на паузе",
   "{ep} resumed": "{ep} продолжается",
   "{ep} canceled — the rest keep downloading": "{ep} отменена — остальные качаются дальше",
+  "Remove this job and delete the {size} it already downloaded? This cannot be undone.":
+    "Удалить задание и стереть уже скачанные {size}? Отменить будет нельзя.",
+  "This job holds {size} of partly downloaded data, but another job is still using it — the files stay on disk. Remove the card?":
+    "Задание держит {size} недокачанных данных, но их использует другое задание — файлы останутся на диске. Убрать карточку?",
   "Cancel this episode — the rest keep downloading": "Отменить эту серию — остальные продолжат качаться",
   "Paused — progress is kept": "Пауза — прогресс сохранён",
   "Resuming — continuing where it stopped…": "Продолжаю с места остановки…",
@@ -166,12 +168,24 @@ const RU: Record<string, string> = {
   // Library
   "Downloads found in your output folders": "Загрузки из ваших папок",
   Rescan: "Пересканировать",
+  "Scanning your folders…": "Сканирую папки…",
   "Nothing downloaded yet": "Пока ничего не скачано",
   "Nothing matches the filters": "Ничего не найдено по фильтрам",
   "{n} missing": "нет файлов: {n}",
+  "File missing": "Файл не найден",
+  "{n} seasons": "сезонов: {n}",
   "Scan failed": "Сканирование не удалось",
   Movie: "Фильм",
   Serial: "Сериал",
+  "On disk": "На диске",
+  "{n} downloading · {m} on disk": "{n} качается · {m} на диске",
+  "Show actions": "Показать действия",
+  "Search by title or genre…": "Поиск по названию или жанру…",
+  "Clear search": "Очистить поиск",
+  "{n} found": "найдено: {n}",
+  "Show only this genre": "Показать только этот жанр",
+  "List view": "Списком",
+  "Tiles view": "Плиткой",
   "All genres": "Все жанры",
   "Recently added": "Сначала новые",
   "Name (A–Z)": "Название (А–Я)",
@@ -181,8 +195,14 @@ const RU: Record<string, string> = {
   "Verify downloaded files against the state file and repair inconsistencies.":
     "Сверка скачанных файлов со state-файлом и восстановление целостности.",
   "Folder to check": "Папка для проверки",
-  "Repair (--fix)": "Восстановить (--fix)",
+  Repair: "Восстановить",
   "Remove broken entries & files": "Удалить битые записи и файлы",
+  "Unfinished downloads are using this folder ({n}) — repair and cleanup are off.":
+    "Папку занимают незавершённые загрузки ({n}) — починка и очистка выключены.",
+  "Their temp files hold what's already downloaded — cleanup would wipe that progress. Finish or cancel them, or just check the folder without repairing.":
+    "Во временных файлах лежит уже скачанное: очистка сотрёт прогресс. Завершите или отмените загрузку — либо просто проверьте папку без починки.",
+  "Nothing was changed: downloads in progress are using this folder.":
+    "Ничего не изменено: эту папку занимают незавершённые загрузки.",
   "Clean .tmp": "Очистить .tmp",
   "Delete orphan temp files": "Удалить осиротевшие temp-файлы",
   "Run doctor": "Запустить доктор",
@@ -204,11 +224,15 @@ const RU: Record<string, string> = {
   "Orphan .tmp": "Осиротевший .tmp",
 
   // Settings
+  "Check downloads": "Проверка загрузок",
+  "Find missing or broken files and clean up leftovers.":
+    "Найти пропавшие и битые файлы, убрать остатки.",
+  "Interface language": "Язык интерфейса",
+  "Applies to this browser.": "Применяется в этом браузере.",
+  "Update available": "Доступно обновление",
   "Defaults applied to every new download.": "Значения по умолчанию для новых загрузок.",
   "Default output folder": "Папка загрузки по умолчанию",
   "Default quality": "Качество по умолчанию",
-  "No chunked download by default": "Без chunked-загрузки по умолчанию",
-  "Stream everything through ffmpeg": "Всё через ffmpeg",
   "Extra library folders": "Доп. папки библиотеки",
   "Scanned in addition to the output folder.": "Сканируются вдобавок к папке загрузки.",
   Add: "Добавить",
@@ -235,21 +259,19 @@ const RU: Record<string, string> = {
   "Only missing": "Только новые",
   "Select only episodes not yet downloaded": "Выбрать только ещё не скачанные серии",
   Downloaded: "Скачано",
-  "Downloaded · {res}": "Скачано · {res}",
+  "Downloaded · {details}": "Скачано · {details}",
+  "voiceover substituted": "озвучка заменена",
   "Your last voiceover isn't available here — pick another.":
     "Прошлой озвучки здесь нет — выберите другую.",
   "Only this": "Только эту",
   "Start download ({n})": "Скачать ({n})",
   "Toggle season": "Выбрать сезон",
-  "re-attempts per episode after a network error (timeout, reset, 5xx)":
-    "повторные попытки на серию при сетевой ошибке (таймаут, сброс, 5xx)",
   "Install ffmpeg": "Установить ffmpeg",
   "Installing ffmpeg…": "Установка ffmpeg…",
   "ffmpeg installed.": "ffmpeg установлен.",
   "ffmpeg install failed": "Не удалось установить ffmpeg",
   "Downloading a static build — this can take a minute.":
     "Скачивается статичная сборка — это может занять минуту.",
-  "Downloads a static build from {src}.": "Скачивает статичную сборку из {src}.",
   "Software update": "Обновление",
   "Current version": "Текущая версия",
   "A new version is available": "Доступна новая версия",
@@ -300,27 +322,30 @@ const RU: Record<string, string> = {
   // Library file actions
   Open: "Открыть",
   "Open folder": "Открыть папку",
+  Folder: "Папка",
   "Reveal in folder": "Показать в папке",
   "Opening…": "Открываю…",
   "Could not open": "Не удалось открыть",
   "File not found": "Файл не найден",
 
-  // kino.pub API login (Settings)
-  "kino.pub account (API)": "Аккаунт kino.pub (API)",
+  // Profile page + kino.watch API login
+  "Your kino.watch account and subscription.": "Ваш аккаунт kino.watch и подписка.",
+  "Subscription ends": "Подписка до",
+  "kino.watch account": "Аккаунт kino.watch",
+  "Not signed in": "Вы не вошли",
+  "kino.watch account (API)": "Аккаунт kino.watch (API)",
   "Sign in once with a device code to search the catalog, preview voiceovers, and download titles.":
     "Войдите один раз по коду устройства — поиск по каталогу, выбор озвучки и загрузка.",
-  "Signed in to kino.pub": "Вы вошли в kino.pub",
+  "Signed in to kino.watch": "Вы вошли в kino.watch",
   "Open the link and enter this code:": "Откройте ссылку и введите код:",
   "Waiting for confirmation…": "Ожидание подтверждения…",
-  "Sign in to kino.pub": "Войти в kino.pub",
-  "Enter the code on kino.pub/device to finish signing in":
-    "Введите код на kino.pub/device, чтобы завершить вход",
+  "Sign in to kino.watch": "Войти в kino.watch",
+  "Enter the code on kino.watch/device to finish signing in":
+    "Введите код на kino.watch/device, чтобы завершить вход",
 
   // Catalog (Discover)
   Catalog: "Каталог",
-  "Search kino.pub, browse tops and collections, preview voiceovers — and download in one click.":
-    "Ищите на kino.pub, смотрите топы и подборки, оценивайте озвучки — и качайте в один клик.",
-  "Search films and series on kino.pub…": "Поиск фильмов и сериалов на kino.pub…",
+  "Search films and series on kino.watch…": "Поиск фильмов и сериалов на kino.watch…",
   "Showing title matches. Clear the search to browse by category, genre and filters.":
     "Показаны совпадения по названию. Очистите поиск, чтобы фильтровать по категории, жанру и параметрам.",
   Popular: "Популярное",
@@ -334,18 +359,24 @@ const RU: Record<string, string> = {
   "Nothing found.": "Ничего не найдено.",
   "Load more": "Показать ещё",
   "Catalog request failed": "Не удалось загрузить каталог",
-  "Couldn't reach kino.pub": "Не удалось подключиться к kino.pub",
-  "If kino.pub is blocked in your region, enable a VPN (or set a proxy in Settings), then try again.":
-    "Если kino.pub заблокирован в вашем регионе, включите VPN (или укажите прокси в Настройках) и повторите.",
-  "Sign in to kino.pub to browse the catalog": "Войдите в kino.pub, чтобы открыть каталог",
-  "The catalog, search, voiceovers and one-click downloads use the official kino.pub API. Sign in once in Settings.":
-    "Каталог, поиск, озвучки и загрузка в один клик работают через официальное API kino.pub. Войдите один раз в Настройках.",
+  "Couldn't reach kino.watch": "Не удалось подключиться к kino.watch",
+  "If kino.watch is blocked in your region, enable a VPN (or set a proxy in Settings), then try again.":
+    "Если kino.watch заблокирован в вашем регионе, включите VPN (или укажите прокси в Настройках) и повторите.",
+  "Sign in to kino.watch to browse the catalog": "Войдите в kino.watch, чтобы открыть каталог",
+  "The catalog, search, voiceovers and one-click downloads use the official kino.watch API. Sign in once in Profile.":
+    "Каталог, поиск, озвучки и загрузка в один клик работают через официальное API kino.watch. Войдите один раз в Профиль.",
+  "Go to Profile": "Перейти в Профиль",
   "Go to Settings": "Перейти в Настройки",
 
   // Title detail
   "Loading…": "Загрузка…",
   Title: "Тайтл",
   min: "мин",
+  "TV series": "Сериал",
+  "up to {q}": "до {q}",
+  "{n} of {m} downloaded": "скачано {n} из {m}",
+  "Show more": "Показать полностью",
+  "Show less": "Свернуть",
   Voiceover: "Озвучка",
   "(all tracks)": "(все дорожки)",
   "(all selected)": "(выбраны все)",
@@ -358,14 +389,44 @@ const RU: Record<string, string> = {
   "Select at least one episode": "Выберите хотя бы один эпизод",
   Similar: "Похожее",
 
-  // Catalog v2 — tabs, filter, collections, history
-  "Search kino.pub, browse tops, collections and history, preview voiceovers — and download in one click.":
-    "Ищите на kino.pub, смотрите топы, подборки и историю, оценивайте озвучки — и качайте в один клик.",
-  Browse: "Обзор",
+  // Catalog v2 — filter, collections, history
   History: "История",
   "I'm watching": "Я смотрю",
   Bookmarks: "Закладки",
   "{n} titles": "{n} тайтлов",
+
+  // Collections, I'm watching, Bookmarks and History — each its own page in the
+  // sidebar now, instead of a chip inside the Catalog.
+  "Search kino.watch by title, or narrow the whole library down by category, genre and rating.":
+    "Ищите на kino.watch по названию — или сужайте всю библиотеку по категории, жанру и рейтингу.",
+  Collection: "Подборка",
+  "kino.watch's own curated lists — open one and download straight from it.":
+    "Готовые подборки kino.watch — откройте любую и качайте прямо из неё.",
+  "Sign in to kino.watch to browse collections": "Войдите в kino.watch, чтобы смотреть подборки",
+  "No collections found": "Подборок не нашлось",
+  "This collection is empty": "В этой подборке пусто",
+  "Series and films you're part-way through, plus the shows you follow.":
+    "Сериалы и фильмы, которые вы не досмотрели, и шоу, на которые подписаны.",
+  "Sign in to kino.watch to see what you're watching": "Войдите в kino.watch, чтобы увидеть, что вы смотрите",
+  "Nothing in progress": "Ничего не начато",
+  "Start something on kino.watch and it waits for you here until you finish it.":
+    "Начните что-нибудь на kino.watch — оно будет ждать вас здесь, пока не досмотрите.",
+  "No subscriptions yet": "Подписок пока нет",
+  "Series you subscribe to on kino.watch are listed here.":
+    "Сериалы, на которые вы подписались на kino.watch, появятся здесь.",
+  "Your kino.watch bookmark folders — open one and download straight from it.":
+    "Ваши папки закладок на kino.watch — откройте любую и качайте прямо из неё.",
+  "Everything you've watched on kino.watch, newest first — open a title to download it.":
+    "Всё, что вы смотрели на kino.watch, начиная с последнего — откройте тайтл, чтобы скачать.",
+  "Sign in to kino.watch to see your bookmarks": "Войдите в kino.watch, чтобы увидеть закладки",
+  "Sign in to kino.watch to see your watch history": "Войдите в kino.watch, чтобы увидеть историю просмотров",
+  "No bookmarks yet": "Закладок пока нет",
+  "Folders you create on kino.watch show up here, ready to download from.":
+    "Папки, созданные на kino.watch, появятся здесь — сразу готовые к загрузке.",
+  "This folder is empty": "В этой папке пусто",
+  "Nothing watched yet": "Вы ещё ничего не смотрели",
+  "Titles you play on kino.watch — here or anywhere else — show up on this page.":
+    "Тайтлы, которые вы включаете на kino.watch — здесь или где угодно — появятся на этой странице.",
   Clear: "Очистить",
   New: "Новые",
   "Most watched": "Просматриваемые",
@@ -381,14 +442,22 @@ const RU: Record<string, string> = {
   Concerts: "Концерты",
   Documentary: "Документальное",
   "TV shows": "ТВ-шоу",
-  // Catalog categories (kino.pub's category sidebar) + their genre row
+  // Catalog categories (kino.watch's category sidebar) + their genre row
   Anime: "Аниме",
   Documentaries: "Докуфильмы",
   Docuseries: "Докусериалы",
   Sport: "Спорт",
   Genres: "Жанры",
   "By update": "По обновлению",
-  "KP rating": "Рейтинг КП",
+  "By rating": "По рейтингу",
+  "By views": "По просмотрам",
+  "By watchers": "По зрителям",
+  // "What's new" — kino.watch's own charts, on their own page
+  "What's new": "Новинки",
+  "kino.watch's own charts. To browse by genre, rating and year, use the Catalog.":
+    "Готовые топы kino.watch. Чтобы фильтровать по жанру, рейтингу и году, откройте Каталог.",
+  "Sign in to kino.watch to see what's new": "Войдите в kino.watch, чтобы смотреть новинки",
+  "This chart is empty right now": "В этом топе сейчас пусто",
   "IMDb rating": "Рейтинг IMDb",
   Year: "Год",
   "Release year": "Год выхода",
@@ -396,6 +465,22 @@ const RU: Record<string, string> = {
   "AC3 sound": "Звук AC3",
   "With subtitles": "С субтитрами",
   "Reset filters": "Сбросить фильтры",
+  // Catalog filter panel — active-condition chips, country combobox, presets
+  "Remove filter": "Убрать фильтр",
+  from: "от",
+  to: "до",
+  Minimum: "минимум",
+  Maximum: "максимум",
+  "All countries": "Все страны",
+  "Search country…": "Поиск страны…",
+  "Sound & subtitles": "Звук и субтитры",
+  Subtitles: "Субтитры",
+  KP: "КП",
+  "Last 2 years": "Последние 2 года",
+  "2020s": "2020-е",
+  "2010s": "2010-е",
+  "2000s": "2000-е",
+  "1990s": "1990-е",
   Director: "Режиссёр",
   Cast: "В ролях",
   "Open card": "Открыть карточку",
@@ -427,6 +512,10 @@ const RU: Record<string, string> = {
   "You stopped at {time}": "Вы остановились на {time}",
   "Continue from {time}": "Продолжить с {time}",
   "Start over": "Сначала",
+  "Some partial download files could not be deleted — check the download folder":
+    "Часть временных файлов не удалось удалить — проверьте папку загрузок",
+  "Couldn't scan your folders": "Не удалось просканировать папки",
+  "Finished downloads": "Завершённые загрузки",
 };
 
 interface I18nValue {
@@ -474,8 +563,25 @@ export function useI18n(): I18nValue {
   return ctx;
 }
 
+// translate renders a dictionary key in the current language OUTSIDE React —
+// for code with no hook context, like the store's SSE event handler. Components
+// use useI18n().t instead, which also re-renders on a language switch.
+export function translate(key: string): string {
+  return detectLang() === "ru" ? RU[key] ?? key : key;
+}
+
+// looksLikeCanceled reports whether an error message is really just "the user
+// stopped it". The backend already folds cancellations into a plain "canceled",
+// but an older job restored from disk can still carry the raw Go chain
+// ("segment 10 failed: context canceled"), so match that shape too.
+export function looksLikeCanceled(msg?: string): boolean {
+  if (!msg) return false;
+  const m = msg.toLowerCase();
+  return m === "canceled" || m === "cancelled" || m.includes("context canceled");
+}
+
 // looksLikeTimeout reports whether an error message indicates a network timeout
-// (commonly caused by kino.pub being unreachable without a VPN).
+// (commonly caused by kino.watch being unreachable without a VPN).
 export function looksLikeTimeout(msg?: string): boolean {
   if (!msg) return false;
   const m = msg.toLowerCase();

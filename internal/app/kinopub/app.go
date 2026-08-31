@@ -7,7 +7,7 @@ import (
 )
 
 // Dependencies holds all injectable interfaces required by the App. Downloads
-// resolve via the official kino.pub API + HLS pipeline (the cookie/RSS sources
+// resolve via the official kino.watch API + HLS pipeline (the cookie/RSS sources
 // were removed).
 type Dependencies struct {
 	Logger           domain.Logger

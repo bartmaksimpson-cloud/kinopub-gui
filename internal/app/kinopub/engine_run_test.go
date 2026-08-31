@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/services/outputlayout"
 )
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ func TestRun_EmptyInputURL(t *testing.T) {
 	cfg := retryTestConfig()
 	cfg.InputURL = ""
 	_, err := e.run(context.Background(), cfg)
-	if err == nil || err.Error() != "a kino.pub URL is required" {
+	if err == nil || err.Error() != "a kino.watch URL is required" {
 		t.Fatalf("want URL-required error, got %v", err)
 	}
 }
@@ -325,7 +326,7 @@ func TestAttemptHLSEpisode_NoMuxerIsFatal(t *testing.T) {
 func TestRunHLS_CanceledRunReturnsContextError(t *testing.T) {
 	k1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
 	g := newGatedHLS(k1)
-	e, _, _ := newRetryTestEngine(g, &fakePageScraper{playlist: makePlaylist(2)})
+	e, rec, _ := newRetryTestEngine(g, &fakePageScraper{playlist: makePlaylist(2)})
 	// No Paused() set → a cancel is a hard stop (failures counted).
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := retryTestConfig()
@@ -358,6 +359,12 @@ func TestRunHLS_CanceledRunReturnsContextError(t *testing.T) {
 		// E01 re-parked + E02 never started → both swept as failures (not paused).
 		if got.res.Failed == 0 {
 			t.Errorf("canceled (non-paused) run should count failures, got Failed=%d", got.res.Failed)
+		}
+		// The cancel IS the reason the download stopped, so E01 must not be
+		// reported as "retrying later" — that would stamp the row with the raw
+		// "…: context canceled" chain the UI then shows instead of "canceled".
+		if len(rec.deferred) != 0 {
+			t.Errorf("a canceled run should not report deferrals, got %v", rec.deferred)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("run did not finish after cancel")
@@ -647,5 +654,69 @@ func TestBuildSeriesFromPlaylist_GroupsAndSortsSeasons(t *testing.T) {
 	// Duration converted to seconds.
 	if series.Seasons[1].Episodes[0].Duration != 60*time.Second {
 		t.Errorf("duration = %v, want 60s", series.Seasons[1].Episodes[0].Duration)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Series metadata is written with the first completed episode, not before
+// ---------------------------------------------------------------------------
+
+// A run that resolves the series and then downloads nothing must leave no trace
+// on disk: the state file is what the GUI library scans for, so writing it up
+// front turned every failed run into a phantom "downloaded" card.
+func TestRunHLS_NoMetadataOrFolderWhenNothingDownloads(t *testing.T) {
+	hls := newFakeHLS(errors.New("boom")) // not a transient marker → fatal, no retries
+	for i := 1; i <= 2; i++ {
+		hls.failsLeft[domain.EpisodeKey{Series: "42", Season: 1, Episode: i}] = 1
+	}
+	e, _, ss := newRetryTestEngine(hls, &fakePageScraper{playlist: makePlaylist(2)})
+	out := t.TempDir()
+	cfg := retryTestConfig()
+	cfg.OutputPath = out
+	// The REAL layout, not the mock: every episode attempt pre-creates its
+	// "<Series>/Season NN/" via EnsureDirs, and the cleanup must remove that
+	// (empty) subdirectory too — os.Remove on a series dir still holding an
+	// empty season folder fails with ENOTEMPTY, which the mock's no-op
+	// EnsureDirs used to hide.
+	e.deps.OutputLayout = outputlayout.New(domain.ContainerMKV)
+
+	res, err := e.runHLS(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("runHLS error: %v", err)
+	}
+	if res.Succeeded != 0 || res.Failed != 2 {
+		t.Fatalf("want 0 succeeded / 2 failed, got %+v", res)
+	}
+	if n := ss.metadataWrites(); n != 0 {
+		t.Errorf("SetMetadata called %d times; nothing downloaded, so no state file should be written", n)
+	}
+	if _, statErr := os.Stat(filepath.Join(out, "Test Series")); !os.IsNotExist(statErr) {
+		t.Errorf("series folder should not be left behind: %v", statErr)
+	}
+}
+
+// The first episode that lands records the series metadata — once, however many
+// episodes follow.
+func TestRunHLS_MetadataWrittenOnceAfterFirstSuccess(t *testing.T) {
+	pl := makePlaylist(3)
+	pl.Type = "serial"
+	pl.Genres = []string{"Драма"}
+	e, _, ss := newRetryTestEngine(newFakeHLS(nil), &fakePageScraper{playlist: pl})
+
+	res, err := e.runHLS(context.Background(), retryTestConfig())
+	if err != nil {
+		t.Fatalf("runHLS error: %v", err)
+	}
+	if res.Succeeded != 3 {
+		t.Fatalf("Succeeded = %d, want 3", res.Succeeded)
+	}
+	if n := ss.metadataWrites(); n != 1 {
+		t.Fatalf("SetMetadata called %d times, want exactly 1", n)
+	}
+	if ss.meta.Title != "Test Series" || ss.meta.Type != "serial" || len(ss.meta.Genres) != 1 {
+		t.Errorf("metadata = %+v", ss.meta)
+	}
+	if ss.meta.UpdatedAt.IsZero() {
+		t.Error("UpdatedAt should be stamped when the metadata is written")
 	}
 }

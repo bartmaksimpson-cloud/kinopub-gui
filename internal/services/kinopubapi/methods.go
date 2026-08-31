@@ -58,7 +58,7 @@ func (p ItemsParams) values() url.Values {
 		q.Set("country", p.Country)
 	}
 
-	// Range filters go through the conditions[] array (kino.pub filter syntax).
+	// Range filters go through the conditions[] array (kino.watch filter syntax).
 	var cond []string
 	if p.YearFrom > 0 {
 		cond = append(cond, "year>="+strconv.Itoa(p.YearFrom))
@@ -98,11 +98,73 @@ func trimFloat(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
-// Items lists/filters the catalog. Tops are expressed via Sort:
-// popular = "views-", fresh = "created-", hot serials = "watchers-".
+// Items lists/filters the catalog.
+//
+// Sort accepts only the fields the API actually orders by — id, year, title,
+// created, updated, rating, views, watchers (suffix "-" = DESC). Anything else
+// (notably "kinopoisk-"/"imdb-") is SILENTLY IGNORED and yields the default
+// "updated-" order; filter by rating through ImdbFrom/KpFrom instead. Note that
+// "rating" is kino.watch's own score, not the Kinopoisk/IMDb ones.
+//
+// For the catalog's top lists use Top — sorting the whole catalog by views-
+// approximates "popular" with an all-time hall of fame, not the list the site
+// shows.
 func (c *Client) Items(ctx context.Context, p ItemsParams) (ItemsPage, error) {
 	var out ItemsPage
 	err := c.get(ctx, "items", p.values(), &out)
+	return out, err
+}
+
+// TopKind selects one of the catalog's shortcut top lists.
+type TopKind string
+
+const (
+	TopFresh   TopKind = "fresh"   // свежее
+	TopHot     TopKind = "hot"     // горячее
+	TopPopular TopKind = "popular" // популярное
+)
+
+// ParseTopKind validates an untrusted top-list name (it becomes a URL path
+// segment, so only the three known lists are accepted).
+func ParseTopKind(s string) (TopKind, bool) {
+	switch TopKind(strings.TrimSpace(s)) {
+	case TopFresh:
+		return TopFresh, true
+	case TopHot:
+		return TopHot, true
+	case TopPopular:
+		return TopPopular, true
+	}
+	return "", false
+}
+
+// Top returns one of kino.watch's own shortcut top lists (/v1/items/{fresh,hot,
+// popular}) — the same lists the site and the official apps show.
+//
+// These are NOT reproducible through Items+Sort: the API ranks them itself, and
+// draws from a curated pool rather than the whole catalog.
+//
+// typ (movie, serial, …) is REQUIRED — the API rejects a top list without one —
+// and it is the only narrowing on offer: genre, country, year and the rest do
+// not apply.
+//
+// typ also accepts a CSV ("movie,serial"), and the API merges and ranks the
+// combined list itself, paginating it as one feed. That is the only way to ask
+// for several types at once: there is no "any type" value, and "all" comes back
+// empty.
+func (c *Client) Top(ctx context.Context, kind TopKind, typ string, page, perpage int) (ItemsPage, error) {
+	q := url.Values{}
+	if typ != "" {
+		q.Set("type", typ)
+	}
+	if page > 0 {
+		q.Set("page", strconv.Itoa(page))
+	}
+	if perpage > 0 {
+		q.Set("perpage", strconv.Itoa(perpage))
+	}
+	var out ItemsPage
+	err := c.get(ctx, "items/"+string(kind), q, &out)
 	return out, err
 }
 
@@ -295,7 +357,7 @@ func (c *Client) Genres(ctx context.Context, typ string) ([]NamedID, error) {
 	return out.Items, err
 }
 
-// DeviceInfo identifies this client in the account's device list on kino.pub.
+// DeviceInfo identifies this client in the account's device list on kino.watch.
 type DeviceInfo struct {
 	Title    string // friendly device name (e.g. "kinopub-gui (hostname)")
 	Hardware string // e.g. the OS / machine
@@ -320,7 +382,7 @@ func (c *Client) Notify(ctx context.Context, info DeviceInfo) error {
 	return c.get(ctx, "device/notify", q, &out)
 }
 
-// User is the authenticated account profile (kino.pub GET /v1/user → "user").
+// User is the authenticated account profile (kino.watch GET /v1/user → "user").
 type User struct {
 	Username     string           `json:"username"`
 	RegDate      int64            `json:"reg_date"`
@@ -343,7 +405,7 @@ type UserProfile struct {
 }
 
 // User returns the authenticated account profile, including subscription status
-// and remaining days (kino.pub GET /v1/user).
+// and remaining days (kino.watch GET /v1/user).
 func (c *Client) User(ctx context.Context) (User, error) {
 	var out struct {
 		User User `json:"user"`
@@ -353,7 +415,7 @@ func (c *Client) User(ctx context.Context) (User, error) {
 }
 
 // EnableUHD turns on 4K/HEVC/HDR + mixed-playlist support for this device so the
-// API includes 2160p files (in both HEVC and H.264) in item responses. kino.pub
+// API includes 2160p files (in both HEVC and H.264) in item responses. kino.watch
 // gates 4K behind these per-device flags — exactly the "4K support" checkbox the
 // official apps expose. The current server/streaming-type selections are
 // preserved. Safe to call repeatedly; it is a no-op once already enabled.
@@ -368,7 +430,7 @@ func (c *Client) EnableUHD(ctx context.Context) error {
 	}
 	id := info.Device.ID.String()
 	if id == "" {
-		return fmt.Errorf("kino.pub: no device id")
+		return fmt.Errorf("kino.watch: no device id")
 	}
 
 	// Read current settings to preserve list selections and avoid a needless
@@ -424,7 +486,7 @@ func (c *Client) Raw(ctx context.Context, path string, q url.Values, out any) er
 	return c.get(ctx, path, q, out)
 }
 
-// RawPost performs an authenticated POST with a form-encoded body (kino.pub's
+// RawPost performs an authenticated POST with a form-encoded body (kino.watch's
 // settings endpoints expect form fields) and decodes the JSON response.
 func (c *Client) RawPost(ctx context.Context, path string, form url.Values, out any) error {
 	token, err := c.ensureToken(ctx)
@@ -444,16 +506,16 @@ func (c *Client) RawPost(ctx context.Context, path string, form url.Values, out 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("kino.pub API %s: %w", path, err)
+		return fmt.Errorf("kino.watch API %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("kino.pub API %s: HTTP %d: %s", path, resp.StatusCode, snippet(body))
+		return fmt.Errorf("kino.watch API %s: HTTP %d: %s", path, resp.StatusCode, snippet(body))
 	}
 	if out != nil {
 		if err := json.Unmarshal(body, out); err != nil {
-			return fmt.Errorf("kino.pub API %s: decode: %w", path, err)
+			return fmt.Errorf("kino.watch API %s: decode: %w", path, err)
 		}
 	}
 	return nil

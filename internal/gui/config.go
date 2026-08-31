@@ -11,29 +11,69 @@ import (
 
 	"github.com/ZioSHik/kinopub-gui/internal/app/kinopub"
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/httpx"
 )
 
 // defaultUserAgent matches the CLI: Cloudflare's cf_clearance is bound to the
 // UA that solved the challenge, so we default to a realistic Safari UA.
 const defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15"
 
+// Download tuning. These were user-facing knobs ("Concurrency", "Retries",
+// "Max simultaneous downloads") until it became clear there is one right answer
+// and the wrong ones only hurt, so they are fixed here.
+//
+// episodeConcurrency: this is NOT a bandwidth knob — the segment budget that
+// fills the link is set by a throughput controller shared across every download
+// in the process (hlsdownloader.Limiter), which measures the link and ramps itself,
+// so raising this number does not buy more speed. The second episode exists
+// only to keep the network busy while the first one sits in its ffmpeg remux
+// phase — CPU-bound, zero network. A third would just push back the first
+// finished file for no throughput in return.
+//
+// episodeRetries: these fire only on retryable failures (403/429/5xx, timeouts,
+// connection resets, DNS) and back off 1→2→4→8→16s, so 5 means up to 6 attempts
+// spread over ~31s — enough to ride out a CDN blip or a re-signed token, still
+// bounded. Per-segment and per-manifest retries sit below this level and already
+// absorb the short-lived failures.
+//
+// maxActiveDownloads: the resting limit. Bandwidth is one fixed pie, so running
+// several titles at once normally only divides it — nothing finishes sooner in
+// total while every single title finishes later. One at a time gives the fastest
+// first watchable file; the wait queue is reorderable, and per-episode retries
+// are flagged urgent so they bypass this limit and still start immediately.
+//
+// maxAdaptiveDownloads: the exception the admission controller may grant. There
+// is one case where the resting limit leaves throughput on the table — when the
+// running title is not claiming the segment budget at all, because it is
+// remuxing with ffmpeg, scraping, or resolving a manifest. JobManager.admissionLoop
+// watches the shared controller for exactly that and lends out the second slot
+// while it lasts. It is safe to lend precisely because the segment budget is
+// shared: an extra title divides that one budget instead of multiplying it.
+//
+// admissionPoll / admissionWindowSamples / admissionIdleShare: how that is
+// measured — a sample every 2s over a ~30s window, and the pipe has to have been
+// idle for most of it. The window is what keeps the seconds every job spends
+// resolving from quietly making two-at-a-time the norm.
+const (
+	episodeConcurrency   = 2
+	episodeRetries       = 5
+	maxActiveDownloads   = 1
+	maxAdaptiveDownloads = 2
+
+	admissionPoll          = 2 * time.Second
+	admissionWindowSamples = 15
+	admissionIdleShare     = 0.6
+)
+
 // Settings holds user-configurable GUI defaults persisted between sessions.
 type Settings struct {
-	OutputPath    string   `json:"outputPath"`
-	Quality       string   `json:"quality"`
-	Container     string   `json:"container"`
-	Concurrency   int      `json:"concurrency"`
-	Retries       int      `json:"retries"`
-	MinIntervalMS int      `json:"minIntervalMs"`
-	Proxy         string   `json:"proxy"`
-	Verbosity     string   `json:"verbosity"`
-	NoChunked     bool     `json:"noChunked"`
-	Theme         string   `json:"theme"`
-	LibraryDirs   []string `json:"libraryDirs"`
-	// MaxActiveJobs bounds how many downloads run at once; extra ones wait in a
-	// reorderable queue. 0 means no limit (every download starts immediately,
-	// the default), in which case the queue/priority controls never engage.
-	MaxActiveJobs int `json:"maxActiveJobs"`
+	OutputPath  string   `json:"outputPath"`
+	Quality     string   `json:"quality"`
+	Container   string   `json:"container"`
+	Proxy       string   `json:"proxy"`
+	Verbosity   string   `json:"verbosity"`
+	Theme       string   `json:"theme"`
+	LibraryDirs []string `json:"libraryDirs"`
 }
 
 func defaultSettings() Settings {
@@ -43,15 +83,12 @@ func defaultSettings() Settings {
 		out = filepath.Join(home, "Downloads", "kinopub")
 	}
 	return Settings{
-		OutputPath:    out,
-		Quality:       "1080p",
-		Container:     "mkv",
-		Concurrency:   2,
-		Retries:       5,
-		Verbosity:     "normal",
-		Theme:         "cinematic",
-		LibraryDirs:   nil,
-		MaxActiveJobs: 0, // unlimited by default — no behavior change until set
+		OutputPath:  out,
+		Quality:     "1080p",
+		Container:   "mkv",
+		Verbosity:   "normal",
+		Theme:       "cinematic",
+		LibraryDirs: nil,
 	}
 }
 
@@ -102,29 +139,14 @@ func (s *settingsStore) load() {
 	if loaded.Container != "" {
 		merged.Container = loaded.Container
 	}
-	if loaded.Concurrency > 0 {
-		merged.Concurrency = loaded.Concurrency
-	}
-	if loaded.Retries > 0 {
-		merged.Retries = loaded.Retries
-	}
-	merged.MinIntervalMS = loaded.MinIntervalMS
 	merged.Proxy = loaded.Proxy
 	if loaded.Verbosity != "" {
 		merged.Verbosity = loaded.Verbosity
 	}
-	merged.NoChunked = loaded.NoChunked
 	if loaded.Theme != "" {
 		merged.Theme = loaded.Theme
 	}
 	merged.LibraryDirs = loaded.LibraryDirs
-	merged.MaxActiveJobs = loaded.MaxActiveJobs
-	if merged.MaxActiveJobs < 0 {
-		merged.MaxActiveJobs = 0
-	}
-	if merged.MaxActiveJobs > 16 {
-		merged.MaxActiveJobs = 16
-	}
 	s.cur = merged
 }
 
@@ -138,26 +160,8 @@ func (s *settingsStore) save(in Settings) (Settings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Validate / clamp.
-	if in.Concurrency < 1 {
-		in.Concurrency = 1
-	}
-	if in.Concurrency > 16 {
-		in.Concurrency = 16
-	}
-	if in.Retries < 0 {
-		in.Retries = 0
-	}
-	if in.MinIntervalMS < 0 {
-		in.MinIntervalMS = 0
-	}
 	if in.Container != "mp4" {
 		in.Container = "mkv"
-	}
-	if in.MaxActiveJobs < 0 {
-		in.MaxActiveJobs = 0
-	}
-	if in.MaxActiveJobs > 16 {
-		in.MaxActiveJobs = 16
 	}
 	s.cur = in
 	if s.path == "" {
@@ -182,16 +186,13 @@ type AudioSpecDTO struct {
 
 // RunRequest is the JSON body the UI sends to start a download or run a preview.
 type RunRequest struct {
-	URL           string `json:"url"`
-	OutputPath    string `json:"outputPath"`
-	Quality       string `json:"quality"`
-	Container     string `json:"container"`
-	Concurrency   int    `json:"concurrency"`
-	Retries       int    `json:"retries"`
-	MinIntervalMS int    `json:"minIntervalMs"`
-	Proxy         string `json:"proxy"`
-	Seasons       string `json:"seasons"`
-	Episodes      string `json:"episodes"`
+	URL        string `json:"url"`
+	OutputPath string `json:"outputPath"`
+	Quality    string `json:"quality"`
+	Container  string `json:"container"`
+	Proxy      string `json:"proxy"`
+	Seasons    string `json:"seasons"`
+	Episodes   string `json:"episodes"`
 	// EpisodeKeys is an explicit per-episode selection from the series browser,
 	// each formatted "S{season}E{episode}". When present it overrides Seasons /
 	// Episodes so the exact picked set downloads.
@@ -204,7 +205,6 @@ type RunRequest struct {
 	AudioSpecs []AudioSpecDTO `json:"audioSpecs"`
 	AudioMenu  bool           `json:"audioMenu"`
 	Force      bool           `json:"force"`
-	NoChunked  bool           `json:"noChunked"`
 	DryRun     bool           `json:"dryRun"`
 	FFmpegArgs string         `json:"ffmpegArgs"`
 	FFmpegPath string         `json:"ffmpegPath"`
@@ -262,11 +262,15 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 	}
 
 	cfg := domain.RunConfig{
-		InputURL:         req.URL,
-		OutputPath:       req.OutputPath,
-		MaxConcurrency:   req.Concurrency,
-		MaxRetries:       req.Retries,
-		MinIntervalMS:    req.MinIntervalMS,
+		// A pasted link may still use the old domain; both resolve, but the
+		// queue should show one consistent (current) form.
+		InputURL:       httpx.CanonicalSiteURL(req.URL),
+		OutputPath:     req.OutputPath,
+		MaxConcurrency: episodeConcurrency,
+		MaxRetries:     episodeRetries,
+		// MinIntervalMS stays 0: a fixed delay before every request only slows
+		// each episode down, and a real 429 is answered by retry-with-backoff,
+		// which adapts to the server instead of guessing ahead of it.
 		ProxyURL:         req.Proxy,
 		Quality:          domain.Quality(req.Quality),
 		Verbosity:        verb,
@@ -279,7 +283,6 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		DryRun:           req.DryRun,
 		UserAgent:        ua,
 		FFmpegExtraArgs:  extraFFmpeg,
-		NoChunked:        req.NoChunked,
 		AudioPref:        audioPref,
 		AudioMenu:        req.AudioMenu,
 		UseAPI:           true,

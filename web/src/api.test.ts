@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, imgURL } from "./api";
+import { abortPendingRequests, api, imgURL, isNavigationAbort, NAV_ABORT_MESSAGE } from "./api";
 
 // Captures the last fetch call and lets each test stage a response.
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -113,6 +113,56 @@ describe("req: error mapping", () => {
     fetchMock.mockResolvedValue(textResponse("plain-pong"));
     const out = await api.jobs();
     expect(out).toBe("plain-pong" as never);
+  });
+});
+
+describe("req: navigation abort", () => {
+  // fetch that stays pending until its signal aborts, as a real in-flight
+  // request does.
+  function pendingUntilAborted() {
+    fetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    );
+  }
+
+  it("settles the promise instead of leaving the caller suspended forever", async () => {
+    pendingUntilAborted();
+    const inflight = api.state();
+    abortPendingRequests();
+    // The point of the assertion is that it resolves at all: this used to return
+    // a promise that never settled, pinning the caller's frame — and everything
+    // it closed over — for the life of the tab.
+    await expect(inflight).rejects.toThrow(NAV_ABORT_MESSAGE);
+  });
+
+  it("marks the rejection as a navigation abort", async () => {
+    pendingUntilAborted();
+    const inflight = api.state();
+    abortPendingRequests();
+    await inflight.then(
+      () => expect.unreachable("should have rejected"),
+      (e) => expect(isNavigationAbort(e)).toBe(true),
+    );
+  });
+
+  it("does not classify a real failure as a navigation abort", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: "boom" }, { ok: false, status: 500 }));
+    await api.state().then(
+      () => expect.unreachable("should have rejected"),
+      (e) => expect(isNavigationAbort(e)).toBe(false),
+    );
+  });
+
+  it("recognises the sentinel as a bare message, as onAppendError passes it", () => {
+    expect(isNavigationAbort(NAV_ABORT_MESSAGE)).toBe(true);
+    expect(isNavigationAbort("Catalog request failed")).toBe(false);
+    expect(isNavigationAbort(undefined)).toBe(false);
+    expect(isNavigationAbort(new Error("HTTP 500"))).toBe(false);
   });
 });
 

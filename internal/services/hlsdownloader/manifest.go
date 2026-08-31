@@ -40,7 +40,7 @@ type MediaPlaylist struct {
 	Segments      []Segment
 	TotalDuration float64 // sum of all segment durations
 	// InitURI is the EXT-X-MAP initialization segment URL for fMP4/CMAF streams
-	// (kino.pub serves these for 4K/HEVC). Empty for plain MPEG-TS playlists. It
+	// (kino.watch serves these for 4K/HEVC). Empty for plain MPEG-TS playlists. It
 	// holds the ftyp+moov header and MUST be prepended to the concatenated media
 	// segments, or the result is headless and ffmpeg cannot demux it.
 	InitURI string

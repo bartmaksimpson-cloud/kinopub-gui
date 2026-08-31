@@ -1,50 +1,106 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import clsx from "clsx";
 import {
   ArrowUpCircle,
+  Bookmark,
   ChevronRight,
   Clapperboard,
   Film,
+  Flame,
+  History,
+  LayoutGrid,
   Library as LibraryIcon,
-  ListVideo,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
-  PlugZap,
+  PlayCircle,
+  Settings as SettingsIcon,
   ShieldAlert,
-  Stethoscope,
   Unplug,
   User as UserIcon,
   WifiOff,
 } from "lucide-react";
 import { useApp } from "./store";
 import type { KPStatus, KPUser } from "./api";
-import { type Page, pushRoute, useRoute } from "./router";
+import { type Page, legacyPage, pushRoute, useRoute } from "./router";
 import { useI18n } from "./i18n";
-import { LangSwitcher } from "./components/LangSwitcher";
+import { TopsPage } from "./pages/Tops";
 import { DiscoverPage } from "./pages/Discover";
+import { CollectionsPage } from "./pages/Collections";
+import { WatchingPage } from "./pages/Watching";
+import { BookmarksPage } from "./pages/Bookmarks";
+import { HistoryPage } from "./pages/History";
 import { DownloadPage } from "./pages/Download";
-import { QueuePage } from "./pages/Queue";
 import { LibraryPage } from "./pages/Library";
 import { DoctorPage } from "./pages/Doctor";
 import { SettingsPage } from "./pages/Settings";
+import { ProfilePage } from "./pages/Profile";
 import { AudioMenuModal } from "./components/AudioMenuModal";
 import { Toasts } from "./components/Toasts";
 
-const NAV: { id: Page; label: string; icon: any }[] = [
-  { id: "discover", label: "Catalog", icon: Clapperboard },
-  { id: "queue", label: "Queue", icon: ListVideo },
-  { id: "library", label: "Library", icon: LibraryIcon },
-  { id: "doctor", label: "Doctor", icon: Stethoscope },
+type NavItem = { id: Page; label: string; icon: any };
+
+// The rail carries only the places you go to *do* something day to day. Doctor
+// is a maintenance tool you reach for a few times a year, so it lost its
+// permanent slot and now hangs off Settings — the route still exists, so old
+// links and bookmarks ("#/doctor") keep working.
+// The Queue used to be its own entry. It was merged into the Library: an active
+// download and the file it produces are the same title, and splitting them meant
+// a finished download was listed in both places at once. The "queue" route still
+// resolves (old links, bookmarks) — it just lands on the Library.
+// Collections, I'm watching, Bookmarks and History were chips buried inside the
+// Catalog, sharing a page with a search box and filters that applied to none of
+// them. Each is a destination in its own right, so each got a rail entry — one
+// click from anywhere, and linkable.
+//
+// Six entries is more than a flat list carries comfortably, so they're grouped by
+// what they answer: browse kino.watch → your lists on kino.watch → files on this
+// machine. A hairline between groups is enough; the groups need no headings.
+const NAV: NavItem[][] = [
+  [
+    { id: "tops", label: "What's new", icon: Flame },
+    { id: "discover", label: "Catalog", icon: Clapperboard },
+    { id: "collections", label: "Collections", icon: LayoutGrid },
+  ],
+  [
+    { id: "watching", label: "I'm watching", icon: PlayCircle },
+    { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
+    { id: "history", label: "History", icon: History },
+  ],
+  [{ id: "library", label: "Offline library", icon: LibraryIcon }],
 ];
 
+// The mobile top bar is a single scrolling row, so it takes the same entries
+// flattened — a hairline divider would be invisible there anyway.
+const NAV_FLAT: NavItem[] = NAV.flat();
+
+// Settings is its own nav entry, sitting just under the account card at the
+// bottom of the rail — it used to be reachable only by clicking that card, which
+// made the profile and the app preferences fight over one target.
+const SETTINGS_NAV: NavItem = { id: "settings", label: "Settings", icon: SettingsIcon };
+
+// legacyPage moved into the router (pushRoute needs it to compare RENDERED
+// pages before aborting in-flight requests); re-exported so existing imports
+// keep working.
+export { legacyPage } from "./router";
+
 export default function App() {
-  const { connected, version, jobs, kpauth, kpUser, kpUserError, ffmpeg, update } = useApp();
+  const { connected, ready, version, jobs, kpauth, kpUser, kpUserError, ffmpeg, update } = useApp();
   const { t } = useI18n();
   // The URL hash is the single source of truth for the active page (and, within
   // a page, the open collection/card) so reloads and browser back/forward
   // restore the exact view.
-  const page = useRoute().page;
+  // Legacy hashes are normalized here, so the rail highlight and the rendered
+  // page always agree on where we are:
+  //   "#/queue"            → the Library, which absorbed the queue;
+  //   "#/discover/b/<id>"  → Bookmarks, and
+  //   "#/discover/c/<id>"  → Collections, back when a folder or a подборка
+  //                          opened inside the Catalog. Both pages read their id
+  //                          off the route regardless of the page segment, so an
+  //                          old link still lands on the right one.
+  const route = useRoute();
+  const rawPage = route.page;
+  const page: Page = legacyPage(rawPage, route.bookmarkId, route.collectionId);
   const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem("sidebarCollapsed") === "1");
   const toggleCollapsed = () =>
     setCollapsed((v) => {
@@ -79,25 +135,23 @@ export default function App() {
             {collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
           </button>
         </div>
-        <nav className="mt-6 flex-1 space-y-1">
-          {NAV.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => navigate(n.id)}
-              title={collapsed ? t(n.label) : undefined}
-              className={clsx("nav-item relative w-full", collapsed && "justify-center px-0", page === n.id && "nav-item-active")}
+        <nav className="mt-6 flex-1">
+          {NAV.map((group, i) => (
+            <div
+              key={i}
+              className={clsx("space-y-1", i > 0 && "mt-3 border-t border-white/[0.06] pt-3")}
             >
-              <n.icon className="h-[18px] w-[18px] shrink-0" />
-              {!collapsed && <span className="flex-1 text-left">{t(n.label)}</span>}
-              {n.id === "queue" && activeJobs > 0 &&
-                (collapsed ? (
-                  <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-gold-500" />
-                ) : (
-                  <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-gold-500 px-1.5 text-[10px] font-bold leading-none text-ink-950">
-                    {activeJobs}
-                  </span>
-                ))}
-            </button>
+              {group.map((n) => (
+                <SideNavItem
+                  key={n.id}
+                  item={n}
+                  collapsed={collapsed}
+                  active={page === n.id}
+                  badge={n.id === "library" ? activeJobs : 0}
+                  onClick={() => navigate(n.id)}
+                />
+              ))}
+            </div>
           ))}
         </nav>
         <ProfileCard
@@ -105,68 +159,93 @@ export default function App() {
           kpauth={kpauth}
           kpUser={kpUser}
           kpUserError={kpUserError}
-          onClick={() => navigate("settings")}
+          active={page === "profile"}
+          onClick={() => navigate("profile")}
         />
+        <nav className="space-y-1">
+          <SideNavItem
+            item={SETTINGS_NAV}
+            collapsed={collapsed}
+            active={page === SETTINGS_NAV.id}
+            onClick={() => navigate(SETTINGS_NAV.id)}
+          />
+        </nav>
         <SystemFooter
           ffmpegFound={ffmpeg.ffmpegFound}
           version={version}
           connected={connected}
+          ready={ready}
           collapsed={collapsed}
+          updateLatest={update?.updateAvailable ? update.latest || "" : ""}
           onOpenSettings={() => navigate("settings")}
         />
       </aside>
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex transform-gpu items-center gap-3 border-b border-white/[0.06] bg-ink-950/70 px-4 py-3 backdrop-blur-md md:px-8">
-          {/* Mobile nav */}
-          <div className="flex items-center gap-1 md:hidden">
-            <Brand compact />
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            {update?.updateAvailable && (
+        {/* Mobile top bar — the desktop rail is hidden here, so this row carries the
+            brand, the same nav entries, and the update nudge. Desktop has no top
+            bar at all: the rail already holds nav, account, health and updates,
+            and the language switch now lives in Settings. */}
+        <div className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-2 md:hidden">
+          <Brand compact />
+          <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {[...NAV_FLAT, SETTINGS_NAV].map((n) => (
               <button
-                onClick={() => navigate("settings")}
-                className="chip border-gold-500/30 bg-gold-500/[0.12] text-gold-300 hover:bg-gold-500/[0.2]"
-                title={t("A new version is available")}
+                key={n.id}
+                onClick={() => navigate(n.id)}
+                className={clsx(
+                  "flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm",
+                  page === n.id ? "bg-gold-500/[0.14] text-gold-300" : "text-slate-400",
+                )}
               >
-                <ArrowUpCircle className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">{t("Update {v}", { v: update.latest || "" })}</span>
-                <span className="sm:hidden">{t("Update")}</span>
+                <n.icon className="h-4 w-4" />
+                {t(n.label)}
               </button>
-            )}
-            <LangSwitcher />
-          </div>
-        </header>
-
-        {/* Mobile tab bar */}
-        <nav className="flex items-center gap-1 overflow-x-auto border-b border-white/[0.06] px-3 py-2 md:hidden">
-          {NAV.map((n) => (
+            ))}
+          </nav>
+          {update?.updateAvailable && (
             <button
-              key={n.id}
-              onClick={() => navigate(n.id)}
-              className={clsx(
-                "flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm",
-                page === n.id ? "bg-gold-500/[0.14] text-gold-300" : "text-slate-400",
-              )}
+              onClick={() => navigate("settings")}
+              className="chip shrink-0 border-gold-500/30 bg-gold-500/[0.12] text-gold-300 hover:bg-gold-500/[0.2]"
+              title={t("A new version is available")}
             >
-              <n.icon className="h-4 w-4" />
-              {t(n.label)}
+              <ArrowUpCircle className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{t("Update {v}", { v: update.latest || "" })}</span>
             </button>
-          ))}
-        </nav>
+          )}
+        </div>
 
         <main className="flex-1 px-4 py-6 md:px-8 md:py-8">
+          {/* Starting a download used to jump to the Library, which threw away
+              whatever the user was browsing after a single click. Queueing is a
+              background act, so no page moves the user anywhere any more: the
+              title card stays open and reports the outcome on its own download
+              button, and the rail badge counts the running jobs for anyone who
+              wants to look. */}
+          {page === "tops" && (
+            <TopsPage onSignIn={() => navigate("profile")} onOpenSettings={() => navigate("settings")} />
+          )}
           {page === "discover" && (
-            <DiscoverPage onStarted={() => navigate("queue")} onOpenSettings={() => navigate("settings")} />
+            <DiscoverPage onSignIn={() => navigate("profile")} onOpenSettings={() => navigate("settings")} />
           )}
-          {page === "download" && (
-            <DownloadPage onStarted={() => navigate("queue")} onSignIn={() => navigate("settings")} />
+          {page === "collections" && (
+            <CollectionsPage onSignIn={() => navigate("profile")} onOpenSettings={() => navigate("settings")} />
           )}
-          {page === "queue" && <QueuePage onNew={() => navigate("download")} />}
-          {page === "library" && <LibraryPage />}
+          {page === "watching" && (
+            <WatchingPage onSignIn={() => navigate("profile")} onOpenSettings={() => navigate("settings")} />
+          )}
+          {page === "bookmarks" && (
+            <BookmarksPage onSignIn={() => navigate("profile")} onOpenSettings={() => navigate("settings")} />
+          )}
+          {page === "history" && (
+            <HistoryPage onSignIn={() => navigate("profile")} onOpenSettings={() => navigate("settings")} />
+          )}
+          {page === "download" && <DownloadPage onSignIn={() => navigate("profile")} />}
+          {page === "library" && <LibraryPage onNew={() => navigate("download")} />}
           {page === "doctor" && <DoctorPage />}
           {page === "settings" && <SettingsPage />}
+          {page === "profile" && <ProfilePage />}
         </main>
       </div>
 
@@ -180,7 +259,7 @@ export default function App() {
 // favicon.svg the browser tab uses and that package-macos.sh bakes into
 // AppIcon.icns. Stays visible even when the sidebar is collapsed.
 function BrandMark() {
-  return <img src="./favicon.svg" alt="kino.pub" className="h-9 w-9 shrink-0 rounded-xl shadow-glow" />;
+  return <img src="./favicon.svg" alt="kino.watch" className="h-9 w-9 shrink-0 rounded-xl shadow-glow" />;
 }
 
 function Brand({ compact }: { compact?: boolean }) {
@@ -189,39 +268,79 @@ function Brand({ compact }: { compact?: boolean }) {
     <div className="flex items-center gap-2.5">
       <BrandMark />
       <div className={clsx(compact && "hidden sm:block")}>
-        <div className="text-sm font-bold leading-tight text-slate-100">kino.pub</div>
+        <div className="text-sm font-bold leading-tight text-slate-100">kino.watch</div>
         <div className="text-[11px] leading-tight text-slate-500">{t("downloader")}</div>
       </div>
     </div>
   );
 }
 
+// SideNavItem is one row of the desktop rail. Shared by the main nav list and
+// the pinned Settings entry so both stay pixel-identical.
+function SideNavItem({
+  item,
+  collapsed,
+  active,
+  badge = 0,
+  onClick,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  active: boolean;
+  badge?: number;
+  onClick: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <button
+      onClick={onClick}
+      title={collapsed ? t(item.label) : undefined}
+      className={clsx("nav-item relative w-full", collapsed && "justify-center px-0", active && "nav-item-active")}
+    >
+      <item.icon className="h-[18px] w-[18px] shrink-0" />
+      {!collapsed && <span className="flex-1 text-left">{t(item.label)}</span>}
+      {badge > 0 &&
+        (collapsed ? (
+          <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-gold-500" />
+        ) : (
+          <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-gold-500 px-1.5 text-[10px] font-bold leading-none text-ink-950">
+            {badge}
+          </span>
+        ))}
+    </button>
+  );
+}
+
 // ProfileCard shows the signed-in account with subscription days, or a sign-in
-// prompt when logged out. Both states collapse to a single icon/avatar.
+// prompt when logged out. Both states collapse to a single icon/avatar, and both
+// lead to the Profile page — app preferences have their own nav entry.
 function ProfileCard({
   collapsed,
   kpauth,
   kpUser,
   kpUserError,
+  active: isActive,
   onClick,
 }: {
   collapsed: boolean;
   kpauth: KPStatus;
   kpUser: KPUser | null;
   kpUserError: boolean;
+  active: boolean;
   onClick: () => void;
 }) {
   const { t } = useI18n();
 
   if (!kpauth.loggedIn) {
-    // A bare "Sign in" button gave no hint that it opens Settings. Spell that
-    // out with a subtitle and a chevron so the destination is obvious.
+    // A bare "Sign in" button gave no hint where it leads. Spell the destination
+    // out with a subtitle and a chevron.
     return (
       <button
         onClick={onClick}
-        title={collapsed ? t("Sign in in Settings") : undefined}
+        title={collapsed ? t("Sign in in Profile") : undefined}
         className={clsx(
           "mb-2 flex items-center gap-2.5 rounded-xl border border-gold-500/25 bg-gold-500/[0.08] p-2.5 text-gold-300 transition hover:bg-gold-500/[0.16]",
+          isActive && "ring-1 ring-gold-500/40",
           collapsed && "justify-center",
         )}
       >
@@ -230,7 +349,7 @@ function ProfileCard({
           <>
             <span className="min-w-0 flex-1 text-left">
               <span className="block text-sm font-semibold leading-tight">{t("Sign in")}</span>
-              <span className="block text-[11px] font-medium leading-tight text-gold-300/70">{t("in Settings")}</span>
+              <span className="block text-[11px] font-medium leading-tight text-gold-300/70">{t("in Profile")}</span>
             </span>
             <ChevronRight className="h-4 w-4 shrink-0 text-gold-300/60" />
           </>
@@ -240,16 +359,17 @@ function ProfileCard({
   }
 
   // Logged in, but the profile (and therefore subscription) isn't known yet:
-  // either the first fetch is in flight or the kino.pub host is unreachable
+  // either the first fetch is in flight or the kino.watch host is unreachable
   // (e.g. VPN off). Say so honestly rather than defaulting to "No subscription".
   if (!kpUser) {
-    const status = kpUserError ? t("Can't reach kino.pub") : t("Checking subscription…");
+    const status = kpUserError ? t("Can't reach kino.watch") : t("Checking subscription…");
     return (
       <button
         onClick={onClick}
         title={collapsed ? `${t("Signed in")} · ${status}` : undefined}
         className={clsx(
           "mb-2 flex items-center gap-2.5 rounded-xl border border-white/[0.06] bg-white/[0.03] p-2 text-left transition hover:bg-white/[0.06]",
+          isActive && "border-gold-500/30 bg-gold-500/[0.1]",
           collapsed && "justify-center",
         )}
       >
@@ -289,6 +409,7 @@ function ProfileCard({
       title={collapsed ? `${name} · ${active ? t("{n} days left", { n: days }) : t("No subscription")}` : undefined}
       className={clsx(
         "mb-2 flex items-center gap-2.5 rounded-xl border border-white/[0.06] bg-white/[0.03] p-2 text-left transition hover:bg-white/[0.06]",
+        isActive && "border-gold-500/30 bg-gold-500/[0.1]",
         collapsed && "justify-center",
       )}
     >
@@ -307,106 +428,154 @@ function ProfileCard({
   );
 }
 
+// OFFLINE_GRACE_MS is how long the SSE link may be down before we say so. It
+// outlasts the store's own 1.5s reconnect delay, so a page load (which starts
+// disconnected) and a routine reconnect both pass in silence — only a link
+// that stays down gets a banner.
+const OFFLINE_GRACE_MS = 3000;
+
+// useSettled reports `value` only after it has held for delayMs — a flag that
+// flickers on and off faster than that never reaches the UI.
+export function useSettled(value: boolean, delayMs: number): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!value) {
+      setSettled(false);
+      return;
+    }
+    const id = window.setTimeout(() => setSettled(true), delayMs);
+    return () => window.clearTimeout(id);
+  }, [value, delayMs]);
+  return settled;
+}
+
 function SystemFooter({
   ffmpegFound,
   version,
   connected,
+  ready,
   collapsed,
+  updateLatest,
   onOpenSettings,
 }: {
   ffmpegFound: boolean;
   version: string;
   connected: boolean;
+  /** False until the first snapshot lands — see the store's `ready`. */
+  ready: boolean;
   collapsed: boolean;
+  /** Newer version on offer, or "" when the app is up to date. */
+  updateLatest: string;
   onOpenSettings: () => void;
 }) {
   const { t } = useI18n();
+  // A fresh page starts disconnected and with ffmpeg unknown, so rendering those
+  // zero values verbatim flashed both alarms for the split second before the
+  // first snapshot arrived. Neither problem is reported until it's actually
+  // known: ffmpeg waits for the snapshot, the link waits out the grace period.
+  const offline = useSettled(!connected, OFFLINE_GRACE_MS);
+  const ffmpegMissing = ready && !ffmpegFound;
+  // "Everything works" is not news: when the app is live and ffmpeg is present,
+  // both facts collapse into one quiet dot next to the version (details in the
+  // tooltip). Only a real problem — the page went stale, or ffmpeg is missing
+  // and downloads can't run — earns a row of its own, with the fix attached.
+  const healthy = ready && connected && ffmpegFound;
+  const okTitle = `${t("App connected")} · ${t("ffmpeg ready")}`;
+
   if (collapsed) {
     return (
       <div className="mt-2 flex flex-col items-center gap-2 border-t border-white/[0.06] pt-3">
-        <span
-          title={connected ? t("App connected") : t("Reconnecting to app…")}
-          className={clsx(
-            "grid h-7 w-7 place-items-center rounded-lg",
-            connected ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-400/10 text-amber-400 animate-pulse-soft",
-          )}
-        >
-          {connected ? <PlugZap className="h-3.5 w-3.5" /> : <Unplug className="h-3.5 w-3.5" />}
-        </span>
-        {/* ffmpeg present → a plain status dot; missing → a button that jumps to
-            the Settings install, so the fix is reachable even when collapsed. */}
-        {ffmpegFound ? (
+        {healthy ? (
           <span
-            title={t("ffmpeg ready")}
-            className="grid h-7 w-7 place-items-center rounded-lg bg-emerald-500/10 text-emerald-400"
-          >
-            <Film className="h-3.5 w-3.5" />
-          </span>
+            title={okTitle}
+            className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_1px_rgba(52,211,153,0.6)]"
+          />
         ) : (
+          <>
+            {offline && (
+              <span
+                title={t("Reconnecting to app…")}
+                className="grid h-7 w-7 place-items-center rounded-lg bg-amber-400/10 text-amber-400 animate-pulse-soft"
+              >
+                <Unplug className="h-3.5 w-3.5" />
+              </span>
+            )}
+            {ffmpegMissing && (
+              <button
+                onClick={onOpenSettings}
+                title={t("ffmpeg missing — install it in Settings")}
+                className="grid h-7 w-7 place-items-center rounded-lg bg-ember-500/10 text-ember-400 transition hover:bg-ember-500/20"
+              >
+                <Film className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </>
+        )}
+        {updateLatest && (
           <button
             onClick={onOpenSettings}
-            title={t("ffmpeg missing — install it in Settings")}
-            className="grid h-7 w-7 place-items-center rounded-lg bg-ember-500/10 text-ember-400 transition hover:bg-ember-500/20"
+            title={t("Update {v}", { v: updateLatest })}
+            className="grid h-7 w-7 place-items-center rounded-lg bg-gold-500/10 text-gold-300 transition hover:bg-gold-500/20"
           >
-            <Film className="h-3.5 w-3.5" />
+            <ArrowUpCircle className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
     );
   }
+
   return (
     <div className="mt-2 space-y-1.5 border-t border-white/[0.06] pt-3">
-      <div className="space-y-0.5 rounded-xl border border-white/[0.06] bg-white/[0.02] p-1.5">
-        {/* Link to the local app backend (SSE) — not the kino.pub/internet
-            connection. Green means this page is receiving live updates. */}
-        <div className="flex items-center gap-2.5 px-1.5 py-1">
-          <span
-            className={clsx(
-              "grid h-7 w-7 shrink-0 place-items-center rounded-lg",
-              connected ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-400/10 text-amber-400",
-            )}
-          >
-            {connected ? <PlugZap className="h-4 w-4" /> : <Unplug className="h-4 w-4" />}
-          </span>
-          <span className="flex-1 text-[13px] font-medium text-slate-300">
-            {connected ? t("App connected") : t("Reconnecting to app…")}
-          </span>
-          <span
-            className={clsx(
-              "h-1.5 w-1.5 rounded-full",
-              connected
-                ? "bg-emerald-400 shadow-[0_0_6px_1px_rgba(52,211,153,0.6)]"
-                : "bg-amber-400 animate-pulse-soft",
-            )}
-          />
+      {/* The link to the local app backend (SSE) — not the kino.watch/internet
+          connection. Surfaced only while it's down, since a live page is the
+          normal state and saying so every second teaches the user nothing. */}
+      {offline && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-amber-400/20 bg-amber-400/[0.07] px-2 py-1.5">
+          <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
+          <span className="flex-1 text-[12px] font-medium text-amber-200">{t("Reconnecting to app…")}</span>
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 animate-pulse-soft" />
         </div>
-        {/* ffmpeg — a static row when present; a button that jumps to the
-            Settings install when missing, so the fix is one obvious click away. */}
-        {ffmpegFound ? (
-          <div className="flex items-center gap-2.5 px-1.5 py-1">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-emerald-500/10 text-emerald-400">
-              <Film className="h-4 w-4" />
-            </span>
-            <span className="flex-1 text-[13px] font-medium text-slate-300">{t("ffmpeg ready")}</span>
-          </div>
-        ) : (
-          <button
-            onClick={onOpenSettings}
-            title={t("ffmpeg missing — install it in Settings")}
-            className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition hover:bg-white/[0.06]"
-          >
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-ember-500/10 text-ember-400">
-              <Film className="h-4 w-4" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium leading-tight text-slate-300">{t("ffmpeg missing")}</span>
-              <span className="block text-[11px] font-medium leading-tight text-ember-400">{t("Install in Settings")}</span>
-            </span>
-            <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />
-          </button>
-        )}
+      )}
+
+      {/* ffmpeg missing means downloads can't be assembled at all — the one
+          system fact worth a full row, and it comes with its own fix. */}
+      {ffmpegMissing && (
+        <button
+          onClick={onOpenSettings}
+          title={t("ffmpeg missing — install it in Settings")}
+          className="flex w-full items-center gap-2.5 rounded-xl border border-ember-500/25 bg-ember-500/[0.07] px-2 py-1.5 text-left transition hover:bg-ember-500/[0.14]"
+        >
+          <Film className="h-4 w-4 shrink-0 text-ember-400" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[12px] font-medium leading-tight text-slate-200">{t("ffmpeg missing")}</span>
+            <span className="block text-[11px] font-medium leading-tight text-ember-400">{t("Install in Settings")}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />
+        </button>
+      )}
+
+      {/* The update nudge used to sit in the top header; with that bar gone it
+          lands here, next to the version it's about, and leads to the same
+          Settings card that performs the update. */}
+      {updateLatest && (
+        <button
+          onClick={onOpenSettings}
+          title={t("A new version is available")}
+          className="flex w-full items-center gap-2.5 rounded-xl border border-gold-500/25 bg-gold-500/[0.07] px-2 py-1.5 text-left transition hover:bg-gold-500/[0.14]"
+        >
+          <ArrowUpCircle className="h-4 w-4 shrink-0 text-gold-400" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[12px] font-medium leading-tight text-slate-200">{t("Update available")}</span>
+            <span className="block truncate text-[11px] font-medium leading-tight text-gold-300/80">{updateLatest}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />
+        </button>
+      )}
+
+      <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-600" title={healthy ? okTitle : undefined}>
+        {healthy && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_1px_rgba(52,211,153,0.6)]" />}
+        <span>{version}</span>
       </div>
-      <div className="text-center text-[11px] text-slate-600">{version}</div>
     </div>
   );
 }

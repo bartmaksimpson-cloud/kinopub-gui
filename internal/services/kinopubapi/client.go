@@ -24,26 +24,26 @@ type Tokens struct {
 func (t Tokens) Valid() bool { return t.AccessToken != "" }
 
 // ErrAuthorizationPending is returned by PollDeviceToken while the user has not
-// yet confirmed the device code on kino.pub/device.
+// yet confirmed the device code on kino.watch/device.
 var ErrAuthorizationPending = errors.New("authorization_pending")
 
-// ErrDeviceAuthError is returned by PollDeviceToken when kino.pub reports a
+// ErrDeviceAuthError is returned by PollDeviceToken when kino.watch reports a
 // terminal authorization error (expired code, access denied, device limit,
 // etc.) — as opposed to a transient transport failure, which is retryable.
-var ErrDeviceAuthError = errors.New("kino.pub device authorization error")
+var ErrDeviceAuthError = errors.New("kino.watch device authorization error")
 
 // ErrNotAuthenticated indicates no usable access/refresh token is available.
-var ErrNotAuthenticated = errors.New("kino.pub API: not authenticated")
+var ErrNotAuthenticated = errors.New("kino.watch API: not authenticated")
 
-// ErrRefreshRejected indicates the refresh token was rejected by kino.pub (the
+// ErrRefreshRejected indicates the refresh token was rejected by kino.watch (the
 // session is dead server-side and the user must sign in again).
-var ErrRefreshRejected = errors.New("kino.pub API: refresh token rejected")
+var ErrRefreshRejected = errors.New("kino.watch API: refresh token rejected")
 
-// Client talks to the kino.pub JSON API. It manages the OAuth token set,
+// Client talks to the kino.watch JSON API. It manages the OAuth token set,
 // refreshing it transparently before expiry and persisting refreshed tokens via
 // the optional persist hook.
 //
-// kino.pub rotates (and invalidates) the refresh token on every refresh, so
+// kino.watch rotates (and invalidates) the refresh token on every refresh, so
 // concurrent refreshes would lock the account out. All refreshes are therefore
 // serialized through refreshMu with a re-check, collapsing a burst of expiring
 // requests into a single refresh.
@@ -145,14 +145,14 @@ func (c *Client) RequestDeviceCode(ctx context.Context) (DeviceCode, error) {
 		return DeviceCode{}, err
 	}
 	if out.Error != "" {
-		return DeviceCode{}, fmt.Errorf("kino.pub auth: %s: %s", out.Error, out.ErrorDescription)
+		return DeviceCode{}, fmt.Errorf("kino.watch auth: %s: %s", out.Error, out.ErrorDescription)
 	}
 	if out.UserCode == "" || out.Code == "" {
-		return DeviceCode{}, errors.New("kino.pub auth: empty device code response")
+		return DeviceCode{}, errors.New("kino.watch auth: empty device code response")
 	}
 	vu := out.VerificationURI
 	if vu == "" {
-		vu = "https://kino.pub/device"
+		vu = "https://kino.watch/device"
 	}
 	itv := out.Interval
 	if itv <= 0 {
@@ -193,6 +193,10 @@ func (c *Client) PollDeviceToken(ctx context.Context, deviceCode string) (Tokens
 	return tk, nil
 }
 
+// refreshTimeout bounds a token refresh on its own detached budget (see
+// refresh).
+const refreshTimeout = 30 * time.Second
+
 // refresh exchanges the refresh token for a new token set.
 func (c *Client) refresh(ctx context.Context) error {
 	c.mu.Lock()
@@ -201,6 +205,15 @@ func (c *Client) refresh(ctx context.Context) error {
 	if rt == "" {
 		return ErrNotAuthenticated
 	}
+	// The exchange runs detached from the caller's context, on its own budget.
+	// kino.watch rotates the refresh token on every exchange: a POST canceled
+	// after send but before the response is read (a navigation abort reaching
+	// r.Context(), or the tail of the calling request's deadline) would lose the
+	// new pair for good — the old refresh token is already dead server-side, and
+	// the next 401 turns into a forced logout.
+	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
+	defer cancel()
+	ctx = refreshCtx
 	var out tokenResp
 	status, err := c.oauth(ctx, "/oauth2/token", url.Values{
 		"grant_type":    {"refresh_token"},
@@ -224,7 +237,7 @@ func (c *Client) refresh(ctx context.Context) error {
 		if status >= 400 && status < 500 {
 			return fmt.Errorf("%w (HTTP %d)", ErrRefreshRejected, status)
 		}
-		return errors.New("kino.pub refresh: empty token response")
+		return errors.New("kino.watch refresh: empty token response")
 	}
 	c.setTokens(tokensFrom(out))
 	return nil
@@ -265,7 +278,7 @@ func (c *Client) oauth(ctx context.Context, path string, vals url.Values, out an
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("kino.pub auth request: %w", err)
+		return 0, fmt.Errorf("kino.watch auth request: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -273,7 +286,7 @@ func (c *Client) oauth(ctx context.Context, path string, vals url.Values, out an
 		c.debug(fmt.Sprintf("POST %s?%s -> HTTP %d: %s", path, grantOf(vals), resp.StatusCode, snippet(body)))
 	}
 	if jerr := json.Unmarshal(body, out); jerr != nil {
-		return resp.StatusCode, fmt.Errorf("kino.pub auth: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return resp.StatusCode, fmt.Errorf("kino.watch auth: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return resp.StatusCode, nil
 }
@@ -293,7 +306,7 @@ func needsRefresh(tk Tokens) bool {
 
 // ensureToken returns a valid access token, refreshing it if it is within 60s
 // of expiry. Refreshes are serialized (refreshMu) and re-checked so a burst of
-// concurrent callers triggers a single refresh — critical because kino.pub
+// concurrent callers triggers a single refresh — critical because kino.watch
 // invalidates the old refresh token on every refresh.
 func (c *Client) ensureToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
@@ -344,13 +357,29 @@ func (c *Client) refreshIfCurrent(ctx context.Context, usedToken string) error {
 	return c.refresh(ctx)
 }
 
+// apiRequestTimeout bounds a SINGLE API read attempt — not the whole call: the
+// original GET, the token refresh a 401 triggers (which runs on its own
+// detached budget, see refresh) and the retried GET each get their own window,
+// so an expired token on a slow link cannot eat the retry's time and fail a
+// request whose every leg would have succeeded on its own.
+//
+// The shared HTTP client caps requests at 30s. That is far too long here:
+// kino.watch is routinely unreachable without a VPN, and every blocked call held
+// a browser socket for the full half minute. Browsers allow only ~6 connections
+// per origin, so a few such calls — three tabs opened in a row — starved the
+// pool, and unrelated work queued behind them: a local library scan the server
+// answers in 11ms appeared to "scan" for half a minute. An unreachable host
+// fails at the dial (8s cap in httpx), so this budget mostly bounds slow
+// responses — 20s leaves room for a long serial's multi-MB /v1/items on a slow
+// VPN, which the earlier 10s cut off.
+//
+// Only API reads are affected. Downloads use their own HTTP client.
+const apiRequestTimeout = 20 * time.Second
+
 // get performs an authenticated GET against /v1/<path> and decodes into out. A
 // 401 triggers a single token refresh + retry.
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
-	if err := c.doGet(ctx, path, q, out, false); err != nil {
-		return err
-	}
-	return nil
+	return c.doGet(ctx, path, q, out, false)
 }
 
 func (c *Client) doGet(ctx context.Context, path string, q url.Values, out any, retried bool) error {
@@ -366,32 +395,45 @@ func (c *Client) doGet(ctx context.Context, path string, q url.Values, out any, 
 	if enc := q.Encode(); enc != "" {
 		reqURL += "?" + enc
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	status, body, err := c.fetch(ctx, reqURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("kino.watch API %s: %w", path, err)
 	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("kino.pub API %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 
-	if resp.StatusCode == http.StatusUnauthorized && !retried {
+	if status == http.StatusUnauthorized && !retried {
 		if rerr := c.refreshIfCurrent(ctx, token); rerr != nil {
-			return fmt.Errorf("kino.pub API %s: unauthorized: %w", path, rerr)
+			return fmt.Errorf("kino.watch API %s: unauthorized: %w", path, rerr)
 		}
 		q.Del("access_token")
 		return c.doGet(ctx, path, q, out, true)
 	}
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("kino.pub API %s: HTTP %d: %s", path, resp.StatusCode, snippet(body))
+	if status >= 400 {
+		return fmt.Errorf("kino.watch API %s: HTTP %d: %s", path, status, snippet(body))
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("kino.pub API %s: decode: %w", path, err)
+		return fmt.Errorf("kino.watch API %s: decode: %w", path, err)
 	}
 	return nil
+}
+
+// fetch performs one bounded GET attempt and returns the status and body.
+// apiRequestTimeout applies to this attempt alone; a caller that already set a
+// tighter deadline still wins (WithTimeout keeps the earlier one).
+func (c *Client) fetch(ctx context.Context, reqURL string) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	return resp.StatusCode, body, nil
 }
 
 func snippet(b []byte) string {

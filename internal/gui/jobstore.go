@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/httpx"
 )
 
 // persistedJob is the on-disk form of a Job: everything needed to restore its
@@ -20,6 +21,7 @@ type persistedJob struct {
 	Title      string            `json:"title,omitempty"`
 	PosterURL  string            `json:"posterUrl,omitempty"`
 	OutputPath string            `json:"outputPath,omitempty"`
+	SeriesDir  string            `json:"seriesDir,omitempty"`
 	Quality    string            `json:"quality,omitempty"`
 	CreatedAt  time.Time         `json:"createdAt"`
 	StartedAt  *time.Time        `json:"startedAt,omitempty"`
@@ -104,6 +106,7 @@ func persistedFrom(j *Job) persistedJob {
 		Title:      j.title,
 		PosterURL:  j.posterURL,
 		OutputPath: j.outputPath,
+		SeriesDir:  j.seriesDir,
 		Quality:    j.quality,
 		CreatedAt:  j.createdAt,
 		StartedAt:  j.startedAt,
@@ -124,12 +127,29 @@ func persistedFrom(j *Job) persistedJob {
 // are still on disk, so Resume continues where it left off. Paused/failed/
 // canceled/completed keep their status (failed keeps Retry).
 func restoreJob(p persistedJob) *Job {
+	// Entries saved under the old domain still resolve (the item id is what
+	// matters), but the card should show the current one — rewriting on restore
+	// migrates the stored queue on its next save.
+	p.URL = httpx.CanonicalSiteURL(p.URL)
+	p.Cfg.InputURL = httpx.CanonicalSiteURL(p.Cfg.InputURL)
+	// Queues written by older versions carry that version's user tuning —
+	// Concurrency up to 16 parallel episodes, a fixed inter-request delay, a
+	// chunked-mode opt-out. The current build fixes these centrally (see
+	// episodeConcurrency in config.go): buildRunConfig enforces them at creation
+	// time, so restore must enforce them too, or a resumed legacy card floods the
+	// CDN with the very parallelism those knobs were removed to prevent.
+	p.Cfg.MaxConcurrency = episodeConcurrency
+	p.Cfg.MaxRetries = episodeRetries
+	p.Cfg.MinIntervalMS = 0
+	p.Cfg.NoChunked = false
+
 	j := newJob(p.ID, p.URL, p.Cfg)
 	j.title = p.Title
 	j.posterURL = p.PosterURL
 	if p.OutputPath != "" {
 		j.outputPath = p.OutputPath
 	}
+	j.seriesDir = p.SeriesDir
 	if p.Quality != "" {
 		j.quality = p.Quality
 	}

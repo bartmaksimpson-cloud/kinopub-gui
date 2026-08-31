@@ -39,7 +39,7 @@ func TestSeriesMatchesItem(t *testing.T) {
 		}
 	})
 	t.Run("by input url", func(t *testing.T) {
-		s := LibrarySeries{InputURL: "https://kino.pub/item/view/77"}
+		s := LibrarySeries{InputURL: "https://kino.watch/item/view/77"}
 		if !seriesMatchesItem(s, "77") {
 			t.Error("should match the id embedded in the InputURL")
 		}
@@ -97,8 +97,11 @@ func TestReadLibraryState(t *testing.T) {
 	if got.Title != "Pretty Title" || got.SeriesID != "42" || got.Type != "serial" {
 		t.Errorf("metadata not applied: %+v", got)
 	}
-	if got.Count != 2 || got.TotalBytes != 15 {
-		t.Errorf("count/bytes = %d/%d, want 2/15", got.Count, got.TotalBytes)
+	// Both records are counted, but only the 5 bytes actually on disk: S1E2's
+	// file is gone, so charging its 10 bytes would claim space the entry no
+	// longer occupies.
+	if got.Count != 2 || got.TotalBytes != 5 {
+		t.Errorf("count/bytes = %d/%d, want 2/5", got.Count, got.TotalBytes)
 	}
 	// UpdatedAt is the latest CompletedAt.
 	if !got.UpdatedAt.Equal(t1) {
@@ -251,4 +254,197 @@ func TestResolveLibraryDir(t *testing.T) {
 			t.Error("a folder outside the configured roots must be rejected")
 		}
 	})
+}
+
+func TestLibraryItemID(t *testing.T) {
+	cases := []struct {
+		name string
+		in   LibrarySeries
+		want string
+	}{
+		{"input url wins", LibrarySeries{SeriesID: "42", InputURL: "https://kino.watch/item/view/77"}, "77"},
+		{"falls back to series id", LibrarySeries{SeriesID: "42"}, "42"},
+		{"unparsable url falls back", LibrarySeries{SeriesID: "42", InputURL: "https://example.com/x"}, "42"},
+		{"nothing to go on", LibrarySeries{}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := libraryItemID(c.in); got != c.want {
+				t.Errorf("libraryItemID() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestPersistLibraryMetadata(t *testing.T) {
+	updated := time.Date(2024, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	newState := func(meta *domain.SeriesMetadata) domain.DownloadState {
+		return domain.DownloadState{
+			Series:   "42",
+			Metadata: meta,
+			Completed: map[string]domain.CompletedRec{
+				"S1E1": {Season: 1, Episode: 1, Path: "s1e1.mkv", Bytes: 5},
+			},
+		}
+	}
+	readBack := func(t *testing.T, dir string) domain.DownloadState {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, stateFileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got domain.DownloadState
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	t.Run("fills missing genres and type", func(t *testing.T) {
+		dir := t.TempDir()
+		writeStateFile(t, dir, newState(&domain.SeriesMetadata{Title: "Show", UpdatedAt: updated}))
+
+		if err := persistLibraryMetadata(filepath.Join(dir, stateFileName), []string{"Drama"}, "serial"); err != nil {
+			t.Fatal(err)
+		}
+
+		got := readBack(t, dir)
+		if len(got.Metadata.Genres) != 1 || got.Metadata.Genres[0] != "Drama" {
+			t.Errorf("genres = %v, want [Drama]", got.Metadata.Genres)
+		}
+		if got.Metadata.Type != "serial" {
+			t.Errorf("type = %q, want serial", got.Metadata.Type)
+		}
+		// Everything else must survive: UpdatedAt orders the library, and the
+		// completed records are the library entry itself.
+		if !got.Metadata.UpdatedAt.Equal(updated) {
+			t.Errorf("UpdatedAt = %v, want %v", got.Metadata.UpdatedAt, updated)
+		}
+		if got.Metadata.Title != "Show" {
+			t.Errorf("Title = %q, want Show", got.Metadata.Title)
+		}
+		if len(got.Completed) != 1 {
+			t.Errorf("completed records = %d, want 1", len(got.Completed))
+		}
+	})
+
+	t.Run("never overwrites what is already recorded", func(t *testing.T) {
+		dir := t.TempDir()
+		writeStateFile(t, dir, newState(&domain.SeriesMetadata{
+			Title:  "Show",
+			Type:   "movie",
+			Genres: []string{"Comedy"},
+		}))
+
+		if err := persistLibraryMetadata(filepath.Join(dir, stateFileName), []string{"Drama"}, "serial"); err != nil {
+			t.Fatal(err)
+		}
+
+		got := readBack(t, dir)
+		if got.Metadata.Type != "movie" {
+			t.Errorf("type = %q, want the recorded movie", got.Metadata.Type)
+		}
+		if len(got.Metadata.Genres) != 1 || got.Metadata.Genres[0] != "Comedy" {
+			t.Errorf("genres = %v, want the recorded [Comedy]", got.Metadata.Genres)
+		}
+	})
+
+	t.Run("leaves a state file without metadata alone", func(t *testing.T) {
+		dir := t.TempDir()
+		writeStateFile(t, dir, newState(nil))
+
+		if err := persistLibraryMetadata(filepath.Join(dir, stateFileName), []string{"Drama"}, "serial"); err != nil {
+			t.Fatal(err)
+		}
+		if got := readBack(t, dir); got.Metadata != nil {
+			t.Errorf("metadata = %+v, want nil (nothing to attach to)", got.Metadata)
+		}
+	})
+
+	t.Run("reports a missing state file", func(t *testing.T) {
+		if err := persistLibraryMetadata(filepath.Join(t.TempDir(), stateFileName), nil, "movie"); err == nil {
+			t.Error("want an error for a state file that does not exist")
+		}
+	})
+}
+
+// A state file with no completed episodes is not a library entry: it is what a
+// run that resolved and then downloaded nothing leaves behind, and listing it
+// showed a title the user never downloaded (filed under "movies", since the
+// zero-episode fallback in isMovieDownload reads it as a single-part download).
+func TestReadLibraryState_SkipsStateWithoutCompletedEpisodes(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "Never Downloaded")
+	writeStateFile(t, dir, domain.DownloadState{
+		Series: "42",
+		Metadata: &domain.SeriesMetadata{
+			Title:     "Never Downloaded",
+			Type:      "serial",
+			UpdatedAt: time.Unix(500, 0),
+		},
+		Completed: map[string]domain.CompletedRec{},
+	})
+	if _, ok := readLibraryState(filepath.Join(dir, stateFileName)); ok {
+		t.Error("a state file with no completed episodes must not become a library entry")
+	}
+}
+
+func TestScanLibrary_SkipsSeriesWithoutCompletedEpisodes(t *testing.T) {
+	root := t.TempDir()
+	writeStateFile(t, filepath.Join(root, "Downloaded"), domain.DownloadState{
+		Series:    "1",
+		Completed: map[string]domain.CompletedRec{"S1E1": {Season: 1, Episode: 1}},
+	})
+	// Metadata only — a download that never produced a file.
+	writeStateFile(t, filepath.Join(root, "Started Only"), domain.DownloadState{
+		Series:    "2",
+		Metadata:  &domain.SeriesMetadata{Title: "Started Only"},
+		Completed: map[string]domain.CompletedRec{},
+	})
+	// Missing "completed" key entirely (nil map after unmarshal).
+	writeStateFile(t, filepath.Join(root, "No Completed Key"), domain.DownloadState{Series: "3"})
+
+	resp := scanLibrary([]string{root})
+	if len(resp.Series) != 1 {
+		t.Fatalf("want only the series with a completed episode, got %d: %+v", len(resp.Series), resp.Series)
+	}
+	if resp.Series[0].SeriesID != "1" {
+		t.Errorf("wrong entry kept: %q", resp.Series[0].SeriesID)
+	}
+	// The item lookup is built on the same scan, so it must agree.
+	if eps := downloadedForItem([]string{root}, "2"); len(eps.Episodes) != 0 {
+		t.Errorf("an empty download must report no episodes, got %+v", eps.Episodes)
+	}
+}
+
+// The voiceover an episode came out in has to survive the trip from the state
+// file to the card, together with the flag saying it was a substitute.
+func TestDownloadedForItem_CarriesVoiceover(t *testing.T) {
+	root := t.TempDir()
+	writeStateFile(t, filepath.Join(root, "Show"), domain.DownloadState{
+		Series: "77",
+		Completed: map[string]domain.CompletedRec{
+			"S1E1": {Season: 1, Episode: 1, Audio: []string{"01. Многоголосый. AniLibria (RUS)"}},
+			"S1E2": {Season: 1, Episode: 2, Audio: []string{"02. Двухголосый (RUS)"}, AudioFallback: true},
+		},
+	})
+
+	byKey := map[string]DownloadedEpisode{}
+	for _, ep := range downloadedForItem([]string{root}, "77").Episodes {
+		byKey[ep.Key] = ep
+	}
+
+	first, ok := byKey["S1E1"]
+	if !ok || len(first.Audio) != 1 || first.Audio[0] != "01. Многоголосый. AniLibria (RUS)" {
+		t.Errorf("S1E1 audio = %+v", first)
+	}
+	if first.AudioFallback {
+		t.Error("S1E1 got the requested voiceover — not a substitute")
+	}
+
+	second, ok := byKey["S1E2"]
+	if !ok || !second.AudioFallback {
+		t.Errorf("S1E2 should be marked as substituted: %+v", second)
+	}
 }

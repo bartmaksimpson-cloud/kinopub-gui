@@ -13,7 +13,7 @@ import (
 
 // ---------------------------------------------------------------------------
 // Normalized DTOs (stable contract for the frontend, decoupled from the raw
-// kino.pub schema).
+// kino.watch schema).
 // ---------------------------------------------------------------------------
 
 // DiscoverItem is a catalog card.
@@ -25,7 +25,7 @@ type DiscoverItem struct {
 	Year            int      `json:"year"`
 	Poster          string   `json:"poster"`
 	Director        string   `json:"director,omitempty"`
-	Rating          float64  `json:"rating"` // kino.pub local rating
+	Rating          float64  `json:"rating"` // kino.watch local rating
 	ImdbRating      float64  `json:"imdbRating"`
 	KinopoiskRating float64  `json:"kinopoiskRating"`
 	Genres          []string `json:"genres,omitempty"`
@@ -36,7 +36,7 @@ type DiscoverItem struct {
 	Episode         int      `json:"episode,omitempty"`   // history last-watched episode
 }
 
-// splitTitle separates a kino.pub combined "Русское / Original" title.
+// splitTitle separates a kino.watch combined "Русское / Original" title.
 func splitTitle(s string) (title, original string) {
 	if i := strings.Index(s, " / "); i > 0 {
 		return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+3:])
@@ -149,7 +149,7 @@ func toDiscoverItem(it kinopubapi.Item) DiscoverItem {
 		Year:            it.Year,
 		Poster:          it.Posters.Best(),
 		Director:        it.Director,
-		Rating:          float64(it.RatingPercent) / 10, // kino.pub liked% → 0–10 score
+		Rating:          float64(it.RatingPercent) / 10, // kino.watch liked% → 0–10 score
 		ImdbRating:      it.IMDBRating,
 		KinopoiskRating: it.KinopoiskRate,
 		Genres:          titleNames(it.Genres),
@@ -457,6 +457,39 @@ func (s *Server) handleDiscoverItems(w http.ResponseWriter, r *http.Request) {
 		Page:       queryInt(r, "page", 1),
 		Perpage:    queryInt(r, "perpage", 0),
 	})
+	if err != nil {
+		s.kpFail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pageOf(res))
+}
+
+// handleDiscoverTop serves one of kino.watch's own top lists (свежее / горячее /
+// популярное). These are separate endpoints rather than a sort over the whole
+// catalog, so they match what the site shows — at the cost of taking only a
+// content type: genre, country, year and rating filters do not apply.
+func (s *Server) handleDiscoverTop(w http.ResponseWriter, r *http.Request) {
+	// Validate before resolving the client: both inputs are mandatory upstream,
+	// and a bad kind would otherwise be pasted into the API's URL path.
+	kind, ok := kinopubapi.ParseTopKind(r.URL.Query().Get("kind"))
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "kind must be one of fresh, hot, popular")
+		return
+	}
+	// The API rejects a top list without a type ("Отсутствуют обязательные
+	// параметры: type"); catch it here so it reads as a bad request instead of
+	// surfacing as an upstream 502.
+	typ := strings.TrimSpace(r.URL.Query().Get("type"))
+	if typ == "" {
+		writeErr(w, http.StatusBadRequest, "type is required for a top list")
+		return
+	}
+	client, ok := s.kpClientOrErr(w)
+	if !ok {
+		return
+	}
+	s.ensureUHD(r.Context(), client)
+	res, err := client.Top(r.Context(), kind, typ, queryInt(r, "page", 1), queryInt(r, "perpage", 0))
 	if err != nil {
 		s.kpFail(w, err)
 		return
