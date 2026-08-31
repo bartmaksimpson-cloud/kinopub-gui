@@ -1,13 +1,13 @@
 <p align="right"><a href="README.md">Русский</a> · <b>English</b></p>
 
-# kino.pub downloader · GUI
+# kino.watch downloader · GUI
 
-**An app for downloading from [kino.pub](https://kino.pub), with a real interface.** Run it and it opens as a browser tab. Browse the catalog, preview a title right in the player, and download — movies and whole series, with every audio track and subtitle. While it downloads you see per-episode progress: speed and how much is left.
+**An app for downloading from [kino.watch](https://kino.watch), with a real interface.** Run it and it opens as a browser tab. Browse the catalog, preview a title right in the player, and download — movies and whole series, with every audio track and subtitle. While it downloads you see per-episode progress: speed and how much is left.
 
 You sign in once, with a short device code. Nothing heavy under it — a single file, no Electron, no Node (a Go server with the React UI built in). Run it and you're set.
 
 <p align="center">
-  <img src="docs/screenshots/catalog.png" alt="kino.pub downloader" width="900">
+  <img src="docs/screenshots/catalog.png" alt="kino.watch downloader" width="900">
 </p>
 
 <p align="center">
@@ -26,22 +26,22 @@ You sign in once, with a short device code. Nothing heavy under it — a single 
 - ▶️ **Built-in player** — preview any title right in the app before you download it. The stream goes through the app itself, so there's nothing to set up in the browser.
 - 🎬 **Full-fidelity downloads** — every audio track, every subtitle, whole multi-season series — picked from the catalog or pasted as a direct link.
 - ⚡ **Live progress** — per-episode and per-track percentages, speed, and ETA — all updating in real time.
+- ⏯️ **Control on the fly** — pause, cancel and retry each episode on its own; the queue is persisted to disk and survives a restart — downloads resume right where they stopped.
 - 🔊 **Pick your dubs** — choose which voiceovers to keep right on the title page (remembered for next time) or in a timed picker when downloading from a link; your choice is generalized across episodes.
-- 🩺 **Doctor** — verify downloads against the state file and repair inconsistencies, with a readable report.
-- 📚 **Library** — browse what you've already downloaded, with sizes, resolutions and missing-file detection; open a finished file or reveal its folder.
-- 🔐 **Sign in once** — a short device-code login; tokens are stored encrypted and machine-bound. Local features (Library, Doctor, Settings) work without signing in.
+- 📚 **Library** — live downloads and everything already on disk on one page: sizes, resolutions and missing-file detection; open a finished file or reveal its folder.
+- 🔐 **Sign in once** — a short device-code login; tokens are stored encrypted and machine-bound. Local features (Library, Settings) work without signing in.
 - 🌍 **Bilingual** — English & Russian, switchable in one click (remembered between sessions).
 - 📦 **Single binary** — the UI is embedded; self-updates from GitHub releases.
 
 ## Screenshots
 
-| Catalog browser | Live queue |
+| Catalog browser | Title card |
 | --- | --- |
-| ![Catalog](docs/screenshots/catalog.png) | ![Queue](docs/screenshots/queue.png) |
+| ![Catalog](docs/screenshots/catalog.png) | ![Title](docs/screenshots/title.png) |
 
-| Doctor | Settings |
+| Live downloads | Settings |
 | --- | --- |
-| ![Doctor](docs/screenshots/doctor.png) | ![Settings](docs/screenshots/settings.png) |
+| ![Downloads](docs/screenshots/downloads.png) | ![Settings](docs/screenshots/settings.png) |
 
 ---
 
@@ -59,7 +59,7 @@ You sign in once, with a short device code. Nothing heavy under it — a single 
 
   **Don't want to install it by hand?** If ffmpeg is missing, hit **Settings → System → Install ffmpeg** (the same button is on the Download page) — the app downloads a ready-made build for your system and uses it from then on. Nothing is written into the system, no admin rights needed.
 - A browser (the app opens in whatever is your default).
-- A kino.pub account with an active subscription — without it there's no catalog, no playback, no downloads.
+- A kino.watch account with an active subscription — without it there's no catalog, no playback, no downloads.
 
 ## Install & run
 
@@ -148,29 +148,29 @@ with `make`.)
 
 ### 1. Sign in
 
-Local features — **Library, Doctor, Settings, the folder picker** — work without signing in. The catalog, search, the in-app player and downloads need an account.
+Local features — **Library, Settings, the folder picker** — work without signing in. The catalog, search, the in-app player and downloads need an account.
 
 Click **Sign in** (top-right or in the sidebar) and:
 
-1. The app shows a short **device code** and a link (`kino.pub/device`).
-2. Open that link in any browser where you're logged into kino.pub and enter the code.
+1. The app shows a short **device code** and a link (`kino.watch/device`).
+2. Open that link in any browser where you're logged into kino.watch and enter the code.
 3. Confirm — the app detects it within a couple of seconds and you're in.
 
-The device shows up in your kino.pub account's device list as `kinopub-gui (your-hostname)`. Tokens are stored encrypted, tied to your computer, and kept at `~/.config/kinopub/credentials.enc`. Sign out any time from Settings.
+The device shows up in your kino.watch account's device list as `kinopub-gui (your-hostname)`. Tokens are stored encrypted, tied to your computer, and kept at `~/.config/kinopub/credentials.enc`. Sign out any time from Settings.
 
-> **kino.pub is often unavailable without a VPN.** If sign-in, the catalog or downloads hang or time out, enable a VPN or set a proxy (Settings → Proxy, or per-download in Advanced options). The UI shows a reminder and detects timeouts.
+> **kino.watch is often unavailable without a VPN.** If sign-in, the catalog or downloads hang or time out, enable a VPN or set a proxy (Settings → Proxy, or per-download in Advanced options). The UI shows a reminder and detects timeouts.
 
 ### 2. Find something
 
 Open **Catalog** to search and browse. Filter by type, genre, country, year range and IMDb/Kinopoisk rating; browse tops and collections; or jump back into your **history** and **continue-watching** rows. Open a title to see its details, ratings, available voiceovers and the full season/episode tree — and hit ▶ to **preview it in the built-in player** before downloading.
 
-You can also paste a kino.pub link directly on the **Download** page if you already have one.
+You can also paste a kino.watch link directly on the **Download** page if you already have one.
 
 ### 3. Download
 
-From a title's detail view (or the Download page), tick the seasons/episodes you want, pick a quality, and hit **Start download**. Progress shows up under **Queue** — overall, per-episode, and per track, with speed and ETA.
+From a title's detail view (or the Download page), tick the seasons/episodes you want, pick a quality, and hit **Start download**. Progress shows up in the **Offline library**, in a "Downloading" section above what's on disk — overall, per-episode, and per track, with speed and ETA. Any episode can be paused, canceled or bumped ahead without touching its siblings; the queue survives an app restart and resumes where it stopped.
 
-An **Advanced options** panel covers the fine print: container (MKV / MP4), concurrency, retries, request throttle, proxy (HTTP/HTTPS/SOCKS5), *Force re-download* and *No chunked download* toggles, verbose logs, and an extra-ffmpeg-args field. It's pre-filled from your Settings, so most of the time you can leave it alone.
+An **Advanced options** panel covers the fine print: container (MKV / MP4), proxy (HTTP/HTTPS/SOCKS5), a *Force re-download* toggle, verbose logs, and an extra-ffmpeg-args field. It's pre-filled from your Settings, so most of the time you can leave it alone.
 
 ### 4. Audio tracks
 
@@ -181,14 +181,17 @@ You pick dubs/voiceovers right where you start the download:
 
 Your choice is generalized across episodes and matched by language: if a chosen dub is missing from some episode, the engine falls back to another track in the same language. By default every track is kept.
 
-### 5. Doctor & Library
+### 5. Library
 
-- **Doctor** verifies files against the state file (missing, truncated, size mismatch, incomplete record, orphan `.tmp`) and repairs them in one click — a *Repair* toggle (drop broken entries and files) and a *Clean .tmp* toggle. It checks file presence and recorded size on disk — a fast, offline pass with no network round-trip.
-- **Library** scans your output folders for `.kinopub-state.json` files and lists everything you've downloaded, flagging files that have gone missing on disk. Open or reveal any file straight from the list.
+The **Library** scans your output folders and shows everything you've downloaded — posters, sizes, and flags for files that have gone missing on disk. Live downloads sit on the same page, above what's on disk. Open or reveal any file straight from the list; an episode or a whole title you no longer need can be deleted from disk right there.
 
 ### 6. Settings
 
-Defaults for new downloads (output folder, quality, container, concurrency, retries, throttle, proxy) plus extra folders to scan in the Library, the kino.pub sign-in, the ffmpeg installer and the software updater. Stored at `~/.config/kinopub/gui.json`.
+Defaults for new downloads (output folder, quality, container, proxy) plus extra folders to scan in the Library, the kino.watch sign-in, the ffmpeg installer and the software updater. Stored at `~/.config/kinopub/gui.json`.
+
+There is no speed to tune — the app works it out itself. The structure is fixed: one title at a time (the rest wait in a queue you can reorder) and two episodes in parallel inside it. More doesn't go faster — the link is already busy — it just splits it and multiplies connections to the CDN.
+
+How many segments are fetched at once, though, is tuned to your link at runtime: the downloader measures real throughput in 4-second windows and raises concurrency while it keeps improving; on a plateau it settles, and on a drop it steps back. Every half minute it probes again, because links change under you (Wi-Fi to Ethernet, a video call ending). The ceiling is 16, the floor is one slot per track so audio always downloads alongside video. If the CDN answers 429 or 503, concurrency is halved immediately and the pause comes from the `Retry-After` header — exactly what the server asked for, not a number we invented. On top of that, network failures are retried with growing backoff (1→2→4→8→16s).
 
 ---
 
@@ -201,7 +204,7 @@ Defaults for new downloads (output folder, quality, container, concurrency, retr
 └──────────────────────────────┘                                    └─────┬───────────┬─────┘
                                                                           │ drives    │ API
                                                           ┌───────────────▼──┐   ┌────▼──────────────┐
-                                                          │ kinopub engine    │   │ kino.pub API      │
+                                                          │ kinopub engine    │   │ kino.watch API      │
                                                           │ internal/app +    │   │ services/kinopubapi│
                                                           │ services (HLS,    │   │ (device login,    │
                                                           │ downloader, …)    │   │ discovery, stream)│
@@ -210,7 +213,7 @@ Defaults for new downloads (output folder, quality, container, concurrency, retr
 
 The server doesn't run the engine as a separate process — it works with it directly, in one program: download progress streams to the browser live, the audio picker pops up and holds the download until you answer, and the engine's log shows up in each job's log view.
 
-Catalog and playback go through `internal/services/kinopubapi`, a small client for the kino.pub API: it keeps you signed in and refreshes the tokens on its own. The player gets video through `/api/hls`, a proxy inside the app itself; every link is signed, so it can't be reused as someone's open proxy.
+Catalog and playback go through `internal/services/kinopubapi`, a small client for the kino.watch API: it keeps you signed in and refreshes the tokens on its own. The player gets video through `/api/hls`, a proxy inside the app itself; every link is signed, so it can't be reused as someone's open proxy.
 
 ### Project layout
 
@@ -221,10 +224,9 @@ internal/
   app/kinopub/      engine composition root (App.Run)
   domain/           ports & models
   services/
-    kinopubapi/     kino.pub API client (device login, discovery, stream resolution)
+    kinopubapi/     kino.watch API client (device login, discovery, stream resolution)
     downloader/     HLS + file download, ffmpeg muxing
     hlsdownloader/  HLS manifest parsing & segment download
-    doctor/         verify & repair downloads
     statestore/     per-series .kinopub-state.json
     …               outputlayout, scheduler, progress, proxyprovider
   gui/              REST + SSE server, job manager, discovery, HLS player proxy, reporter/chooser
@@ -247,7 +249,7 @@ make dev            # → http://localhost:5173
 
 ## Credits
 
-- The download engine and the hard parts it grew from (HLS, retries, encrypted creds, doctor): **[niazlv/kinopub-downloader](https://github.com/niazlv/kinopub-downloader)**.
+- The download engine and the hard parts it grew from (HLS, retries, encrypted creds): **[niazlv/kinopub-downloader](https://github.com/niazlv/kinopub-downloader)**.
 - The web interface, the catalog/player integration, and the packaging (`cmd/kinopub-gui`, `internal/gui`, `internal/services/kinopubapi`, `web/`): this project.
 
 ## License
