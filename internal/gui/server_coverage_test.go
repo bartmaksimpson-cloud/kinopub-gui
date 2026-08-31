@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
@@ -18,15 +19,21 @@ import (
 func TestHandleCreateJob_SeasonExpressionCheckedAgainstCoverage(t *testing.T) {
 	const url = "https://kino.watch/item/view/409"
 
+	// The handler checks that ffmpeg exists before queueing; point it at the
+	// one executable guaranteed to exist on every platform — this test binary —
+	// so the presence check never decides the test's outcome.
+	fakeFFmpeg, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	post := func(t *testing.T, s *Server, out, seasons string) *httptest.ResponseRecorder {
 		t.Helper()
 		body, err := json.Marshal(StartRequest{RunRequest: RunRequest{
 			URL:        url,
 			OutputPath: out,
 			Seasons:    seasons,
-			// A path that exists on any unix-ish box, so the ffmpeg presence
-			// check does not decide the test's outcome.
-			FFmpegPath: "/bin/ls",
+			FFmpegPath: fakeFFmpeg,
 		}})
 		if err != nil {
 			t.Fatal(err)
