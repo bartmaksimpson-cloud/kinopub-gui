@@ -117,3 +117,26 @@ func TestFitArgsFor_PassesStandard4K(t *testing.T) {
 		t.Errorf("настоящий 4K должен копироваться без изменений, получено %v", got)
 	}
 }
+
+// Настоящий 4K60 в HEVC железо показывает: чипы, которые упираются в 4Kp30 на
+// H.264, тянут HEVC до 4Kp60 и выше. Делить такую частоту — выбросить плавность,
+// которую плеер способен показать.
+func TestFitArgsFor_KeepsHighFrameRateForHEVC(t *testing.T) {
+	if got := fitArgsFor(
+		fitSource{Width: 3840, Height: 2160, FPS: 60, Kbps: 25000, Codec: "h265"},
+		fitLimits{Height: 2160, FPS: 30},
+		"ffmpeg",
+	); got != nil {
+		t.Errorf("HEVC 4K60 трогать не надо, получено %v", got)
+	}
+
+	// А тот же поток в H.264 — за пределом бюджета декодера, делим.
+	joined := strings.Join(fitArgsFor(
+		fitSource{Width: 3840, Height: 2160, FPS: 60, Kbps: 25000, Codec: "h264"},
+		fitLimits{Height: 2160, FPS: 30},
+		"ffmpeg",
+	), " ")
+	if !strings.Contains(joined, "-r 30") {
+		t.Errorf("H.264 4K60 должен быть поделён: %q", joined)
+	}
+}

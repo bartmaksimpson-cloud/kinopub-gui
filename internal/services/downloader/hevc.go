@@ -84,6 +84,10 @@ type fitSource struct {
 	Height int
 	FPS    float64
 	Kbps   int
+	// Codec is what the source carries ("h264", "h265", …). It decides whether a
+	// high frame rate is a problem at all: hardware decoders budget AVC and HEVC
+	// separately, and the AVC budget is the small one.
+	Codec string
 }
 
 // fitLimits is what the player can actually take. Height is the decoder's frame
@@ -125,7 +129,11 @@ func fitArgsFor(src fitSource, lim fitLimits, ffmpegPath string) []string {
 	if outWidth == 0 {
 		outWidth = hfrWidth + 1 // unknown width: a height limit only fires on big frames anyway
 	}
-	if lim.FPS > 0 && src.FPS > lim.FPS && outWidth > hfrWidth {
+	// HEVC is exempt: the same chips that stop at 4Kp30 for H.264 do 4Kp60 and
+	// beyond for HEVC (Realtek rtd6748, Amlogic S905X4/X5M — all of them), so
+	// halving a genuine 4K60 HEVC stream would throw away smoothness the player
+	// can actually show.
+	if lim.FPS > 0 && src.FPS > lim.FPS && outWidth > hfrWidth && !isHEVCSource(src.Codec) {
 		rate = src.FPS
 		for rate > lim.FPS {
 			rate /= 2
