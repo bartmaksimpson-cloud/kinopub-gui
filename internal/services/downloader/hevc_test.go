@@ -33,13 +33,13 @@ func TestEffectiveArgsSkipsEncoderWhenSourceIsHEVC(t *testing.T) {
 		Source: domain.MediaSource{Codec: "h265"},
 	}}
 
-	d := &Downloader{preferHEVC: true, extraArgs: manual}
+	d := &Downloader{transcodeHEVC: true, extraArgs: manual}
 	if got := d.effectiveArgs(job); !reflect.DeepEqual(got, manual) {
 		t.Errorf("HEVC source: effectiveArgs = %v, want just the manual args %v", got, manual)
 	}
 
 	// Not asked for at all → likewise untouched, whatever the source is.
-	d = &Downloader{preferHEVC: false, extraArgs: manual}
+	d = &Downloader{transcodeHEVC: false, extraArgs: manual}
 	job.Media.Source.Codec = "h264"
 	if got := d.effectiveArgs(job); !reflect.DeepEqual(got, manual) {
 		t.Errorf("flag off: effectiveArgs = %v, want %v", got, manual)

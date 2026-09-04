@@ -38,25 +38,26 @@ const (
 
 // Downloader implements domain.Downloader and domain.JobExecutor.
 type Downloader struct {
-	run        RunFunc
-	proxy      domain.ProxyProvider
-	logger     domain.Logger
-	ffmpegPath string
-	auth       domain.RequestAuth
-	extraArgs  []string
-	preferHEVC bool
-	noChunked  bool
-	httpClient *http.Client
+	run           RunFunc
+	proxy         domain.ProxyProvider
+	logger        domain.Logger
+	ffmpegPath    string
+	auth          domain.RequestAuth
+	extraArgs     []string
+	transcodeHEVC bool
+	noChunked     bool
+	httpClient    *http.Client
 }
 
 // Option configures the Downloader.
 type Option func(*Downloader)
 
-// WithPreferHEVC asks for HEVC video. Sources that already carry it are left
-// alone; only the rest are re-encoded.
-func WithPreferHEVC(v bool) Option {
+// WithTranscodeHEVC re-encodes sources that are not already HEVC. A source that
+// carries it is left alone whatever this says: converting HEVC to HEVC would
+// cost hours and lose quality for nothing.
+func WithTranscodeHEVC(v bool) Option {
 	return func(d *Downloader) {
-		d.preferHEVC = v
+		d.transcodeHEVC = v
 	}
 }
 
@@ -65,7 +66,7 @@ func WithPreferHEVC(v bool) Option {
 // they can still override it.
 func (d *Downloader) effectiveArgs(job domain.Job) []string {
 	var args []string
-	if d.preferHEVC && !isHEVCSource(job.Media.Source.Codec) {
+	if d.transcodeHEVC && !isHEVCSource(job.Media.Source.Codec) {
 		args = append(args, hevcEncoderArgs(d.ffmpegPath)...)
 	}
 	return append(args, d.extraArgs...)

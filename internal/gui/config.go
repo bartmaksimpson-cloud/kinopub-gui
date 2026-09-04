@@ -222,10 +222,14 @@ type RunRequest struct {
 	FFmpegArgs string         `json:"ffmpegArgs"`
 	// TranscodeHEVC turns the checkbox into encoder arguments server-side, so the
 	// UI never has to know which encoder this platform actually has.
-	TranscodeHEVC bool   `json:"transcodeHevc"`
-	FFmpegPath    string `json:"ffmpegPath"`
-	UserAgent     string `json:"userAgent"`
-	Verbosity     string `json:"verbosity"`
+	TranscodeHEVC bool `json:"transcodeHevc"`
+	// ConvertMissing additionally re-encodes the episodes that have no HEVC file.
+	// Separate because it is the expensive half of the same wish: taking the HEVC
+	// files a mixed season already has is free, converting the rest is not.
+	ConvertMissing bool   `json:"convertMissing"`
+	FFmpegPath     string `json:"ffmpegPath"`
+	UserAgent      string `json:"userAgent"`
+	Verbosity      string `json:"verbosity"`
 }
 
 // buildRunConfig translates a RunRequest into a validated domain.RunConfig.
@@ -300,6 +304,7 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		UserAgent:        ua,
 		FFmpegExtraArgs:  extraFFmpeg,
 		PreferHEVC:       req.TranscodeHEVC,
+		TranscodeToHEVC:  req.TranscodeHEVC && req.ConvertMissing,
 		AudioPref:        audioPref,
 		AudioMenu:        req.AudioMenu,
 		UseAPI:           true,

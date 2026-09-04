@@ -45,6 +45,9 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
     dryRun: false,
     ffmpegArgs: "",
     transcodeHevc: settings.transcodeHevc,
+    // A bare link carries no per-episode coverage, and the hint on this page
+    // already promises a conversion when no HEVC file exists — so honour it.
+    convertMissing: true,
     ffmpegPath: "",
     userAgent: "",
     verbosity: settings.verbosity,

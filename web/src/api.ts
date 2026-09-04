@@ -249,7 +249,7 @@ export interface DiscoverDetail extends DiscoverItem {
   // just downloads it, on the others it means a long re-encode.
   qualitiesHevc?: string[];
   // Every downloadable file as the service offers it: resolution plus codec.
-  variants?: { quality: string; codec: string; height: number }[];
+  variants?: { quality: string; codec: string; height: number; episodes: number }[];
 }
 
 export interface DiscoverCollection {
@@ -306,6 +306,7 @@ export interface RunRequest {
   dryRun: boolean;
   ffmpegArgs: string;
   transcodeHevc: boolean;
+  convertMissing: boolean;
   ffmpegPath: string;
   userAgent: string;
   verbosity: string;

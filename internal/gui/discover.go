@@ -118,6 +118,10 @@ type DiscoverVariant struct {
 	Quality string `json:"quality"` // "2160p", "1080p", …
 	Codec   string `json:"codec"`   // "hevc" or "h264"; "" when the service omits it
 	Height  int    `json:"height"`  // used only for ordering
+	// Episodes counts how many episodes offer this exact variant. Fewer than the
+	// title has means a mixed season: picking it converts the rest, and the user
+	// deserves to know that before starting a long download.
+	Episodes int `json:"episodes"`
 }
 
 // DiscoverCollection is a подборка card.
@@ -341,8 +345,11 @@ func collectQualities(it kinopubapi.Item) ([]string, []string, []DiscoverVariant
 	maxH := map[string]int{}
 	hasHEVC := map[string]bool{}
 	var variants []DiscoverVariant
-	seen := map[string]bool{}
+	index := map[string]int{} // variant key → position in variants
 	add := func(files []kinopubapi.File) {
+		// One episode counts once per variant even when the service lists the
+		// same quality and codec twice for it.
+		counted := map[string]bool{}
 		for _, f := range files {
 			if f.Quality == "" {
 				continue
@@ -356,9 +363,16 @@ func collectQualities(it kinopubapi.Item) ([]string, []string, []DiscoverVariant
 				hasHEVC[f.Quality] = true
 			}
 			codec := normalizeCodec(f.Codec)
-			if key := f.Quality + "/" + codec; !seen[key] {
-				seen[key] = true
+			key := f.Quality + "/" + codec
+			pos, known := index[key]
+			if !known {
+				pos = len(variants)
+				index[key] = pos
 				variants = append(variants, DiscoverVariant{Quality: f.Quality, Codec: codec, Height: f.H})
+			}
+			if !counted[key] {
+				counted[key] = true
+				variants[pos].Episodes++
 			}
 		}
 	}

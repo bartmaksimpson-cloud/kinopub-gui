@@ -39,7 +39,7 @@ import {
   writeAudioPref,
 } from "../lib/audio";
 import { initialEpisodeSelection, isQueued, nothingLeftToQueue, queueCoverage } from "../lib/queue";
-import { Modal, PosterImage } from "./ui";
+import { Modal, PosterImage, Toggle } from "./ui";
 import { Ratings } from "./Ratings";
 import { Player } from "./Player";
 
@@ -99,6 +99,8 @@ export function TitleDetail({
   // the global setting so the usual answer needs no clicking.
   // Selected "<quality>|<codec>" from the variant menu; "" is auto (best).
   const [variantKey, setVariantKey] = useState("");
+  // Whether to re-encode the episodes the chosen variant does not cover.
+  const [convertMissing, setConvertMissing] = useState(false);
   // One menu instead of a resolution list plus a codec guess: the service hands
   // us the real files, so the choice offered is exactly what can be downloaded.
   const variants = detail?.variants ?? [];
@@ -107,6 +109,12 @@ export function TitleDetail({
   const chosen = variants.find((v) => `${v.quality}|${v.codec}` === variantKey);
   // On auto the menu made no codec choice, so the global preference decides.
   const wantHEVC = chosen ? chosen.codec === "hevc" : settings.transcodeHevc;
+  // A season is not always encoded uniformly: the chosen variant may cover only
+  // part of it. The rest can only be had by converting, which is the slow half —
+  // so it is asked for separately instead of happening quietly.
+  const totalEpisodes = detail?.episodeCount ?? 0;
+  const missingEpisodes =
+    chosen && totalEpisodes > 1 ? Math.max(0, totalEpisodes - chosen.episodes) : 0;
 
   // Selected озвучка labels. Empty set → keep every track.
   const [audioSel, setAudioSel] = useState<Set<string>>(new Set());
@@ -396,6 +404,7 @@ export function TitleDetail({
         // The menu already picked a real file, so this only says which of the two
         // codec variants to take — never a re-encode of something the service has.
         transcodeHevc: wantHEVC,
+        convertMissing,
         ffmpegPath: "",
         userAgent: "",
         verbosity: settings.verbosity,
@@ -861,6 +870,9 @@ export function TitleDetail({
                       {detail.variants.map((v) => (
                         <option key={`${v.quality}|${v.codec}`} value={`${v.quality}|${v.codec}`}>
                           {v.codec ? `${v.quality} · ${codecLabel(v.codec)}` : v.quality}
+                          {detail.episodeCount > 1 && v.episodes < detail.episodeCount
+                            ? ` · ${v.episodes}/${detail.episodeCount}`
+                            : ""}
                         </option>
                       ))}
                     </>
@@ -873,6 +885,16 @@ export function TitleDetail({
                   )}
                 </select>
 
+                {missingEpisodes > 0 && (
+                  <Toggle
+                    label={t("Convert the remaining episodes")}
+                    hint={t("{n} episodes have no such file; converting them takes long", {
+                      n: missingEpisodes,
+                    })}
+                    checked={convertMissing}
+                    onChange={setConvertMissing}
+                  />
+                )}
                 {nothingLeft ? (
                   <button
                     className="btn border border-emerald-500/40 bg-emerald-500/[0.16] text-emerald-200 hover:bg-emerald-500/[0.24]"

@@ -86,6 +86,11 @@ type RunConfig struct {
 	// once the episode's source is picked.
 	PreferHEVC bool
 
+	// TranscodeToHEVC re-encodes the episodes PreferHEVC could not satisfy. Kept
+	// apart from it because a mixed season makes the two questions different:
+	// taking the HEVC files that exist is free, converting the rest is not.
+	TranscodeToHEVC bool
+
 	// NoChunked disables the chunked HTTP download mode. When false (default),
 	// progressive MP4 sources are downloaded via HTTP Range requests with
 	// resume capability. When true, all downloads go through ffmpeg directly.
