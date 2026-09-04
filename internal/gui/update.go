@@ -16,35 +16,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/ZioSHik/kinopub-gui/internal/lib/credstore"
 )
 
 // updateRepo is the repository this binary updates from. It is public, so
 // releases are readable without authentication and updating needs no setup at
 // all — see issueRepo, which is the same repository.
 const updateRepo = issueRepo
-
-// githubToken returns the personal access token from the encrypted credential
-// store, or "" when none is set. Read fresh on every check so a token entered
-// in Settings takes effect without a restart.
-func (u *updateChecker) githubToken() string {
-	creds, err := credstore.Load()
-	if err != nil {
-		return ""
-	}
-	return creds.GitHubToken
-}
-
-// authorize adds the token to a request bound for api.github.com when one is
-// stored. The repository is public, so this is never required to read a
-// release — it only lifts the unauthenticated rate limit. Passed to downloadTo
-// as a decorator so the header is set in exactly one place.
-func (u *updateChecker) authorize(req *http.Request) {
-	if tok := u.githubToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
-}
 
 // UpdateStatus describes the result of an update check.
 type UpdateStatus struct {
@@ -196,7 +173,6 @@ func (u *updateChecker) latestRelease(ctx context.Context) (*ghRelease, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "kinopub-gui")
-	u.authorize(req)
 	resp, err := u.httpClient().Do(req)
 	if err != nil {
 		return nil, err
@@ -278,8 +254,7 @@ func (u *updateChecker) apply(ctx context.Context) (string, error) {
 		os.Remove(tmpName) // no-op once renamed into place
 	}()
 
-	assetReq := func(req *http.Request) { u.authorize(req) }
-	sum, err := downloadTo(ctx, u.downloadClient(), assetURL, tmp, 200<<20, assetReq)
+	sum, err := downloadTo(ctx, u.downloadClient(), assetURL, tmp, 200<<20, nil)
 	if err != nil {
 		return "", fmt.Errorf("download: %w", err)
 	}
@@ -291,7 +266,7 @@ func (u *updateChecker) apply(ctx context.Context) (string, error) {
 
 	// Verify against checksums.txt when the release provides one.
 	if checksumsURL != "" {
-		want, cerr := fetchChecksum(ctx, u.httpClient(), checksumsURL, assetName(), assetReq)
+		want, cerr := fetchChecksum(ctx, u.httpClient(), checksumsURL, assetName(), nil)
 		if cerr != nil {
 			return "", fmt.Errorf("checksums: %w", cerr)
 		}

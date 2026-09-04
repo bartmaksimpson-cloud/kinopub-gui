@@ -140,10 +140,6 @@ export interface Settings {
   verbosity: string;
   theme: string;
   libraryDirs: string[] | null;
-  /** Read-only flag: whether a GitHub token is stored (the token itself never leaves the server). */
-  hasGithubToken?: boolean;
-  /** Write-only: "" clears the stored token, omit it to leave it untouched. */
-  githubToken?: string;
 }
 
 export interface Snapshot {
@@ -624,8 +620,9 @@ export const api = {
   deleteLibraryEpisode: (dir: string, key: string) =>
     req<{ deleted: boolean }>("POST", "/api/library/delete-episode", { dir, key }),
   openPath: (path: string, reveal = false) => req<{ ok: boolean }>("POST", "/api/open", { path, reveal }),
+  /** Returns the URL of a prefilled GitHub issue for the given failure. */
   sendCrashReport: (detail?: string) =>
-    req<{ url?: string; duplicate?: boolean; open?: string }>("POST", "/api/crash-report", { detail: detail ?? "" }),
+    req<{ open: string }>("POST", "/api/crash-report", { detail: detail ?? "" }),
   fs: (path: string) => req<FSListing>("GET", `/api/fs?path=${encodeURIComponent(path)}`),
 
   // Official kino.watch API auth (device-code).

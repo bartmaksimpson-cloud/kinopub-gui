@@ -3,7 +3,6 @@ package gui
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -21,8 +20,6 @@ import (
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"github.com/ZioSHik/kinopub-gui/internal/services/kinopubapi"
-
-	"github.com/ZioSHik/kinopub-gui/internal/lib/credstore"
 )
 
 // Server hosts the REST API, the SSE event stream and the embedded SPA.
@@ -415,52 +412,24 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// settingsPayload carries the GitHub token alongside Settings without letting
-// it INTO Settings: that struct is marshalled straight into gui.json in the
-// clear, while the token belongs in the encrypted credential store.
-type settingsPayload struct {
-	Settings
-	// GithubToken is write-only. nil leaves the stored token alone, "" clears
-	// it, anything else replaces it. It is never sent back to the client.
-	GithubToken    *string `json:"githubToken,omitempty"`
-	HasGithubToken bool    `json:"hasGithubToken"`
-}
-
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	out := settingsPayload{Settings: s.settings.get()}
-	if creds, err := credstore.Load(); err == nil {
-		out.HasGithubToken = creds.GitHubToken != ""
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, s.settings.get())
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
-	var in settingsPayload
+	var in Settings
 	if err := decodeJSON(w, r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if in.GithubToken != nil {
-		tok := strings.TrimSpace(*in.GithubToken)
-		if err := credstore.Update(func(c *credstore.Credentials) { c.GitHubToken = tok }); err != nil {
-			writeErr(w, http.StatusInternalServerError, "save token: "+err.Error())
-			return
-		}
-	}
-	saved, err := s.settings.save(in.Settings)
+	saved, err := s.settings.save(in)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.invalidateKPClient() // proxy may have changed → rebuild the client
-	// The broadcast and the response carry Settings only — the token never
-	// travels back out, not even to the client that just set it.
-	out := settingsPayload{Settings: saved}
-	if creds, err := credstore.Load(); err == nil {
-		out.HasGithubToken = creds.GitHubToken != ""
-	}
 	s.hub.broadcast(Event{Type: "settings", Data: saved})
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, saved)
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,39 +1022,28 @@ func (s *Server) libraryDirs() []string {
 // already stripped of tokens and home paths. The app never posts anything
 // itself: submitting is the user's click, in their own browser, under their
 // own account — so no credential has to ship inside the binary.
-// handleCrashReportSend files the crash as an issue directly. It runs only on
-// an explicit click: nothing is ever reported in the background, even to a
-// private repo the user owns.
+// handleCrashReportSend builds the prefilled issue for a failure and hands
+// back its URL: the user submits it in their own browser, under their own
+// account. The app holds no credential of its own — nothing to store, nothing
+// to expire, nothing to leak.
+//
+// detail is optional. With it the UI reports an ordinary job failure, which
+// never reaches crash.log because nothing panicked; without it we fall back to
+// the last recorded crash. Either way the text is redacted here, server-side,
+// before it can reach a public issue.
 func (s *Server) handleCrashReportSend(w http.ResponseWriter, r *http.Request) {
-	// detail is optional: with it the UI reports an ordinary job failure, which
-	// never reaches crash.log because nothing panicked; without it we fall back
-	// to the last recorded crash.
 	var body struct {
 		Detail string `json:"detail"`
 	}
 	if r.ContentLength > 0 {
 		_ = decodeJSON(w, r, &body)
 	}
-	// No token: hand back the prefilled link so the browser path still works
-	// for a job failure, with the same redaction applied.
-	if crashToken() == "" {
-		if u := crashReportURL(s.version, body.Detail); u != "" {
-			writeJSON(w, http.StatusOK, map[string]any{"open": u})
-			return
-		}
+	u := crashReportURL(s.version, body.Detail)
+	if u == "" {
 		writeErr(w, http.StatusBadRequest, "nothing to report")
 		return
 	}
-	issueURL, err := postCrashIssue(r.Context(), s.version, body.Detail)
-	switch {
-	case errors.Is(err, errAlreadyReported):
-		// Not a failure: a repeating panic must not open an issue per tick.
-		writeJSON(w, http.StatusOK, map[string]any{"duplicate": true})
-	case err != nil:
-		writeErr(w, http.StatusBadGateway, err.Error())
-	default:
-		writeJSON(w, http.StatusOK, map[string]any{"url": issueURL})
-	}
+	writeJSON(w, http.StatusOK, map[string]any{"open": u})
 }
 
 func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {

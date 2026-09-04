@@ -627,16 +627,8 @@ export function JobCard({ job }: { job: JobView }) {
                   // never lands in crash.log, since nothing panicked. The
                   // server redacts it and falls back to the last recorded
                   // crash when there is nothing to send.
-                  const sent = await api.sendCrashReport(errorText);
-                  if (sent.open) {
-                    // No token stored — submit it by hand, in the browser.
-                    window.open(sent.open, "_blank", "noopener");
-                  } else if (sent.duplicate) {
-                    toast(t("This crash was already reported."), "info");
-                  } else {
-                    toast(t("Report sent."), "success");
-                    if (sent.url) window.open(sent.url, "_blank", "noopener");
-                  }
+                  const { open } = await api.sendCrashReport(errorText);
+                  window.open(open, "_blank", "noopener");
                 } catch (e: any) {
                   toast(e.message || "Error", "error");
                 }

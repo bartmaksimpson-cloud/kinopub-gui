@@ -1,27 +1,12 @@
 package gui
 
 import (
-	"bytes"
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
-
-	"github.com/ZioSHik/kinopub-gui/internal/lib/credstore"
 )
-
-// githubAPI is the API root, overridden in tests. Reports go to the same host
-// the updater talks to; nothing is ever posted anywhere else.
-var githubAPI = "https://api.github.com"
 
 // issueRepo receives crash reports. It is deliberately separate from
 // updateRepo: releases are served from the public repo so self-update keeps
@@ -139,97 +124,6 @@ func firstLineOf(entry string) string {
 		line = line[:120]
 	}
 	return strings.TrimSpace(line)
-}
-
-// crashToken returns the stored GitHub token, or "" when none is set. The same
-// token the updater uses — it just needs Issues: write added to it.
-func crashToken() string {
-	creds, err := credstore.Load()
-	if err != nil {
-		return ""
-	}
-	return creds.GitHubToken
-}
-
-// reportedMarkPath holds the digest of the last crash filed, so a panic that
-// repeats — a loop recover can fire every tick — does not open one issue per
-// occurrence.
-func reportedMarkPath() (string, error) {
-	dir, err := configDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "crash.reported"), nil
-}
-
-// errAlreadyReported is returned when this exact crash was already filed.
-var errAlreadyReported = fmt.Errorf("this crash has already been reported")
-
-// postCrashIssue files the last crash as an issue and returns its URL. It
-// posts only what crashReportURL would have shown the user in the browser:
-// the same redacted text, so the automatic path can never leak more than the
-// manual one.
-func postCrashIssue(ctx context.Context, version, detail string) (string, error) {
-	token := crashToken()
-	if token == "" {
-		return "", fmt.Errorf("no GitHub token configured")
-	}
-	entry := reportBody(detail)
-	if entry == "" {
-		return "", fmt.Errorf("nothing to report")
-	}
-
-	sum := sha256.Sum256([]byte(entry))
-	digest := hex.EncodeToString(sum[:])
-	markPath, err := reportedMarkPath()
-	if err == nil {
-		if prev, readErr := os.ReadFile(markPath); readErr == nil && strings.TrimSpace(string(prev)) == digest {
-			return "", errAlreadyReported
-		}
-	}
-
-	body, err := json.Marshal(map[string]string{
-		"title": reportTitle(entry, detail),
-		"body": "**Version:** " + version + "\n\n" +
-			"_Filed from the app. Paths and tokens are removed._\n\n" +
-			"```\n" + entry + "\n```",
-	})
-	if err != nil {
-		return "", err
-	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
-		githubAPI+"/repos/"+issueRepo+"/issues", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "kinopub-gui")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("GitHub HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
-	}
-
-	var out struct {
-		HTMLURL string `json:"html_url"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return "", err
-	}
-	if markPath != "" {
-		_ = os.WriteFile(markPath, []byte(digest), 0o600)
-	}
-	return out.HTMLURL, nil
 }
 
 // reportTitle labels the issue honestly: a recovered panic is a crash, a job
