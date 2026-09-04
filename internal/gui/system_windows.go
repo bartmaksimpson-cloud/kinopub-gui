@@ -12,7 +12,7 @@ func listDrives() (FSListing, error) {
 	if err != nil {
 		return FSListing{}, err
 	}
-	var dirs []FSEntry
+	dirs := []FSEntry{}
 	for i := range 26 {
 		if mask&(1<<uint(i)) == 0 {
 			continue

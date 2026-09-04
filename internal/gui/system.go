@@ -104,7 +104,10 @@ func listDir(path string) (FSListing, error) {
 	if err != nil {
 		return FSListing{}, err
 	}
-	listing := FSListing{Path: abs, Parent: filepath.Dir(abs)}
+	// Dirs is initialised (not nil) so an empty folder marshals as [] rather
+	// than null — the picker reads listing.dirs.length directly, and null
+	// there took the whole UI down with a TypeError.
+	listing := FSListing{Path: abs, Parent: filepath.Dir(abs), Dirs: []FSEntry{}}
 	if runtime.GOOS == "windows" && filepath.Dir(abs) == abs {
 		// abs is already a drive root (e.g. "C:\") — filepath.Dir can't go
 		// any higher on the same drive, so point "up" at the drive list.

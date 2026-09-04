@@ -105,6 +105,13 @@ func newSettingsStore() *settingsStore {
 		s.path = filepath.Join(dir, "gui.json")
 		s.load()
 	}
+	// The settings screen shows OutputPath as where downloads go, but nothing
+	// created it until the first download actually ran — so browsing to it (or
+	// listing it) failed with "The system cannot find the file specified".
+	// Best-effort: a bad path is reported later, by the download itself.
+	if s.cur.OutputPath != "" {
+		_ = os.MkdirAll(s.cur.OutputPath, 0o755)
+	}
 	return s
 }
 
