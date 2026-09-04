@@ -64,7 +64,7 @@ func TestDownloadTo(t *testing.T) {
 	defer ts.Close()
 
 	var sb strings.Builder
-	sum, err := downloadTo(context.Background(), ts.Client(), ts.URL, &sb, 1<<20)
+	sum, err := downloadTo(context.Background(), ts.Client(), ts.URL, &sb, 1<<20, nil)
 	if err != nil {
 		t.Fatalf("downloadTo: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestDownloadTo_HTTPError(t *testing.T) {
 	}))
 	defer ts.Close()
 	var sb strings.Builder
-	if _, err := downloadTo(context.Background(), ts.Client(), ts.URL, &sb, 1<<20); err == nil {
+	if _, err := downloadTo(context.Background(), ts.Client(), ts.URL, &sb, 1<<20, nil); err == nil {
 		t.Error("expected error on HTTP 404")
 	}
 }
@@ -95,7 +95,7 @@ func TestDownloadTo_RespectsByteCap(t *testing.T) {
 	}))
 	defer ts.Close()
 	var sb strings.Builder
-	if _, err := downloadTo(context.Background(), ts.Client(), ts.URL, &sb, 10); err != nil {
+	if _, err := downloadTo(context.Background(), ts.Client(), ts.URL, &sb, 10, nil); err != nil {
 		t.Fatalf("downloadTo: %v", err)
 	}
 	if sb.Len() != 10 {
@@ -115,7 +115,7 @@ func TestFetchChecksum(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	got, err := fetchChecksum(context.Background(), ts.Client(), ts.URL, "kinopub-gui-darwin-arm64")
+	got, err := fetchChecksum(context.Background(), ts.Client(), ts.URL, "kinopub-gui-darwin-arm64", nil)
 	if err != nil {
 		t.Fatalf("fetchChecksum: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestFetchChecksum(t *testing.T) {
 		t.Errorf("checksum = %q, want def456", got)
 	}
 	// A name not listed returns "".
-	got, err = fetchChecksum(context.Background(), ts.Client(), ts.URL, "kinopub-gui-windows-amd64.exe")
+	got, err = fetchChecksum(context.Background(), ts.Client(), ts.URL, "kinopub-gui-windows-amd64.exe", nil)
 	if err != nil {
 		t.Fatalf("fetchChecksum: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestFetchChecksum_MatchesByBasename(t *testing.T) {
 		fmt.Fprint(w, body)
 	}))
 	defer ts.Close()
-	got, err := fetchChecksum(context.Background(), ts.Client(), ts.URL, "kinopub-gui-linux-amd64")
+	got, err := fetchChecksum(context.Background(), ts.Client(), ts.URL, "kinopub-gui-linux-amd64", nil)
 	if err != nil {
 		t.Fatalf("fetchChecksum: %v", err)
 	}

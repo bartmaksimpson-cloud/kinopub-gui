@@ -57,6 +57,12 @@ type Credentials struct {
 	// Official kino.watch API (device-code OAuth) token set. Stored alongside the
 	// cookie so both auth paths share one encrypted file. APIExpiry is unix
 	// seconds; zero means unknown.
+	// GitHubToken authorises release downloads from a PRIVATE repo. It lives
+	// here, in the encrypted store, and is entered by the user — never
+	// compiled in: a token inside a published binary is one `strings` away
+	// from handing the repo to whoever downloaded it.
+	GitHubToken string `json:"github_token,omitempty"`
+
 	APIAccessToken  string `json:"api_access_token,omitempty"`
 	APIRefreshToken string `json:"api_refresh_token,omitempty"`
 	APIExpiry       int64  `json:"api_expiry,omitempty"`

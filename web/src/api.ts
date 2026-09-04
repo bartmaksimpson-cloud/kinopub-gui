@@ -140,6 +140,10 @@ export interface Settings {
   verbosity: string;
   theme: string;
   libraryDirs: string[] | null;
+  /** Read-only flag: whether a GitHub token is stored (the token itself never leaves the server). */
+  hasGithubToken?: boolean;
+  /** Write-only: "" clears the stored token, omit it to leave it untouched. */
+  githubToken?: string;
 }
 
 export interface Snapshot {

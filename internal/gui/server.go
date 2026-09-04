@@ -20,6 +20,8 @@ import (
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"github.com/ZioSHik/kinopub-gui/internal/services/kinopubapi"
+
+	"github.com/ZioSHik/kinopub-gui/internal/lib/credstore"
 )
 
 // Server hosts the REST API, the SSE event stream and the embedded SPA.
@@ -412,24 +414,52 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// settingsPayload carries the GitHub token alongside Settings without letting
+// it INTO Settings: that struct is marshalled straight into gui.json in the
+// clear, while the token belongs in the encrypted credential store.
+type settingsPayload struct {
+	Settings
+	// GithubToken is write-only. nil leaves the stored token alone, "" clears
+	// it, anything else replaces it. It is never sent back to the client.
+	GithubToken    *string `json:"githubToken,omitempty"`
+	HasGithubToken bool    `json:"hasGithubToken"`
+}
+
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.settings.get())
+	out := settingsPayload{Settings: s.settings.get()}
+	if creds, err := credstore.Load(); err == nil {
+		out.HasGithubToken = creds.GitHubToken != ""
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
-	var in Settings
+	var in settingsPayload
 	if err := decodeJSON(w, r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	saved, err := s.settings.save(in)
+	if in.GithubToken != nil {
+		tok := strings.TrimSpace(*in.GithubToken)
+		if err := credstore.Update(func(c *credstore.Credentials) { c.GitHubToken = tok }); err != nil {
+			writeErr(w, http.StatusInternalServerError, "save token: "+err.Error())
+			return
+		}
+	}
+	saved, err := s.settings.save(in.Settings)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.invalidateKPClient() // proxy may have changed → rebuild the client
+	// The broadcast and the response carry Settings only — the token never
+	// travels back out, not even to the client that just set it.
+	out := settingsPayload{Settings: saved}
+	if creds, err := credstore.Load(); err == nil {
+		out.HasGithubToken = creds.GitHubToken != ""
+	}
 	s.hub.broadcast(Event{Type: "settings", Data: saved})
-	writeJSON(w, http.StatusOK, saved)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---------------------------------------------------------------------------

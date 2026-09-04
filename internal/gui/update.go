@@ -16,10 +16,43 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ZioSHik/kinopub-gui/internal/lib/credstore"
 )
 
-// updateRepo is the GitHub repository whose releases this binary updates from.
+// updateRepo is the PUBLIC repository this binary updates from when no token
+// is configured. Its releases are readable without authentication, so an
+// ordinary install keeps updating with nothing to set up.
 const updateRepo = "ZioSHik/kinopub-gui"
+
+// githubToken returns the personal access token from the encrypted credential
+// store, or "" when none is set. Read fresh on every check so a token entered
+// in Settings takes effect without a restart.
+func (u *updateChecker) githubToken() string {
+	creds, err := credstore.Load()
+	if err != nil {
+		return ""
+	}
+	return creds.GitHubToken
+}
+
+// repo picks where releases come from: a configured token means the user has
+// their own (private) fork and wants updates from there; without one we stay
+// on the public repo.
+func (u *updateChecker) repo() string {
+	if u.githubToken() != "" {
+		return issueRepo
+	}
+	return updateRepo
+}
+
+// authorize adds the token to a request bound for api.github.com. Passed to
+// downloadTo as a decorator so the header is set in exactly one place.
+func (u *updateChecker) authorize(req *http.Request) {
+	if tok := u.githubToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
 
 // UpdateStatus describes the result of an update check.
 type UpdateStatus struct {
@@ -39,6 +72,7 @@ type ghRelease struct {
 	HTMLURL string `json:"html_url"`
 	Body    string `json:"body"`
 	Assets  []struct {
+		ID                 int64  `json:"id"`
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
 		Size               int64  `json:"size"`
@@ -163,13 +197,14 @@ func (u *updateChecker) fetch(ctx context.Context) (UpdateStatus, error) {
 }
 
 func (u *updateChecker) latestRelease(ctx context.Context) (*ghRelease, error) {
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo)
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", u.repo())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "kinopub-gui")
+	u.authorize(req)
 	resp, err := u.httpClient().Do(req)
 	if err != nil {
 		return nil, err
@@ -208,13 +243,24 @@ func (u *updateChecker) apply(ctx context.Context) (string, error) {
 	var assetURL string
 	var assetSize int64
 	checksumsURL := ""
+	// A private repo's browser_download_url is useless to us: it redirects to
+	// a signed URL that rejects the Authorization header. The asset API
+	// endpoint serves the bytes directly when asked for octet-stream.
+	private := u.githubToken() != ""
+	assetAPI := func(id int64) string {
+		return fmt.Sprintf("https://api.github.com/repos/%s/releases/assets/%d", u.repo(), id)
+	}
 	for _, a := range rel.Assets {
+		url := a.BrowserDownloadURL
+		if private {
+			url = assetAPI(a.ID)
+		}
 		switch a.Name {
 		case want:
-			assetURL = a.BrowserDownloadURL
+			assetURL = url
 			assetSize = a.Size
 		case "checksums.txt":
-			checksumsURL = a.BrowserDownloadURL
+			checksumsURL = url
 		}
 	}
 	if assetURL == "" {
@@ -239,7 +285,13 @@ func (u *updateChecker) apply(ctx context.Context) (string, error) {
 		os.Remove(tmpName) // no-op once renamed into place
 	}()
 
-	sum, err := downloadTo(ctx, u.downloadClient(), assetURL, tmp, 200<<20)
+	assetReq := func(req *http.Request) {
+		u.authorize(req)
+		if private {
+			req.Header.Set("Accept", "application/octet-stream")
+		}
+	}
+	sum, err := downloadTo(ctx, u.downloadClient(), assetURL, tmp, 200<<20, assetReq)
 	if err != nil {
 		return "", fmt.Errorf("download: %w", err)
 	}
@@ -251,7 +303,7 @@ func (u *updateChecker) apply(ctx context.Context) (string, error) {
 
 	// Verify against checksums.txt when the release provides one.
 	if checksumsURL != "" {
-		want, cerr := fetchChecksum(ctx, u.httpClient(), checksumsURL, assetName())
+		want, cerr := fetchChecksum(ctx, u.httpClient(), checksumsURL, assetName(), assetReq)
 		if cerr != nil {
 			return "", fmt.Errorf("checksums: %w", cerr)
 		}
@@ -302,12 +354,15 @@ func resealBundle(exePath string) {
 
 // downloadTo streams src into w (capped at maxBytes) and returns the lowercase
 // hex SHA-256 of the bytes written.
-func downloadTo(ctx context.Context, client *http.Client, url string, w io.Writer, maxBytes int64) (string, error) {
+func downloadTo(ctx context.Context, client *http.Client, url string, w io.Writer, maxBytes int64, decorate func(*http.Request)) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "kinopub-gui")
+	if decorate != nil {
+		decorate(req)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -325,9 +380,9 @@ func downloadTo(ctx context.Context, client *http.Client, url string, w io.Write
 
 // fetchChecksum downloads a "sha256  filename" checksums file and returns the
 // hash recorded for name (empty string if not listed).
-func fetchChecksum(ctx context.Context, client *http.Client, url, name string) (string, error) {
+func fetchChecksum(ctx context.Context, client *http.Client, url, name string, decorate func(*http.Request)) (string, error) {
 	var buf strings.Builder
-	if _, err := downloadTo(ctx, client, url, &buf, 1<<20); err != nil {
+	if _, err := downloadTo(ctx, client, url, &buf, 1<<20, decorate); err != nil {
 		return "", err
 	}
 	for _, line := range strings.Split(buf.String(), "\n") {

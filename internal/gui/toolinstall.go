@@ -209,7 +209,8 @@ func downloadAndExtract(ctx context.Context, client *http.Client, dl depDownload
 	tmpName := tmp.Name()
 	defer func() { tmp.Close(); os.Remove(tmpName) }()
 
-	if _, err := downloadTo(ctx, client, dl.url, tmp, 400<<20); err != nil {
+	// nil decorator: this is a third-party host, never send the GitHub token.
+	if _, err := downloadTo(ctx, client, dl.url, tmp, 400<<20, nil); err != nil {
 		return fmt.Errorf("download %s: %w", dl.url, err)
 	}
 	if err := tmp.Close(); err != nil {

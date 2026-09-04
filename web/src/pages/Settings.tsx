@@ -288,10 +288,30 @@ function SaveStatus({ state }: { state: SaveState }) {
 }
 
 function UpdateCard() {
-  const { update, refreshUpdate, version, toast } = useApp();
+  const { update, refreshUpdate, version, toast, settings, setSettingsLocal } = useApp();
   const { t } = useI18n();
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
+  // The token is kept out of the auto-saved settings form on purpose: that form
+  // re-sends itself on every keystroke (debounced), and a credential has no
+  // business travelling on a timer. It is saved once, by this button.
+  const [token, setToken] = useState("");
+  const [savingToken, setSavingToken] = useState(false);
+
+  const saveToken = async (value: string) => {
+    setSavingToken(true);
+    try {
+      const saved = await api.saveSettings({ ...settings, githubToken: value });
+      setSettingsLocal(saved);
+      setToken("");
+      toast(value ? t("Token saved.") : t("Token removed."), "success");
+      await refreshUpdate(true);
+    } catch (e: any) {
+      toast(e.message || t("Error"), "error");
+    } finally {
+      setSavingToken(false);
+    }
+  };
 
   const check = async () => {
     setChecking(true);
@@ -349,6 +369,36 @@ function UpdateCard() {
             </button>
           </div>
         )}
+
+        <div className="space-y-2 rounded-lg border border-white/[0.06] bg-ink-900/40 p-3">
+          <div className="text-xs text-slate-400">
+            {settings.hasGithubToken
+              ? t("Updating from your private repository.")
+              : t("Add a GitHub token to update from your own private repository.")}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="input flex-1"
+              type="password"
+              autoComplete="off"
+              placeholder={settings.hasGithubToken ? "••••••••" : "github_pat_…"}
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+            />
+            <button
+              className="btn-ghost px-3"
+              disabled={savingToken || !token.trim()}
+              onClick={() => saveToken(token.trim())}
+            >
+              {savingToken ? <Spinner className="h-4 w-4" /> : t("Save")}
+            </button>
+            {settings.hasGithubToken && (
+              <button className="btn-ghost px-3" disabled={savingToken} onClick={() => saveToken("")}>
+                {t("Remove")}
+              </button>
+            )}
+          </div>
+        </div>
 
         <div className="flex items-center justify-between gap-3">
           <span className="min-w-0 flex-1 truncate text-xs text-slate-500">
