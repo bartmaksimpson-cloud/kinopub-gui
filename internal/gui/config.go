@@ -79,9 +79,11 @@ type Settings struct {
 	// converting once on the way in fixes playback for good.
 	TranscodeHEVC bool `json:"transcodeHevc"`
 	// MaxHeight scales anything taller than this down to it on download (0 = no
-	// limit). For TVs whose decoder declares a maximum frame: a 3840x2880
-	// release is over the height limit, the hardware decoder refuses it, and
-	// playback falls back to software and stutters.
+	// limit). Defaults to 2160 because that is the ceiling consumer hardware
+	// decoders declare (a TV chip says 4096x2176): a 3840x2880 release is over
+	// it, the hardware decoder refuses the frame, and playback falls back to
+	// software and stutters. Files at 2160 and below are copied untouched, so
+	// the default costs nothing for everything that already plays.
 	MaxHeight int `json:"maxHeight"`
 }
 
@@ -100,7 +102,9 @@ func defaultSettings() Settings {
 		LibraryDirs: nil,
 		// Off by default: re-encoding is lossy and slow, so it stays opt-in.
 		TranscodeHEVC: false,
-		MaxHeight:     0,
+		// On by default: a frame taller than this plays nowhere in hardware, and
+		// the alternative to one conversion is a file that stutters forever.
+		MaxHeight: 2160,
 	}
 }
 

@@ -1010,7 +1010,11 @@ func (e *engine) attemptHLSEpisode(
 	}
 
 	var remuxErr error
-	if muxer, ok := e.deps.Downloader.(domain.HLSMuxer); ok {
+	if muxer, ok := e.deps.Downloader.(domain.HLSMuxerProgress); ok {
+		// Scaling turns the mux into a re-encode; without progress the job sits
+		// silent long enough to look broken.
+		remuxErr = muxer.MuxHLSProgress(ctx, muxJob, hlsResult, e.deps.ProgressReporter)
+	} else if muxer, ok := e.deps.Downloader.(domain.HLSMuxer); ok {
 		remuxErr = muxer.MuxHLS(ctx, muxJob, hlsResult)
 	} else {
 		remuxErr = fmt.Errorf("downloader does not support HLS muxing")

@@ -74,9 +74,10 @@ func WithMaxHeight(n int) Option {
 }
 
 // fitArgs are the arguments that bring one source inside the height cap, or
-// nil when it already fits (or its resolution is unknown).
-func (d *Downloader) fitArgs(resolution string) []string {
-	return scaleToHeightArgs(heightOf(resolution), d.maxHeight, d.ffmpegPath)
+// nil when it already fits (or its resolution is unknown). srcKbps is the
+// source bitrate to carry over, 0 when it is not known.
+func (d *Downloader) fitArgs(resolution string, srcKbps int) []string {
+	return scaleToHeightArgs(heightOf(resolution), d.maxHeight, srcKbps, d.ffmpegPath)
 }
 
 // effectiveArgs is the ffmpeg tail for one job: the encoder preset first (only
@@ -84,7 +85,7 @@ func (d *Downloader) fitArgs(resolution string) []string {
 // they can still override it.
 func (d *Downloader) effectiveArgs(job domain.Job) []string {
 	var args []string
-	if fit := d.fitArgs(job.Media.Video.Resolution); len(fit) > 0 {
+	if fit := d.fitArgs(job.Media.Video.Resolution, job.Media.Video.BitRate); len(fit) > 0 {
 		// Scaling re-encodes anyway, and it encodes to HEVC — adding the HEVC
 		// preset on top would only repeat the same options.
 		args = append(args, fit...)
@@ -233,6 +234,13 @@ func (d *Downloader) remuxLocal(ctx context.Context, job domain.Job, rawPath str
 // from separate files; this maps them all together with -c copy and applies
 // per-track labels/languages.
 func (d *Downloader) MuxHLS(ctx context.Context, job domain.Job, hls *domain.HLSDownloadResult) error {
+	return d.MuxHLSProgress(ctx, job, hls, nil)
+}
+
+// MuxHLSProgress is MuxHLS with progress reporting, used when the mux is not a
+// plain copy: scaling a too-tall frame re-encodes the whole episode, and that
+// takes long enough that a silent job reads as a hang.
+func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *domain.HLSDownloadResult, sink domain.ProgressSink) error {
 	d.logger.Info("muxing HLS streams",
 		domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
 		domain.F("audio_tracks", len(hls.AudioTracks)),
@@ -243,17 +251,37 @@ func (d *Downloader) MuxHLS(ctx context.Context, job domain.Job, hls *domain.HLS
 	tempPath := job.OutPath + ".tmp"
 	// The master playlist already told us the frame size, so a source over the
 	// height cap is scaled here, in the pass that runs anyway.
-	fit := d.fitArgs(hls.Resolution)
+	fit := d.fitArgs(hls.Resolution, hls.BitrateKbps)
 	if len(fit) > 0 {
 		d.logger.Info("frame taller than the limit, scaling while muxing",
 			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
 			domain.F("source", hls.Resolution),
 			domain.F("max_height", d.maxHeight),
+			// The bitrate is carried over rather than re-guessed: fewer pixels in
+			// a better codec on the same budget is what keeps the picture.
+			domain.F("bitrate_kbps", hls.BitrateKbps),
 		)
 	}
+	// Progress is only wired for the re-encoding case: a stream copy finishes
+	// before the first report would arrive.
+	var (
+		stdout io.Writer
+		parser *progressParser
+	)
+	if len(fit) > 0 && sink != nil {
+		if dur := muxDuration(job); dur > 0 {
+			parser = newProgressParser(sink, job.Episode.Key, domain.TrackRef{Kind: domain.TrackVideo, Index: 0}, dur)
+			stdout = parser
+			fit = append(fit, "-progress", "pipe:1")
+		}
+	}
+
 	args := BuildHLSMuxArgs(job, hls, tempPath, fit...)
 
-	runErr := d.run(ctx, d.ffmpegPath, args, nil, nil)
+	runErr := d.run(ctx, d.ffmpegPath, args, nil, stdout)
+	if parser != nil {
+		_ = parser.Close()
+	}
 	if runErr != nil && len(hls.Subtitles) > 0 && ctx.Err() == nil {
 		// A subtitle file ffmpeg refuses must not cost a finished multi-gigabyte
 		// download: the segments are deleted right after this call either way, so
@@ -435,6 +463,16 @@ func (d *Downloader) Execute(ctx context.Context, job domain.Job) error {
 // Returns 0 if duration cannot be determined.
 func estimateDuration(job domain.Job) time.Duration {
 	return job.Media.Duration
+}
+
+// muxDuration is how long the episode runs, for percentages during a re-encode.
+// The mux job is built from the episode alone (there is no resolved media by
+// then), so the episode's own duration is the number that is actually there.
+func muxDuration(job domain.Job) time.Duration {
+	if job.Media.Duration > 0 {
+		return job.Media.Duration
+	}
+	return job.Episode.Duration
 }
 
 // noopSink is a ProgressSink that discards all updates.

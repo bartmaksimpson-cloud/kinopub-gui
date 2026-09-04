@@ -183,6 +183,14 @@ type HLSMuxer interface {
 	MuxHLS(ctx context.Context, job Job, hls *HLSDownloadResult) error
 }
 
+// HLSMuxerProgress is an HLSMuxer that reports how far along it is. Optional
+// because a plain mux is a stream copy that takes seconds; it becomes worth
+// reporting when the frame has to be scaled, which is a full re-encode and
+// would otherwise look like a hung job for half an hour.
+type HLSMuxerProgress interface {
+	MuxHLSProgress(ctx context.Context, job Job, hls *HLSDownloadResult, sink ProgressSink) error
+}
+
 // HLSDownloadResult contains info about a completed HLS download.
 type HLSDownloadResult struct {
 	Resolution  string // e.g. "1920x1080"

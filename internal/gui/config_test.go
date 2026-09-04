@@ -242,6 +242,13 @@ func TestBuildRunConfig_FFmpegArgsSplit(t *testing.T) {
 // Settings used to be merged field by field, and only the strings were copied:
 // every bool and number in the file — transcodeHevc, and now maxHeight — was
 // silently reset to its default on restart.
+// Авторежим: ограничение работает без единой настройки со стороны пользователя.
+func TestDefaultSettings_LimitsHeightForHardwareDecoders(t *testing.T) {
+	if got := defaultSettings().MaxHeight; got != 2160 {
+		t.Errorf("по умолчанию maxHeight = %d, ожидалось 2160", got)
+	}
+}
+
 func TestSettingsLoad_KeepsNonStringFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gui.json")

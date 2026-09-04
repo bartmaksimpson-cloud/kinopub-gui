@@ -145,15 +145,15 @@ export function SettingsPage() {
         />
         <Field
           label={t("Maximum frame height")}
-          hint={t("Taller files are scaled down to this on download, keeping the aspect ratio. TV decoders declare a maximum frame and fall back to stuttering software playback above it — a 3840x2880 release is one such case.")}
+          hint={t("Files taller than this are scaled down on download, keeping the aspect ratio and the source bitrate; anything at or below it is copied untouched. Hardware decoders top out around 2160 and fall back to stuttering software playback above it — a 3840x2880 open-matte release is one such case.")}
         >
           <select
             className="input"
-            value={String(form.maxHeight ?? 0)}
+            value={String(form.maxHeight ?? 2160)}
             onChange={(e) => set("maxHeight", Number(e.target.value))}
           >
-            <option value="0">{t("No limit")}</option>
-            <option value="2160">{t("2160 — TV hardware decoders")}</option>
+            <option value="2160">{t("Automatic — no taller than 2160")}</option>
+            <option value="0">{t("No limit (keep the source frame)")}</option>
             <option value="1080">1080</option>
           </select>
         </Field>

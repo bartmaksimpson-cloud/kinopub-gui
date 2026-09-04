@@ -66,7 +66,7 @@ const emptySettings: Settings = {
   theme: "cinematic",
   libraryDirs: null,
   transcodeHevc: false,
-  maxHeight: 0,
+  maxHeight: 2160,
 };
 
 function sortJobs(jobs: JobView[]): JobView[] {
