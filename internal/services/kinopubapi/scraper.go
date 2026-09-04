@@ -86,11 +86,14 @@ func BuildPagePlaylist(item Item) (*domain.PagePlaylist, error) {
 			return
 		}
 		pl.Episodes = append(pl.Episodes, domain.PageEpisode{
-			ManifestURL:  manifest,
-			EpisodeTitle: title,
-			Duration:     duration,
-			Season:       season,
-			Episode:      episode,
+			ManifestURL: manifest,
+			// Preview keeps the H.264 pick above; only a download may switch to
+			// this one, and only when the user asked for HEVC.
+			ManifestURLHEVC: bestHEVCManifest(files),
+			EpisodeTitle:    title,
+			Duration:        duration,
+			Season:          season,
+			Episode:         episode,
 		})
 		seasonCounts[season]++
 	}
@@ -160,6 +163,37 @@ func bestManifest(files []File) string {
 			bestH = f.H
 			best = m
 			bestIsAVC = isAVC
+		}
+	}
+	return best
+}
+
+// isHEVCCodec reports whether a kino.watch codec string denotes H.265/HEVC.
+// Deliberately explicit rather than "not AVC": an empty or unknown codec must
+// not be mistaken for HEVC, or a download would skip a conversion it needed.
+func isHEVCCodec(codec string) bool {
+	c := strings.ToLower(codec)
+	return strings.Contains(c, "265") || strings.Contains(c, "hevc") || strings.Contains(c, "hvc")
+}
+
+// bestHEVCManifest returns the HLS master URL of the highest-resolution HEVC
+// variant, or "" when the title has none. Downloads aimed at a TV prefer it:
+// players that fall back to software for 4K H.264 decode HEVC in hardware, so
+// picking the right file beats re-encoding it afterwards.
+func bestHEVCManifest(files []File) string {
+	best := ""
+	bestH := -1
+	for _, f := range files {
+		if !isHEVCCodec(f.Codec) {
+			continue
+		}
+		m := f.URL.Manifest()
+		if m == "" {
+			continue
+		}
+		if f.H > bestH {
+			bestH = f.H
+			best = m
 		}
 	}
 	return best

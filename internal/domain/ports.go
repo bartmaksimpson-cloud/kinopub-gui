@@ -231,12 +231,17 @@ type PagePlaylist struct {
 
 // PageEpisode is a single episode from the page playlist.
 type PageEpisode struct {
-	ManifestURL  string
-	MediaID      int
-	EpisodeTitle string
-	Duration     int // seconds
-	Season       int
-	Episode      int
+	ManifestURL string
+	// ManifestURLHEVC is the HEVC variant of the same episode, empty when the
+	// service offers none. ManifestURL stays the H.264 pick so the in-app
+	// preview keeps playing in the browser; a download switches to this one only
+	// when the user asked for HEVC.
+	ManifestURLHEVC string
+	MediaID         int
+	EpisodeTitle    string
+	Duration        int // seconds
+	Season          int
+	Episode         int
 }
 
 // PageSeason is season metadata from the page.
