@@ -477,6 +477,8 @@ const RU: Record<string, string> = {
   "Token removed.": "Токен удалён.",
   "Updating from your private repository.": "Обновления берутся из вашего приватного репозитория.",
   "Add a GitHub token to update from your own private repository.": "Добавьте токен GitHub, чтобы обновляться из своего приватного репозитория.",
+  "Report sent.": "Отчёт отправлен.",
+  "This crash was already reported.": "Об этой ошибке уже сообщено.",
   "Report this crash": "Сообщить об ошибке",
   "No crash details were recorded for this failure.": "Для этой ошибки не записано подробностей.",
   "Sound & subtitles": "Звук и субтитры",

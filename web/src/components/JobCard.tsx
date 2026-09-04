@@ -623,12 +623,24 @@ export function JobCard({ job }: { job: JobView }) {
               className="mt-1 text-[11px] text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
               onClick={async () => {
                 try {
-                  const { available, url } = await api.crashReport();
+                  const { available, url, canSend } = await api.crashReport();
                   if (!available) {
                     toast(t("No crash details were recorded for this failure."), "info");
                     return;
                   }
-                  window.open(url, "_blank", "noopener");
+                  if (!canSend) {
+                    // No token: hand the prefilled issue to the browser and let
+                    // the user submit it under their own account.
+                    window.open(url, "_blank", "noopener");
+                    return;
+                  }
+                  const sent = await api.sendCrashReport();
+                  if (sent.duplicate) {
+                    toast(t("This crash was already reported."), "info");
+                  } else {
+                    toast(t("Report sent."), "success");
+                    if (sent.url) window.open(sent.url, "_blank", "noopener");
+                  }
                 } catch (e: any) {
                   toast(e.message || "Error", "error");
                 }

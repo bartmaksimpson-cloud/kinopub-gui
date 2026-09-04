@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -258,6 +259,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/open", s.handleOpenPath)
 	mux.HandleFunc("GET /api/fs", s.handleFS)
 	mux.HandleFunc("GET /api/crash-report", s.handleCrashReport)
+	mux.HandleFunc("POST /api/crash-report", s.handleCrashReportSend)
 	mux.HandleFunc("GET /api/img", s.handleImage)
 
 	// SPA / static assets.
@@ -1054,7 +1056,29 @@ func (s *Server) libraryDirs() []string {
 // own account — so no credential has to ship inside the binary.
 func (s *Server) handleCrashReport(w http.ResponseWriter, r *http.Request) {
 	u := crashReportURL(s.version)
-	writeJSON(w, http.StatusOK, map[string]any{"available": u != "", "url": u})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"available": u != "",
+		"url":       u,
+		// canSend means a token is stored, so the report can be filed without
+		// sending the user to a browser. Without one the link still works.
+		"canSend": crashToken() != "",
+	})
+}
+
+// handleCrashReportSend files the crash as an issue directly. It runs only on
+// an explicit click: nothing is ever reported in the background, even to a
+// private repo the user owns.
+func (s *Server) handleCrashReportSend(w http.ResponseWriter, r *http.Request) {
+	issueURL, err := postCrashIssue(r.Context(), s.version)
+	switch {
+	case errors.Is(err, errAlreadyReported):
+		// Not a failure: a repeating panic must not open an issue per tick.
+		writeJSON(w, http.StatusOK, map[string]any{"duplicate": true})
+	case err != nil:
+		writeErr(w, http.StatusBadGateway, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"url": issueURL})
+	}
 }
 
 func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {
