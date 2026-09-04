@@ -177,7 +177,19 @@ func (t *browserTransport) roundTripH2(req *http.Request, conn net.Conn, addr st
 
 	// Check for existing h2 connection to this host.
 	host := req.URL.Host
-	if cc, ok := t.h2Clients[host]; ok {
+	cc, ok := t.h2Clients[host]
+	// CanTakeNewRequest is the connection's own verdict: it goes false once the
+	// peer sends GOAWAY, the stream limit is reached, or the conn is closing.
+	// Without asking, a dying connection keeps being handed out — and since
+	// RoundTrip returns as soon as the HEADERS arrive, a conn that still
+	// answers headers but truncates bodies would be reused by every retry,
+	// turning one bad connection into "segment N failed after 5 attempts".
+	if ok && !cc.CanTakeNewRequest() {
+		delete(t.h2Clients, host)
+		go cc.Close() // may block on in-flight streams; nothing waits on it
+		ok = false
+	}
+	if ok {
 		t.mu.Unlock()
 		// Try existing connection first.
 		resp, err := cc.RoundTrip(req)
@@ -187,7 +199,10 @@ func (t *browserTransport) roundTripH2(req *http.Request, conn net.Conn, addr st
 		}
 		// Connection stale — remove and use new one.
 		t.mu.Lock()
-		delete(t.h2Clients, host)
+		if cur, still := t.h2Clients[host]; still && cur == cc {
+			delete(t.h2Clients, host)
+			go cc.Close()
+		}
 		t.mu.Unlock()
 	} else {
 		t.mu.Unlock()
@@ -199,13 +214,21 @@ func (t *browserTransport) roundTripH2(req *http.Request, conn net.Conn, addr st
 		conn.Close()
 		return nil, fmt.Errorf("h2 transport: %w", err)
 	}
-	cc, err := tr.NewClientConn(conn)
+	cc, err = tr.NewClientConn(conn)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("h2 client conn: %w", err)
 	}
 
 	t.mu.Lock()
+	// Concurrent segment fetches all miss the cache at once and each build a
+	// connection; keep the first one published and close ours rather than
+	// orphaning whoever we would overwrite.
+	if prev, ok := t.h2Clients[host]; ok && prev != cc && prev.CanTakeNewRequest() {
+		t.mu.Unlock()
+		defer func() { go cc.Close() }()
+		return cc.RoundTrip(req)
+	}
 	t.h2Clients[host] = cc
 	t.mu.Unlock()
 

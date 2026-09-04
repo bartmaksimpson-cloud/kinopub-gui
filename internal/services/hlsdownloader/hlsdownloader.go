@@ -741,12 +741,27 @@ func (d *Downloader) fetchSegment(ctx context.Context, segURL, outPath string) (
 		return 0, err
 	}
 
+	started := time.Now()
 	n, copyErr := io.Copy(f, resp.Body)
 	closeErr := f.Close()
 
 	if copyErr != nil {
 		os.Remove(outPath)
-		return 0, copyErr
+		// A bare "unexpected EOF" says nothing about WHY the body stopped. How
+		// much arrived, of how much was promised, over how long and on which
+		// protocol separates a stalled stream (little data, near the timeout)
+		// from an outright reset (nothing) — and h2 shares one connection
+		// across every parallel segment, so the protocol matters.
+		return 0, fmt.Errorf("%w (got %d of %d bytes in %s over %s)",
+			copyErr, n, resp.ContentLength, time.Since(started).Round(time.Millisecond), resp.Proto)
+	}
+	// A body that ends early without an error is truncation the transport did
+	// not flag: treat it as a failure so the retry re-fetches, rather than
+	// concatenating a short segment into the finished file.
+	if resp.ContentLength >= 0 && n != resp.ContentLength {
+		os.Remove(outPath)
+		return 0, fmt.Errorf("truncated segment: got %d of %d bytes in %s over %s",
+			n, resp.ContentLength, time.Since(started).Round(time.Millisecond), resp.Proto)
 	}
 	if closeErr != nil {
 		os.Remove(outPath)

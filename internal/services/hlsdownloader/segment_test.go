@@ -1,6 +1,7 @@
 package hlsdownloader
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -177,5 +180,36 @@ func TestWithProxy(t *testing.T) {
 	d := New(http.DefaultClient, domain.RequestAuth{}, nopLogger{}, WithProxy(pu))
 	if d.proxyURL == nil || d.proxyURL.Host != "127.0.0.1:8080" {
 		t.Errorf("proxyURL = %v, want the configured proxy", d.proxyURL)
+	}
+}
+
+// TestFetchSegmentDetectsTruncatedBody covers the case behind "segment 56
+// failed: after 5 attempts: unexpected EOF": a body that ends before the
+// declared Content-Length must fail, and the error must say how far it got —
+// a bare EOF gives nothing to diagnose with.
+func TestFetchSegmentDetectsTruncatedBody(t *testing.T) {
+	full := bytes.Repeat([]byte("x"), 4096)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(full)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(full[:1000]) // stop early, then let the handler return
+	}))
+	defer srv.Close()
+
+	d := New(http.DefaultClient, domain.RequestAuth{}, nopLogger{})
+	out := filepath.Join(t.TempDir(), "seg.ts")
+
+	_, err := d.fetchSegment(context.Background(), srv.URL+"/seg.ts", out)
+	if err == nil {
+		t.Fatal("a body cut short of Content-Length must be an error")
+	}
+	for _, want := range []string{"1000", "4096"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q should report both the received and expected size", err)
+		}
+	}
+	if _, statErr := os.Stat(out); statErr == nil {
+		t.Fatal("the short file must not be left on disk for the concat step")
 	}
 }
