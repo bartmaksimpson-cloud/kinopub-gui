@@ -73,6 +73,13 @@ const RU: Record<string, string> = {
   "Force re-download": "Перекачать заново",
   "Ignore completed state": "Игнорировать «уже скачано»",
   "Extra ffmpeg args": "Доп. аргументы ffmpeg",
+  "Convert video to HEVC": "Перекодировать видео в HEVC",
+  "Convert to HEVC": "Перекодировать в HEVC",
+  "For players that stutter on 4K H.264": "Для плееров, которые не тянут 4K в H.264",
+  "For players that stutter on 4K H.264. Audio and subtitles are copied untouched.":
+    "Для плееров, которые не тянут 4K в H.264. Звук и субтитры копируются без изменений.",
+  "Default for the checkbox that appears when 4K is selected. Slower download, but plays on devices that stutter on 4K H.264; audio and subtitles are copied untouched.":
+    "Значение по умолчанию для галочки, которая появляется при выборе 4K. Загрузка дольше, зато файл идёт на устройствах, которые не тянут 4K в H.264; звук и субтитры копируются без изменений.",
   'advanced — e.g. "-c:v libx265 -crf 28"': 'продвинутое — напр. "-c:v libx265 -crf 28"',
   "Leave empty to use saved credentials": "Пусто — использовать сохранённые данные",
   "Start download": "Начать загрузку",

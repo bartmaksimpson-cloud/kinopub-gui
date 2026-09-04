@@ -50,6 +50,10 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
     verbosity: settings.verbosity,
   }));
 
+  // Same rule as the title card: the option only makes sense for 4K. A bare
+  // link has no quality list, so "Auto (highest)" counts as possibly-4K.
+  const may4K = form.quality === "2160p" || form.quality === "";
+
   const [advanced, setAdvanced] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   // Per-episode selection (episode keys "S{n}E{n}"). null until a preview loads;
@@ -149,6 +153,9 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
       await api.startJob({
         ...form,
         dryRun: false,
+        // Guard the flag the same way the checkbox is gated, so lowering the
+        // quality after ticking it cannot start a pointless re-encode.
+        transcodeHevc: may4K && form.transcodeHevc,
         // Explicit per-episode selection from the browser. Omitted (→ all) when
         // the user downloads without previewing.
         episodeKeys: preview && selectedKeys ? [...selectedKeys] : undefined,
@@ -261,14 +268,16 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
               <Toggle label={t("Force re-download")} hint={t("Ignore completed state")} checked={form.force} onChange={(v) => set("force", v)} />
             </div>
 
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Toggle
-                label={t("Convert video to HEVC")}
-                hint={t("Audio and subtitles are copied untouched")}
-                checked={form.transcodeHevc}
-                onChange={(v) => set("transcodeHevc", v)}
-              />
-            </div>
+            {may4K && (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Toggle
+                  label={t("Convert video to HEVC")}
+                  hint={t("For players that stutter on 4K H.264. Audio and subtitles are copied untouched.")}
+                  checked={form.transcodeHevc}
+                  onChange={(v) => set("transcodeHevc", v)}
+                />
+              </div>
+            )}
 
             <Field label={t("Extra ffmpeg args")} hint={t('advanced — e.g. "-c:v libx265 -crf 28"')}>
               <input className="input font-mono text-xs" value={form.ffmpegArgs} onChange={(e) => set("ffmpegArgs", e.target.value)} />

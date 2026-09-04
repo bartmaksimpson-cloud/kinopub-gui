@@ -39,7 +39,7 @@ import {
   writeAudioPref,
 } from "../lib/audio";
 import { initialEpisodeSelection, isQueued, nothingLeftToQueue, queueCoverage } from "../lib/queue";
-import { Modal, PosterImage } from "./ui";
+import { Modal, PosterImage, Toggle } from "./ui";
 import { Ratings } from "./Ratings";
 import { Player } from "./Player";
 
@@ -85,6 +85,15 @@ export function TitleDetail({
   const [similar, setSimilar] = useState<DiscoverItem[]>([]);
 
   const [quality, setQuality] = useState(settings.quality);
+  // Converting pays off only for 4K: a player that stutters on 4K H.264 handles
+  // 1080p fine, so the option stays hidden until 4K is what will be fetched —
+  // "Auto (highest)" counts when the title actually offers 2160p. Seeded from
+  // the global setting so the usual answer needs no clicking.
+  const [hevc, setHevc] = useState(settings.transcodeHevc);
+  const willFetch4K =
+    quality === "2160p" ||
+    (quality === "" && (detail?.qualities ?? []).includes("2160p"));
+
   // Selected озвучка labels. Empty set → keep every track.
   const [audioSel, setAudioSel] = useState<Set<string>>(new Set());
   // True when a remembered voiceover existed but isn't available here, so the
@@ -370,9 +379,9 @@ export function TitleDetail({
         force: false,
         dryRun: false,
         ffmpegArgs: "",
-        // Follows the global setting: the reason to convert is a property of the
-        // playback device, not of one particular title.
-        transcodeHevc: settings.transcodeHevc,
+        // Never convert what was not fetched in 4K, even if the box was ticked
+        // before the quality changed.
+        transcodeHevc: willFetch4K && hevc,
         ffmpegPath: "",
         userAgent: "",
         verbosity: settings.verbosity,
@@ -833,6 +842,14 @@ export function TitleDetail({
                     </option>
                   ))}
                 </select>
+                {willFetch4K && (
+                  <Toggle
+                    label={t("Convert to HEVC")}
+                    hint={t("For players that stutter on 4K H.264")}
+                    checked={hevc}
+                    onChange={setHevc}
+                  />
+                )}
                 {nothingLeft ? (
                   <button
                     className="btn border border-emerald-500/40 bg-emerald-500/[0.16] text-emerald-200 hover:bg-emerald-500/[0.24]"
