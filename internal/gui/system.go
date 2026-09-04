@@ -66,9 +66,24 @@ type FSListing struct {
 	Dirs   []FSEntry `json:"dirs"`
 }
 
+// drivesSentinel is a pseudo-path that means "list the available drives"
+// instead of a real filesystem path. It is never a valid os.ReadDir target
+// (the NUL byte cannot appear in a real path), so it can't collide with one.
+// listDir sets FSListing.Parent to this when abs is already a filesystem root
+// on Windows (e.g. "C:\"), so the picker's "up" button escapes the current
+// drive instead of getting stuck at its root — the only way to reach another
+// drive (D:\, an external/NAS drive, …) was previously to edit gui.json by
+// hand, since neither this backend nor DirPicker.tsx offered any other way to
+// switch drives.
+const drivesSentinel = "\x00drives"
+
 // listDir returns the sub-directories of path (for the output picker). An empty
-// path starts at the user's home directory.
+// path starts at the user's home directory. drivesSentinel lists the available
+// drive letters instead (Windows only; a no-op set on every other OS).
 func listDir(path string) (FSListing, error) {
+	if path == drivesSentinel {
+		return listDrives()
+	}
 	if path == "" || path == "~" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -90,6 +105,11 @@ func listDir(path string) (FSListing, error) {
 		return FSListing{}, err
 	}
 	listing := FSListing{Path: abs, Parent: filepath.Dir(abs)}
+	if runtime.GOOS == "windows" && filepath.Dir(abs) == abs {
+		// abs is already a drive root (e.g. "C:\") — filepath.Dir can't go
+		// any higher on the same drive, so point "up" at the drive list.
+		listing.Parent = drivesSentinel
+	}
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
