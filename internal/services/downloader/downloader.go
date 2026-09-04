@@ -214,6 +214,7 @@ func (d *Downloader) MuxHLS(ctx context.Context, job domain.Job, hls *domain.HLS
 	d.logger.Info("muxing HLS streams",
 		domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
 		domain.F("audio_tracks", len(hls.AudioTracks)),
+		domain.F("subtitle_tracks", len(hls.Subtitles)),
 		domain.F("output", job.OutPath),
 	)
 
@@ -221,6 +222,19 @@ func (d *Downloader) MuxHLS(ctx context.Context, job domain.Job, hls *domain.HLS
 	args := BuildHLSMuxArgs(job, hls, tempPath)
 
 	runErr := d.run(ctx, d.ffmpegPath, args, nil, nil)
+	if runErr != nil && len(hls.Subtitles) > 0 && ctx.Err() == nil {
+		// A subtitle file ffmpeg refuses must not cost a finished multi-gigabyte
+		// download: the segments are deleted right after this call either way, so
+		// drop the subtitles and mux once more before giving up.
+		d.logger.Warn("mux failed with subtitles, retrying without them",
+			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+			domain.F("error", runErr.Error()),
+		)
+		os.Remove(tempPath)
+		withoutSubs := *hls
+		withoutSubs.Subtitles = nil
+		runErr = d.run(ctx, d.ffmpegPath, BuildHLSMuxArgs(job, &withoutSubs, tempPath), nil, nil)
+	}
 	if runErr != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("%w: %v", domain.ErrFFmpegFailed, runErr)

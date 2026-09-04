@@ -261,3 +261,86 @@ func TestBuildHLSMuxArgs_MP4Format(t *testing.T) {
 		t.Errorf("last arg = %q, want temp path", args[len(args)-1])
 	}
 }
+
+// Subtitle files are separate inputs after the audio ones, so their -map index
+// is offset by them; getting that offset wrong maps an audio file as subtitles
+// and fails the mux.
+func TestBuildHLSMuxArgs_SubtitleInputsMapAfterAudio(t *testing.T) {
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 2}},
+		OutPath: "/out/S01E02.mkv",
+	}
+	hls := &domain.HLSDownloadResult{
+		VideoPath: "/tmp/video.ts",
+		AudioTracks: []domain.HLSAudioTrack{
+			{Path: "/tmp/audio_0.ts", Name: "Дубляж", Language: "rus"},
+		},
+		Subtitles: []domain.HLSSubtitleTrack{
+			{Path: "/tmp/sub_0.vtt", Name: "Русские", Language: "rus"},
+			{Path: "/tmp/sub_1.vtt", Language: "eng"},
+		},
+	}
+
+	args := BuildHLSMuxArgs(job, hls, "/tmp/S01E02.mkv.tmp")
+
+	if !containsPair(args, "-i", "/tmp/sub_0.vtt") || !containsPair(args, "-i", "/tmp/sub_1.vtt") {
+		t.Fatalf("субтитровые файлы не попали во входы: %v", args)
+	}
+	// Input 0 video, input 1 audio, inputs 2 and 3 subtitles.
+	if !containsPair(args, "-map", "2:s:0") || !containsPair(args, "-map", "3:s:0") {
+		t.Errorf("субтитры смаплены не с теми входами: %v", args)
+	}
+
+	argsStr := strings.Join(args, " ")
+	if !strings.Contains(argsStr, "-metadata:s:s:0 title=Русские") {
+		t.Errorf("нет подписи первой дорожки: %s", argsStr)
+	}
+	// Nameless track falls back to its language, and the tag becomes ISO 639-2.
+	if !strings.Contains(argsStr, "-metadata:s:s:1 title=eng") {
+		t.Errorf("нет подписи второй дорожки: %s", argsStr)
+	}
+	if !strings.Contains(argsStr, "-metadata:s:s:0 language=rus") {
+		t.Errorf("нет языка первой дорожки: %s", argsStr)
+	}
+	// Matroska carries WebVTT as it is — no re-encoding.
+	if indexOf(args, "-c:s") != -1 {
+		t.Errorf("в MKV субтитры не должны перекодироваться: %v", args)
+	}
+}
+
+// MP4 cannot hold WebVTT: copying it in fails the whole mux, so the subtitle
+// stream is converted to the container's own format.
+func TestBuildHLSMuxArgs_MP4ConvertsSubtitles(t *testing.T) {
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 1}},
+		OutPath: "/out/S01E01.mp4",
+	}
+	hls := &domain.HLSDownloadResult{
+		VideoPath: "/tmp/video.ts",
+		Subtitles: []domain.HLSSubtitleTrack{{Path: "/tmp/sub_0.vtt", Language: "rus"}},
+	}
+
+	args := BuildHLSMuxArgs(job, hls, "/tmp/S01E01.mp4.tmp")
+
+	if !containsPair(args, "-c:s", "mov_text") {
+		t.Errorf("в MP4 нет -c:s mov_text: %v", args)
+	}
+	if !containsPair(args, "-f", "mp4") {
+		t.Errorf("формат вывода не mp4: %v", args)
+	}
+}
+
+// Without subtitles the arguments must stay exactly as they were.
+func TestBuildHLSMuxArgs_NoSubtitlesNoSubtitleArgs(t *testing.T) {
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 1}},
+		OutPath: "/out/S01E01.mkv",
+	}
+	hls := &domain.HLSDownloadResult{VideoPath: "/tmp/video.ts"}
+
+	args := BuildHLSMuxArgs(job, hls, "/tmp/S01E01.mkv.tmp")
+
+	if strings.Contains(strings.Join(args, " "), ":s:") {
+		t.Errorf("субтитровые аргументы появились без дорожек: %v", args)
+	}
+}

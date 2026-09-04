@@ -195,6 +195,10 @@ type HLSDownloadResult struct {
 	// AudioTracks are the local audio files downloaded separately (demuxed HLS).
 	// Empty when audio is muxed into the video stream.
 	AudioTracks []HLSAudioTrack
+	// Subtitles are the downloaded subtitle files (empty when the master offered
+	// none, and short of a track that failed — subtitles are best-effort and
+	// never fail an episode).
+	Subtitles []HLSSubtitleTrack
 	// AudioFallback marks the tracks above as a SUBSTITUTE: the requested
 	// voiceover was not among this episode's renditions, so the selection fell
 	// back to another one (see SelectAudioResolved). kino.pub's dub line-up drifts
@@ -209,6 +213,13 @@ type HLSDownloadResult struct {
 type HLSAudioTrack struct {
 	Path     string // local .ts/.aac file path
 	Name     string // studio/track label, e.g. "MVO, AniLibria"
+	Language string // language tag, e.g. "ru"
+}
+
+// HLSSubtitleTrack describes a downloaded subtitle rendition.
+type HLSSubtitleTrack struct {
+	Path     string // local .vtt file path
+	Name     string // track label, e.g. "Русские (форсированные)"
 	Language string // language tag, e.g. "ru"
 }
 

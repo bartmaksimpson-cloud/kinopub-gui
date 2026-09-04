@@ -390,15 +390,17 @@ func BuildRemuxArgs(job domain.Job, localInput, tempPath string) []string {
 }
 
 // BuildHLSMuxArgs constructs ffmpeg arguments to mux a downloaded HLS video
-// file together with separately-downloaded audio track files into the final
-// container. Each audio file is a separate input; -c copy avoids re-encoding.
+// file together with separately-downloaded audio and subtitle track files into
+// the final container. Each track file is a separate input; -c copy avoids
+// re-encoding (subtitles excepted for MP4, which cannot hold WebVTT).
 //
 // Layout:
 //
-//	-i video.ts -i audio_0.ts -i audio_1.ts ...
-//	-map 0:v -map 1:a -map 2:a ...
+//	-i video.ts -i audio_0.ts ... -i sub_0.vtt ...
+//	-map 0:v -map 1:a ... -map 2:s:0 ...
 //	-c copy
 //	-metadata:s:a:N title=... language=...
+//	-metadata:s:s:N title=... language=...
 func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath string) []string {
 	var args []string
 
@@ -410,6 +412,11 @@ func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath str
 	// Inputs 1..N: audio tracks.
 	for _, a := range hls.AudioTracks {
 		args = append(args, "-i", a.Path)
+	}
+
+	// Inputs N+1..: subtitle tracks, each its own file.
+	for _, st := range hls.Subtitles {
+		args = append(args, "-i", st.Path)
 	}
 
 	// Map video from input 0.
@@ -426,8 +433,27 @@ func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath str
 		args = append(args, "-map", "0:a?")
 	}
 
+	// Map each subtitle input's first subtitle stream; they sit after the audio
+	// inputs, so their input index is offset by them.
+	for i := range hls.Subtitles {
+		args = append(args, "-map", fmt.Sprintf("%d:s:0", 1+len(hls.AudioTracks)+i))
+	}
+
+	// Output format, decided here because the subtitle codec below depends on it.
+	outFormat := "matroska"
+	finalPath := strings.TrimSuffix(tempPath, ".tmp")
+	if strings.HasSuffix(finalPath, ".mp4") {
+		outFormat = "mp4"
+	}
+
 	// Stream copy.
 	args = append(args, "-c", "copy")
+
+	// MP4 cannot carry WebVTT — copying it in fails the whole mux — so subtitles
+	// are converted to the container's own format. Matroska takes WebVTT as is.
+	if len(hls.Subtitles) > 0 && outFormat == "mp4" {
+		args = append(args, "-c:s", "mov_text")
+	}
 
 	// Audio metadata: labels and languages.
 	labels := make([]string, len(hls.AudioTracks))
@@ -448,11 +474,18 @@ func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath str
 		}
 	}
 
-	// Output format.
-	outFormat := "matroska"
-	finalPath := strings.TrimSuffix(tempPath, ".tmp")
-	if strings.HasSuffix(finalPath, ".mp4") {
-		outFormat = "mp4"
+	// Subtitle metadata: labels and languages, named by the same rules as any
+	// other subtitle track in this app.
+	subTracks := make([]domain.SubtitleTrack, len(hls.Subtitles))
+	for i, st := range hls.Subtitles {
+		subTracks[i] = domain.SubtitleTrack{Index: i, Source: st.Name, Language: st.Language}
+	}
+	subLabels := BuildSubtitleLabels(subTracks)
+	for i, st := range hls.Subtitles {
+		args = append(args, fmt.Sprintf("-metadata:s:s:%d", i), fmt.Sprintf("title=%s", subLabels[i]))
+		if st.Language != "" {
+			args = append(args, fmt.Sprintf("-metadata:s:s:%d", i), fmt.Sprintf("language=%s", ToISO6392(st.Language)))
+		}
 	}
 
 	// Container metadata.

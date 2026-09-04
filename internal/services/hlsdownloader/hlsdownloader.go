@@ -204,6 +204,31 @@ func audioRenditionsFor(master *MasterPlaylist, selected Variant) []AudioRenditi
 	return out
 }
 
+// subtitleRenditionsFor returns the subtitle renditions offered for the selected
+// variant, deduplicated by name+language the way audio is: a mixed-codec master
+// lists the same track once per video group. When the variant declares no
+// subtitle group, every parsed rendition is taken — the master then has only one
+// set, and a subtitle stream costs a rounding error next to the video.
+func subtitleRenditionsFor(master *MasterPlaylist, selected Variant) []SubtitleRendition {
+	var out []SubtitleRendition
+	seen := make(map[string]bool)
+	for _, sr := range master.Subtitles {
+		if sr.URI == "" {
+			continue
+		}
+		if selected.SubtitleGroup != "" && sr.GroupID != selected.SubtitleGroup {
+			continue
+		}
+		key := sr.Name + "\x00" + sr.Language
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, sr)
+	}
+	return out
+}
+
 // downloadEpisodeInternal downloads video segments and (for demuxed HLS) audio
 // segments separately. It returns the local paths so the caller can mux them
 // together with ffmpeg. The caller is responsible for removing result.TempDir.
@@ -326,16 +351,46 @@ func (d *Downloader) downloadEpisodeInternal(
 		})
 	}
 
-	// Total segments across video + all audio for progress.
+	// 5b. Fetch subtitle media playlists. Every failure from here on is a
+	// warning, never an error: an episode without its subtitles is a minor loss,
+	// an episode that failed over them is a re-download of several gigabytes.
+	type subtitleJob struct {
+		rendition SubtitleRendition
+		playlist  *MediaPlaylist
+		outFile   string
+	}
+	var subJobs []subtitleJob
+	for i, sr := range subtitleRenditionsFor(master, selected) {
+		sp, err := FetchMediaPlaylist(ctx, d.client, sr.URI, d.auth)
+		if err != nil {
+			d.logger.Warn("subtitle playlist fetch failed, skipping track",
+				domain.F("episode", epLabel),
+				domain.F("subtitle", sr.Name),
+				domain.F("error", err.Error()),
+			)
+			continue
+		}
+		subJobs = append(subJobs, subtitleJob{
+			rendition: sr,
+			playlist:  sp,
+			outFile:   filepath.Join(tmpDir, fmt.Sprintf("sub_%d.vtt", i)),
+		})
+	}
+
+	// Total segments across video + all audio + all subtitles for progress.
 	totalSegments := len(videoPlaylist.Segments)
 	for _, aj := range audioJobs {
 		totalSegments += len(aj.playlist.Segments)
+	}
+	for _, sj := range subJobs {
+		totalSegments += len(sj.playlist.Segments)
 	}
 
 	d.logger.Info("segment lists fetched",
 		domain.F("episode", epLabel),
 		domain.F("video_segments", len(videoPlaylist.Segments)),
 		domain.F("audio_tracks", len(audioJobs)),
+		domain.F("subtitle_tracks", len(subJobs)),
 		domain.F("total_segments", totalSegments),
 		domain.F("duration", fmt.Sprintf("%.0fs", videoPlaylist.TotalDuration)),
 	)
@@ -344,7 +399,7 @@ func (d *Downloader) downloadEpisodeInternal(
 
 	// Per-track progress tracking for nested display. Index 0 is video,
 	// followed by one entry per audio track (same order as audioJobs).
-	trackInfos := make([]domain.TrackProgressInfo, 0, 1+len(audioJobs))
+	trackInfos := make([]domain.TrackProgressInfo, 0, 1+len(audioJobs)+len(subJobs))
 	trackInfos = append(trackInfos, domain.TrackProgressInfo{
 		Label:         "Video",
 		TotalSegments: len(videoPlaylist.Segments),
@@ -360,6 +415,19 @@ func (d *Downloader) downloadEpisodeInternal(
 		trackInfos = append(trackInfos, domain.TrackProgressInfo{
 			Label:         label,
 			TotalSegments: len(aj.playlist.Segments),
+		})
+	}
+	for _, sj := range subJobs {
+		label := "Subtitles"
+		switch {
+		case sj.rendition.Name != "":
+			label = "Subtitles: " + sj.rendition.Name
+		case sj.rendition.Language != "":
+			label = "Subtitles: " + sj.rendition.Language
+		}
+		trackInfos = append(trackInfos, domain.TrackProgressInfo{
+			Label:         label,
+			TotalSegments: len(sj.playlist.Segments),
 		})
 	}
 
@@ -434,7 +502,7 @@ func (d *Downloader) downloadEpisodeInternal(
 	// in flight simultaneously, so audio always downloads together with video.
 	// This raises the floor the controller may never back off past for as long as
 	// this episode is downloading, and drops it again when the episode ends.
-	nTracks := 1 + len(audioJobs)
+	nTracks := 1 + len(audioJobs) + len(subJobs)
 	lim.addTracks(nTracks)
 	defer lim.removeTracks(nTracks)
 
@@ -531,6 +599,7 @@ func (d *Downloader) downloadEpisodeInternal(
 	videoDir := filepath.Join(tmpDir, "video")
 	videoPath := filepath.Join(tmpDir, "video.ts")
 	resultAudio := make([]domain.HLSAudioTrack, len(audioJobs))
+	resultSubs := make([]domain.HLSSubtitleTrack, len(subJobs))
 
 	// Resume pre-scan: count segments left by a previous attempt into the track
 	// totals BEFORE the workers start, and publish them as ONE baseline report.
@@ -552,6 +621,9 @@ func (d *Downloader) downloadEpisodeInternal(
 	resumed := preScan(0, videoPlaylist.Segments, videoDir)
 	for ai, aj := range audioJobs {
 		resumed += preScan(1+ai, aj.playlist.Segments, filepath.Join(tmpDir, fmt.Sprintf("audio_%d", ai)))
+	}
+	for si, sj := range subJobs {
+		resumed += preScan(1+len(audioJobs)+si, sj.playlist.Segments, filepath.Join(tmpDir, fmt.Sprintf("sub_%d", si)))
 	}
 	if resumed > 0 {
 		progMu.Lock()
@@ -601,6 +673,37 @@ func (d *Downloader) downloadEpisodeInternal(
 		}(ai, aj)
 	}
 
+	// Subtitle tracks (indices after the audio ones). A failure only drops that
+	// track: see the playlist loop above.
+	for si, sj := range subJobs {
+		trackWG.Add(1)
+		go func(si int, sj subtitleJob) {
+			defer trackWG.Done()
+			subDir := filepath.Join(tmpDir, fmt.Sprintf("sub_%d", si))
+			if err := downloadTrack(ctx, 1+len(audioJobs)+si, sj.playlist.InitURI, sj.playlist.Segments, subDir, sj.outFile); err != nil {
+				d.logger.Warn("subtitle track failed, continuing without it",
+					domain.F("episode", epLabel),
+					domain.F("subtitle", sj.rendition.Name),
+					domain.F("error", err.Error()),
+				)
+				return
+			}
+			if err := joinWebVTT(sj.outFile); err != nil {
+				d.logger.Warn("subtitle file unusable, continuing without it",
+					domain.F("episode", epLabel),
+					domain.F("subtitle", sj.rendition.Name),
+					domain.F("error", err.Error()),
+				)
+				return
+			}
+			resultSubs[si] = domain.HLSSubtitleTrack{
+				Path:     sj.outFile,
+				Name:     sj.rendition.Name,
+				Language: sj.rendition.Language,
+			}
+		}(si, sj)
+	}
+
 	trackWG.Wait()
 
 	if trackErr != nil {
@@ -630,6 +733,14 @@ func (d *Downloader) downloadEpisodeInternal(
 		codec = "h265"
 	}
 
+	// Drop the tracks that failed above; their slots are still zero values.
+	subs := make([]domain.HLSSubtitleTrack, 0, len(resultSubs))
+	for _, st := range resultSubs {
+		if st.Path != "" {
+			subs = append(subs, st)
+		}
+	}
+
 	return &domain.HLSDownloadResult{
 		Resolution:    selected.Resolution,
 		BitrateKbps:   selected.BitrateKbps(),
@@ -637,6 +748,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		TotalBytes:    totalBytes,
 		VideoPath:     videoPath,
 		AudioTracks:   resultAudio,
+		Subtitles:     subs,
 		AudioFallback: audioFellBack,
 		TempDir:       tmpDir,
 	}, nil
