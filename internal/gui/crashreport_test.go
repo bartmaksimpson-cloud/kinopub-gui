@@ -46,7 +46,7 @@ func TestRedactCrashHidesHomeDir(t *testing.T) {
 func TestCrashReportURLFromLog(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	if crashReportURL("v1.2.3") != "" {
+	if crashReportURL("v1.2.3", "") != "" {
 		t.Fatal("no crash.log yet, want no link")
 	}
 
@@ -59,7 +59,7 @@ func TestCrashReportURLFromLog(t *testing.T) {
 		boom()
 	}()
 
-	raw := crashReportURL("v1.2.3")
+	raw := crashReportURL("v1.2.3", "")
 	if raw == "" {
 		t.Fatal("crash.log written but no link built")
 	}
@@ -94,7 +94,7 @@ func TestCrashReportURLTruncates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raw := crashReportURL("v1")
+	raw := crashReportURL("v1", "")
 	if raw == "" {
 		t.Fatal("want a link")
 	}

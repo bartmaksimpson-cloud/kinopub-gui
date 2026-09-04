@@ -58,7 +58,7 @@ func TestPostCrashIssueSendsRedactedAndDedupes(t *testing.T) {
 	githubAPI = srv.URL
 	defer func() { githubAPI = old }()
 
-	url, err := postCrashIssue(context.Background(), "v1.2.3")
+	url, err := postCrashIssue(context.Background(), "v1.2.3", "")
 	if err != nil {
 		t.Fatalf("postCrashIssue: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestPostCrashIssueSendsRedactedAndDedupes(t *testing.T) {
 		}
 	}
 
-	if _, err := postCrashIssue(context.Background(), "v1.2.3"); err != errAlreadyReported {
+	if _, err := postCrashIssue(context.Background(), "v1.2.3", ""); err != errAlreadyReported {
 		t.Fatalf("second call returned %v, want errAlreadyReported", err)
 	}
 	if calls != 1 {
@@ -95,7 +95,38 @@ func TestPostCrashIssueNeedsToken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	seedCrash(t, dir)
 
-	if _, err := postCrashIssue(context.Background(), "v1"); err == nil {
+	if _, err := postCrashIssue(context.Background(), "v1", ""); err == nil {
 		t.Fatal("want an error when no token is configured")
+	}
+}
+
+// TestReportBodyPrefersJobDetail covers reporting an ordinary failure: a job
+// error never reaches crash.log because nothing panicked, so the UI hands it
+// over directly — and it must be redacted just as hard, since a wrapped URL
+// error carries the kino.watch token in its query string.
+func TestReportBodyPrefersJobDetail(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	seedCrash(t, dir)
+
+	detail := "segment 66 failed: GET https://api.kino.watch/v1/x?access_token=live_secret_value: unexpected EOF"
+	body := reportBody(detail)
+
+	if strings.Contains(body, "live_secret_value") {
+		t.Fatalf("the token survived redaction:\n%s", body)
+	}
+	if !strings.Contains(body, "segment 66 failed") {
+		t.Fatalf("the job error was dropped:\n%s", body)
+	}
+	if strings.Contains(body, "job run") {
+		t.Fatalf("crash.log was used even though a detail was supplied:\n%s", body)
+	}
+
+	if got := reportTitle(body, detail); !strings.HasPrefix(got, "download failed: ") {
+		t.Fatalf("title = %q, a job failure must not be labelled a crash", got)
+	}
+	crash := reportBody("")
+	if got := reportTitle(crash, ""); !strings.HasPrefix(got, "crash: ") {
+		t.Fatalf("title = %q, a recovered panic is a crash", got)
 	}
 }

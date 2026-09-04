@@ -83,17 +83,37 @@ func lastCrashEntry() string {
 	return strings.TrimSpace(string(data)[idx:])
 }
 
-// crashReportURL builds a prefilled GitHub issue for the last crash: the user
-// reviews it in their own browser and decides whether to submit. Nothing is
-// sent from the app itself, so no token has to ship inside the binary — one
-// extracted from a published release would let anyone write to the repo.
-func crashReportURL(version string) string {
-	entry := redactCrash(lastCrashEntry())
+// maxDetail caps what the UI may hand us. A job error is a line or two; the
+// cap is only here so a runaway string cannot become the issue body.
+const maxDetail = 16000
+
+// reportBody picks what to report and cleans it. detail is a failure the UI
+// knows about — an ordinary job error, which never reaches crash.log because
+// nothing panicked — and takes precedence over the last recorded crash. It is
+// redacted exactly like a stack trace: a wrapped URL error carries the
+// kino.watch token in its query string.
+func reportBody(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if len(detail) > maxDetail {
+		detail = detail[:maxDetail] + "\n… truncated"
+	}
+	if detail == "" {
+		detail = lastCrashEntry()
+	}
+	return redactCrash(detail)
+}
+
+// crashReportURL builds a prefilled GitHub issue: the user reviews it in their
+// own browser and decides whether to submit. Nothing is sent from the app
+// itself, so no token has to ship inside the binary — one extracted from a
+// published release would let anyone write to the repo.
+func crashReportURL(version, detail string) string {
+	entry := reportBody(detail)
 	if entry == "" {
 		return ""
 	}
 
-	title := "crash: " + firstLineOf(entry)
+	title := reportTitle(entry, detail)
 	body := "**Version:** " + version + "\n\n" +
 		"<!-- Paths and tokens are already removed. Add what you were doing when it happened. -->\n\n" +
 		"```\n" + entry + "\n```"
@@ -149,14 +169,14 @@ var errAlreadyReported = fmt.Errorf("this crash has already been reported")
 // posts only what crashReportURL would have shown the user in the browser:
 // the same redacted text, so the automatic path can never leak more than the
 // manual one.
-func postCrashIssue(ctx context.Context, version string) (string, error) {
+func postCrashIssue(ctx context.Context, version, detail string) (string, error) {
 	token := crashToken()
 	if token == "" {
 		return "", fmt.Errorf("no GitHub token configured")
 	}
-	entry := redactCrash(lastCrashEntry())
+	entry := reportBody(detail)
 	if entry == "" {
-		return "", fmt.Errorf("no crash recorded")
+		return "", fmt.Errorf("nothing to report")
 	}
 
 	sum := sha256.Sum256([]byte(entry))
@@ -169,7 +189,7 @@ func postCrashIssue(ctx context.Context, version string) (string, error) {
 	}
 
 	body, err := json.Marshal(map[string]string{
-		"title": "crash: " + firstLineOf(entry),
+		"title": reportTitle(entry, detail),
 		"body": "**Version:** " + version + "\n\n" +
 			"_Filed from the app. Paths and tokens are removed._\n\n" +
 			"```\n" + entry + "\n```",
@@ -210,4 +230,14 @@ func postCrashIssue(ctx context.Context, version string) (string, error) {
 		_ = os.WriteFile(markPath, []byte(digest), 0o600)
 	}
 	return out.HTMLURL, nil
+}
+
+// reportTitle labels the issue honestly: a recovered panic is a crash, a job
+// that failed on its own is not, and calling both "crash:" makes the issue
+// list useless for telling them apart.
+func reportTitle(entry, detail string) string {
+	if strings.TrimSpace(detail) != "" {
+		return "download failed: " + firstLineOf(entry)
+	}
+	return "crash: " + firstLineOf(entry)
 }

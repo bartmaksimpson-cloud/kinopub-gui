@@ -258,7 +258,6 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/library/delete-episode", s.handleDeleteLibraryEpisode)
 	mux.HandleFunc("POST /api/open", s.handleOpenPath)
 	mux.HandleFunc("GET /api/fs", s.handleFS)
-	mux.HandleFunc("GET /api/crash-report", s.handleCrashReport)
 	mux.HandleFunc("POST /api/crash-report", s.handleCrashReportSend)
 	mux.HandleFunc("GET /api/img", s.handleImage)
 
@@ -1054,22 +1053,30 @@ func (s *Server) libraryDirs() []string {
 // already stripped of tokens and home paths. The app never posts anything
 // itself: submitting is the user's click, in their own browser, under their
 // own account — so no credential has to ship inside the binary.
-func (s *Server) handleCrashReport(w http.ResponseWriter, r *http.Request) {
-	u := crashReportURL(s.version)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"available": u != "",
-		"url":       u,
-		// canSend means a token is stored, so the report can be filed without
-		// sending the user to a browser. Without one the link still works.
-		"canSend": crashToken() != "",
-	})
-}
-
 // handleCrashReportSend files the crash as an issue directly. It runs only on
 // an explicit click: nothing is ever reported in the background, even to a
 // private repo the user owns.
 func (s *Server) handleCrashReportSend(w http.ResponseWriter, r *http.Request) {
-	issueURL, err := postCrashIssue(r.Context(), s.version)
+	// detail is optional: with it the UI reports an ordinary job failure, which
+	// never reaches crash.log because nothing panicked; without it we fall back
+	// to the last recorded crash.
+	var body struct {
+		Detail string `json:"detail"`
+	}
+	if r.ContentLength > 0 {
+		_ = decodeJSON(w, r, &body)
+	}
+	// No token: hand back the prefilled link so the browser path still works
+	// for a job failure, with the same redaction applied.
+	if crashToken() == "" {
+		if u := crashReportURL(s.version, body.Detail); u != "" {
+			writeJSON(w, http.StatusOK, map[string]any{"open": u})
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "nothing to report")
+		return
+	}
+	issueURL, err := postCrashIssue(r.Context(), s.version, body.Detail)
 	switch {
 	case errors.Is(err, errAlreadyReported):
 		// Not a failure: a repeating panic must not open an issue per tick.

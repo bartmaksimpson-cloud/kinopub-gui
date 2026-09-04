@@ -20,10 +20,10 @@ import (
 	"github.com/ZioSHik/kinopub-gui/internal/lib/credstore"
 )
 
-// updateRepo is the PUBLIC repository this binary updates from when no token
-// is configured. Its releases are readable without authentication, so an
-// ordinary install keeps updating with nothing to set up.
-const updateRepo = "ZioSHik/kinopub-gui"
+// updateRepo is the repository this binary updates from. It is public, so
+// releases are readable without authentication and updating needs no setup at
+// all — see issueRepo, which is the same repository.
+const updateRepo = issueRepo
 
 // githubToken returns the personal access token from the encrypted credential
 // store, or "" when none is set. Read fresh on every check so a token entered
@@ -36,18 +36,10 @@ func (u *updateChecker) githubToken() string {
 	return creds.GitHubToken
 }
 
-// repo picks where releases come from: a configured token means the user has
-// their own (private) fork and wants updates from there; without one we stay
-// on the public repo.
-func (u *updateChecker) repo() string {
-	if u.githubToken() != "" {
-		return issueRepo
-	}
-	return updateRepo
-}
-
-// authorize adds the token to a request bound for api.github.com. Passed to
-// downloadTo as a decorator so the header is set in exactly one place.
+// authorize adds the token to a request bound for api.github.com when one is
+// stored. The repository is public, so this is never required to read a
+// release — it only lifts the unauthenticated rate limit. Passed to downloadTo
+// as a decorator so the header is set in exactly one place.
 func (u *updateChecker) authorize(req *http.Request) {
 	if tok := u.githubToken(); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
@@ -197,7 +189,7 @@ func (u *updateChecker) fetch(ctx context.Context) (UpdateStatus, error) {
 }
 
 func (u *updateChecker) latestRelease(ctx context.Context) (*ghRelease, error) {
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", u.repo())
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -218,12 +210,9 @@ func (u *updateChecker) latestRelease(ctx context.Context) (*ghRelease, error) {
 		case http.StatusUnauthorized:
 			return nil, fmt.Errorf("GitHub rejected the token (HTTP 401) — it is invalid, expired or revoked; re-issue it and paste it again")
 		case http.StatusForbidden:
-			return nil, fmt.Errorf("GitHub refused the request (HTTP 403) — the token is valid but lacks access to %s, or the rate limit is exhausted", u.repo())
+			return nil, fmt.Errorf("GitHub refused the request (HTTP 403) — the token is valid but lacks access to %s, or the rate limit is exhausted", updateRepo)
 		case http.StatusNotFound:
-			if u.githubToken() != "" {
-				return nil, fmt.Errorf("no release found in %s (HTTP 404) — the repository has no releases yet, or the token cannot see it", u.repo())
-			}
-			return nil, fmt.Errorf("no release found in %s (HTTP 404)", u.repo())
+			return nil, fmt.Errorf("no release found in %s (HTTP 404) — the repository has no releases yet", updateRepo)
 		}
 		return nil, fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)
 	}
@@ -257,18 +246,8 @@ func (u *updateChecker) apply(ctx context.Context) (string, error) {
 	var assetURL string
 	var assetSize int64
 	checksumsURL := ""
-	// A private repo's browser_download_url is useless to us: it redirects to
-	// a signed URL that rejects the Authorization header. The asset API
-	// endpoint serves the bytes directly when asked for octet-stream.
-	private := u.githubToken() != ""
-	assetAPI := func(id int64) string {
-		return fmt.Sprintf("https://api.github.com/repos/%s/releases/assets/%d", u.repo(), id)
-	}
 	for _, a := range rel.Assets {
 		url := a.BrowserDownloadURL
-		if private {
-			url = assetAPI(a.ID)
-		}
 		switch a.Name {
 		case want:
 			assetURL = url
@@ -299,12 +278,7 @@ func (u *updateChecker) apply(ctx context.Context) (string, error) {
 		os.Remove(tmpName) // no-op once renamed into place
 	}()
 
-	assetReq := func(req *http.Request) {
-		u.authorize(req)
-		if private {
-			req.Header.Set("Accept", "application/octet-stream")
-		}
-	}
+	assetReq := func(req *http.Request) { u.authorize(req) }
 	sum, err := downloadTo(ctx, u.downloadClient(), assetURL, tmp, 200<<20, assetReq)
 	if err != nil {
 		return "", fmt.Errorf("download: %w", err)
