@@ -44,6 +44,7 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
     force: false,
     dryRun: false,
     ffmpegArgs: "",
+    transcodeHevc: settings.transcodeHevc,
     ffmpegPath: "",
     userAgent: "",
     verbosity: settings.verbosity,
@@ -258,6 +259,15 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
 
             <div className="grid gap-2 sm:grid-cols-2">
               <Toggle label={t("Force re-download")} hint={t("Ignore completed state")} checked={form.force} onChange={(v) => set("force", v)} />
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Toggle
+                label={t("Convert video to HEVC")}
+                hint={t("Audio and subtitles are copied untouched")}
+                checked={form.transcodeHevc}
+                onChange={(v) => set("transcodeHevc", v)}
+              />
             </div>
 
             <Field label={t("Extra ffmpeg args")} hint={t('advanced — e.g. "-c:v libx265 -crf 28"')}>

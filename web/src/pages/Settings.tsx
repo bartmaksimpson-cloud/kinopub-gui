@@ -137,6 +137,12 @@ export function SettingsPage() {
             <input className="input" placeholder="socks5://127.0.0.1:1080" value={form.proxy} onChange={(e) => set("proxy", e.target.value)} />
           </Field>
         </div>
+        <Toggle
+          label={t("Convert video to HEVC")}
+          hint={t("Slower download, but plays on devices that only decode 4K in HEVC. Audio and subtitles are copied untouched.")}
+          checked={form.transcodeHevc}
+          onChange={(v) => set("transcodeHevc", v)}
+        />
       </div>
 
       <div className="card space-y-3 p-5">

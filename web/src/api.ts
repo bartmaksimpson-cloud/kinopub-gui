@@ -140,6 +140,7 @@ export interface Settings {
   verbosity: string;
   theme: string;
   libraryDirs: string[] | null;
+  transcodeHevc: boolean;
 }
 
 export interface Snapshot {
@@ -299,6 +300,7 @@ export interface RunRequest {
   force: boolean;
   dryRun: boolean;
   ffmpegArgs: string;
+  transcodeHevc: boolean;
   ffmpegPath: string;
   userAgent: string;
   verbosity: string;

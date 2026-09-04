@@ -370,6 +370,9 @@ export function TitleDetail({
         force: false,
         dryRun: false,
         ffmpegArgs: "",
+        // Follows the global setting: the reason to convert is a property of the
+        // playback device, not of one particular title.
+        transcodeHevc: settings.transcodeHevc,
         ffmpegPath: "",
         userAgent: "",
         verbosity: settings.verbosity,

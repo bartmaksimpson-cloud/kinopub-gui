@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,10 @@ type Settings struct {
 	Verbosity   string   `json:"verbosity"`
 	Theme       string   `json:"theme"`
 	LibraryDirs []string `json:"libraryDirs"`
+	// TranscodeHEVC re-encodes video to HEVC on download. Some players decode
+	// 4K HEVC in hardware but fall back to software for 4K H.264, which stutters;
+	// converting once on the way in fixes playback for good.
+	TranscodeHEVC bool `json:"transcodeHevc"`
 }
 
 func defaultSettings() Settings {
@@ -89,6 +94,8 @@ func defaultSettings() Settings {
 		Verbosity:   "normal",
 		Theme:       "cinematic",
 		LibraryDirs: nil,
+		// Off by default: re-encoding is lossy and slow, so it stays opt-in.
+		TranscodeHEVC: false,
 	}
 }
 
@@ -214,9 +221,32 @@ type RunRequest struct {
 	Force      bool           `json:"force"`
 	DryRun     bool           `json:"dryRun"`
 	FFmpegArgs string         `json:"ffmpegArgs"`
-	FFmpegPath string         `json:"ffmpegPath"`
-	UserAgent  string         `json:"userAgent"`
-	Verbosity  string         `json:"verbosity"`
+	// TranscodeHEVC turns the checkbox into encoder arguments server-side, so the
+	// UI never has to know which encoder this platform actually has.
+	TranscodeHEVC bool   `json:"transcodeHevc"`
+	FFmpegPath    string `json:"ffmpegPath"`
+	UserAgent     string `json:"userAgent"`
+	Verbosity     string `json:"verbosity"`
+}
+
+// hevcEncoderArgs returns ffmpeg arguments that re-encode video to HEVC and
+// leave audio and subtitles alone. They land after the "-c copy" the muxer
+// already emits, and ffmpeg honours the last option for a stream type, so only
+// video is affected — every audio track and subtitle is still copied verbatim.
+//
+// The encoder is chosen per platform because a hardware one is roughly an order
+// of magnitude faster, which is what makes converting a 4K episode practical.
+func hevcEncoderArgs() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		// VideoToolbox ships with every supported macOS release.
+		return []string{"-c:v", "hevc_videotoolbox", "-q:v", "60", "-tag:v", "hvc1"}
+	default:
+		// Software x265 elsewhere: correct everywhere, slow. Hardware encoders on
+		// Linux and Windows (VAAPI, NVENC, QSV) need device probing and a fallback
+		// path, which is not worth carrying until someone actually asks for it.
+		return []string{"-c:v", "libx265", "-crf", "22", "-preset", "medium", "-tag:v", "hvc1"}
+	}
 }
 
 // buildRunConfig translates a RunRequest into a validated domain.RunConfig.
@@ -264,8 +294,13 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 	}
 
 	var extraFFmpeg []string
+	if req.TranscodeHEVC {
+		extraFFmpeg = append(extraFFmpeg, hevcEncoderArgs()...)
+	}
 	if req.FFmpegArgs != "" {
-		extraFFmpeg = splitShellArgs(req.FFmpegArgs)
+		// Manual arguments go last on purpose: they must be able to override the
+		// preset above for anyone who wants a different encoder or quality.
+		extraFFmpeg = append(extraFFmpeg, splitShellArgs(req.FFmpegArgs)...)
 	}
 
 	cfg := domain.RunConfig{

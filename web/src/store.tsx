@@ -65,6 +65,7 @@ const emptySettings: Settings = {
   verbosity: "normal",
   theme: "cinematic",
   libraryDirs: null,
+  transcodeHevc: false,
 };
 
 function sortJobs(jobs: JobView[]): JobView[] {
