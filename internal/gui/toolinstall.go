@@ -268,6 +268,7 @@ func extractTarXzBinaries(ctx context.Context, archivePath, destDir string, bina
 	defer os.RemoveAll(tmpDir)
 
 	cmd := exec.CommandContext(ctx, "tar", "-xf", archivePath, "-C", tmpDir)
+	hideConsole(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("extract tar.xz failed (%v): %s — is `tar`/`xz` installed?",
 			err, strings.TrimSpace(string(out)))
@@ -347,7 +348,9 @@ func writeExecutable(path string, r io.Reader) error {
 func verifyTool(ctx context.Context, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, path, "-version").Run()
+	probe := exec.CommandContext(ctx, path, "-version")
+	hideConsole(probe)
+	return probe.Run()
 }
 
 // DepsView reports tool availability and whether an in-app install is possible.

@@ -137,6 +137,7 @@ func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) 
 func makeRunFunc() downloader.RunFunc {
 	return func(ctx context.Context, name string, args, env []string, stdout io.Writer) error {
 		cmd := exec.CommandContext(ctx, name, args...)
+		hideConsole(cmd) // ffmpeg/ffprobe must not pop a console over the UI
 		if len(env) > 0 {
 			cmd.Env = append(os.Environ(), env...)
 		}

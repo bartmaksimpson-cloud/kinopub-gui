@@ -45,7 +45,9 @@ func ffmpegStatus() FFmpegStatus {
 func binaryVersion(path string) string {
 	ctx, cancel := contextWithTimeout(3 * time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "-version").Output()
+	probe := exec.CommandContext(ctx, path, "-version")
+	hideConsole(probe)
+	out, err := probe.Output()
 	if err != nil {
 		return ""
 	}
