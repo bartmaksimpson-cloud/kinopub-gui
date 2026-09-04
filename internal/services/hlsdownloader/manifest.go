@@ -29,10 +29,20 @@ type AudioRendition struct {
 	URI      string // media playlist URL for this audio track
 }
 
+// SubtitleRendition represents a subtitle track from the master playlist. The
+// shape mirrors AudioRendition because the manifest describes both the same way.
+type SubtitleRendition struct {
+	GroupID  string
+	Name     string
+	Language string
+	URI      string // media playlist URL for this subtitle track
+}
+
 // MasterPlaylist holds parsed data from an HLS master playlist.
 type MasterPlaylist struct {
-	Variants []Variant
-	Audio    []AudioRendition
+	Variants  []Variant
+	Audio     []AudioRendition
+	Subtitles []SubtitleRendition
 }
 
 // MediaPlaylist holds parsed data from an HLS media playlist.
@@ -144,14 +154,27 @@ func parseMasterPlaylist(r io.Reader, baseURL string) (*MasterPlaylist, error) {
 			pendingVariant = &v
 		} else if strings.HasPrefix(line, "#EXT-X-MEDIA:") {
 			attrs := parseHLSAttributes(line[len("#EXT-X-MEDIA:"):])
-			if strings.ToUpper(attrs["TYPE"]) == "AUDIO" {
-				rendition := AudioRendition{
+			switch strings.ToUpper(attrs["TYPE"]) {
+			case "AUDIO":
+				result.Audio = append(result.Audio, AudioRendition{
 					GroupID:  attrs["GROUP-ID"],
 					Name:     attrs["NAME"],
 					Language: attrs["LANGUAGE"],
 					URI:      resolveURL(baseURL, attrs["URI"]),
+				})
+			case "SUBTITLES":
+				// Parsed the same way as audio and, until now, dropped on the floor:
+				// the branch simply did not exist, which is why no download ever
+				// carried subtitles despite the muxer being ready for them.
+				// A rendition without a URI is a declaration only — nothing to fetch.
+				if uri := attrs["URI"]; uri != "" {
+					result.Subtitles = append(result.Subtitles, SubtitleRendition{
+						GroupID:  attrs["GROUP-ID"],
+						Name:     attrs["NAME"],
+						Language: attrs["LANGUAGE"],
+						URI:      resolveURL(baseURL, uri),
+					})
 				}
-				result.Audio = append(result.Audio, rendition)
 			}
 		} else if pendingVariant != nil && !strings.HasPrefix(line, "#") && line != "" {
 			pendingVariant.URL = resolveURL(baseURL, line)
