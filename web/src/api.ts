@@ -134,6 +134,7 @@ export interface UpdateStatus {
 
 export interface Settings {
   outputPath: string;
+  workPath: string;
   quality: string;
   container: string;
   proxy: string;

@@ -271,7 +271,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// pointing at them. (A PAUSE is the opposite: there the data is the point.)
 	dropCanceledTemp := func(ep domain.Episode) {
 		if outPath, err := e.deps.OutputLayout.EpisodePath(cfg.OutputPath, series, ep); err == nil {
-			os.RemoveAll(outPath + ".ts.hls-tmp")
+			os.RemoveAll(domain.WorkPathFor(cfg.WorkPath, outPath) + ".ts.hls-tmp")
 		}
 	}
 	// epInfo lets the live-retry control reconstruct a pending unit for any
@@ -417,7 +417,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 				// paused, where partial data is kept for a later resume).
 				if e.deps.Paused == nil || !e.deps.Paused() {
 					if outPath, pathErr := e.deps.OutputLayout.EpisodePath(cfg.OutputPath, series, pe.ep); pathErr == nil {
-						os.RemoveAll(outPath + ".ts.hls-tmp")
+						os.RemoveAll(domain.WorkPathFor(cfg.WorkPath, outPath) + ".ts.hls-tmp")
 					}
 				}
 				mu.Lock()
@@ -825,7 +825,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			}
 			outcomes = append(outcomes, domain.JobOutcome{Key: pe.ep.Key, Err: err, Attempts: pe.attempts})
 			if outPath, pathErr := e.deps.OutputLayout.EpisodePath(cfg.OutputPath, series, pe.ep); pathErr == nil {
-				os.RemoveAll(outPath + ".ts.hls-tmp")
+				os.RemoveAll(domain.WorkPathFor(cfg.WorkPath, outPath) + ".ts.hls-tmp")
 			}
 		}
 	}
@@ -979,7 +979,9 @@ func (e *engine) attemptHLSEpisode(
 
 	e.deps.ProgressReporter.EpisodeStarted(ep.Key)
 
-	tsPath := outPath + ".ts"
+	// Segments and the concatenated stream are intermediate files: they follow
+	// the work folder when there is one.
+	tsPath := domain.WorkPathFor(cfg.WorkPath, outPath) + ".ts"
 	hlsResult, dlErr := e.deps.HLSDownloader.DownloadEpisode(ctx, manifestURL, cfg.Quality, tsPath, ep.Key, e.deps.ProgressReporter)
 	if dlErr != nil {
 		if ctx.Err() != nil {

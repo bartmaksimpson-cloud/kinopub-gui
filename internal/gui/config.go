@@ -68,6 +68,11 @@ const (
 // Settings holds user-configurable GUI defaults persisted between sessions.
 type Settings struct {
 	OutputPath  string   `json:"outputPath"`
+	// WorkPath is where the intermediate files go (partial segments, the raw
+	// file, the muxer's .tmp). Empty keeps them next to the finished file.
+	// Pointing it at a different drive is what makes the remux stop fighting
+	// itself for one disk head.
+	WorkPath    string   `json:"workPath"`
 	Quality     string   `json:"quality"`
 	Container   string   `json:"container"`
 	Proxy       string   `json:"proxy"`
@@ -167,6 +172,8 @@ func (s *settingsStore) load() {
 	if merged.OutputPath == "" {
 		merged.OutputPath = def.OutputPath
 	}
+	// WorkPath is deliberately not defaulted: empty means "next to the output",
+	// which is the right behaviour for a single-disk machine.
 	if merged.Quality == "" {
 		merged.Quality = def.Quality
 	}
@@ -227,6 +234,7 @@ type AudioSpecDTO struct {
 type RunRequest struct {
 	URL        string `json:"url"`
 	OutputPath string `json:"outputPath"`
+	WorkPath   string `json:"workPath"`
 	Quality    string `json:"quality"`
 	Container  string `json:"container"`
 	Proxy      string `json:"proxy"`
@@ -312,6 +320,7 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		// queue should show one consistent (current) form.
 		InputURL:       httpx.CanonicalSiteURL(req.URL),
 		OutputPath:     req.OutputPath,
+		WorkPath:       req.WorkPath,
 		MaxConcurrency: episodeConcurrency,
 		MaxRetries:     episodeRetries,
 		// MinIntervalMS stays 0: a fixed delay before every request only slows

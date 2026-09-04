@@ -39,8 +39,17 @@ const (
 
 // RunConfig holds all configuration for a single download run.
 type RunConfig struct {
-	InputURL        string
-	OutputPath      string // "" → cwd (Req 11.1)
+	InputURL   string
+	OutputPath string // "" → cwd (Req 11.1)
+	// WorkPath is where the intermediate files live — partially downloaded
+	// segments, the raw file, the muxer's .tmp. Empty keeps them next to the
+	// finished file, which is what they always did.
+	//
+	// Splitting them matters on a spinning disk: the remux reads the raw file
+	// and writes the final one at the same time, and with both on one drive the
+	// head spends its life seeking between them. Two drives turn that back into
+	// two sequential streams.
+	WorkPath        string
 	MaxConcurrency  int    // [1,16], default 2 (Req 4.1, 4.2)
 	MaxRetries      int    // default 5 (Req 5.6)
 	MinIntervalMS   int    // [0,60000] (Req 4.5)

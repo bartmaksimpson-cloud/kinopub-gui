@@ -59,6 +59,7 @@ const emptyKpAuth: KPStatus = { loggedIn: false, pending: false };
 const emptyFFmpeg: FFmpegStatus = { ffmpegFound: false, ffprobeFound: false };
 const emptySettings: Settings = {
   outputPath: "",
+  workPath: "",
   quality: "1080p",
   container: "mkv",
   proxy: "",

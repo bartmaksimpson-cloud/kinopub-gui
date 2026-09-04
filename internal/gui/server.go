@@ -480,9 +480,14 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	// A property of the player the files are for, not of one download — so it
 	// comes from the settings rather than from every start request.
-	deviceLimits := s.settings.get()
-	cfg.MaxHeight = deviceLimits.MaxHeight
-	cfg.MaxFPS = deviceLimits.MaxFPS
+	saved := s.settings.get()
+	cfg.MaxHeight = saved.MaxHeight
+	cfg.MaxFPS = saved.MaxFPS
+	// Where the temp files go is a property of this machine's disks, like the
+	// decoder limits above — not something a single download asks for.
+	if cfg.WorkPath == "" {
+		cfg.WorkPath = saved.WorkPath
+	}
 	if cfg.InputURL == "" {
 		writeErr(w, http.StatusBadRequest, "a kino.watch URL is required")
 		return

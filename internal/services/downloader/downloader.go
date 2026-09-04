@@ -47,6 +47,7 @@ type Downloader struct {
 	transcodeHEVC bool
 	maxHeight     int
 	maxFPS        float64
+	workDir       string
 	noChunked     bool
 	httpClient    *http.Client
 }
@@ -72,6 +73,35 @@ func WithMaxHeight(n int) Option {
 			d.maxHeight = n
 		}
 	}
+}
+
+// WithWorkDir puts the intermediate files — the raw download, the segments, the
+// muxer's .tmp — in their own folder instead of next to the finished file. On a
+// spinning disk that is the difference between one head seeking between two
+// files and two drives each doing one sequential stream. Empty keeps the old
+// behaviour.
+func WithWorkDir(dir string) Option {
+	return func(d *Downloader) {
+		d.workDir = dir
+	}
+}
+
+// workPath is where an intermediate file for this job goes. The directory is
+// created on the way: a work folder the user typed once may not exist yet.
+func (d *Downloader) workPath(outPath, suffix string) string {
+	p := domain.WorkPathFor(d.workDir, outPath) + suffix
+	if d.workDir != "" {
+		if err := os.MkdirAll(d.workDir, 0o755); err != nil {
+			// Unusable work folder must not fail the download: fall back to the
+			// output folder, which is known to work — it is where the file goes.
+			d.logger.Warn("work folder unusable, keeping temp files next to the output",
+				domain.F("dir", d.workDir),
+				domain.F("error", err.Error()),
+			)
+			return outPath + suffix
+		}
+	}
+	return p
 }
 
 // WithMaxFPS caps the frame rate of finished files whose frame is 4K-class:
@@ -210,7 +240,7 @@ func (d *Downloader) downloadChunked(ctx context.Context, job domain.Job, sink d
 	)
 
 	// 1. Download raw file via chunked HTTP.
-	rawPath := job.OutPath + ".raw"
+	rawPath := d.workPath(job.OutPath, ".raw")
 	chunked := NewChunked(d.httpClient, d.auth, d.logger)
 
 	if err := chunked.Download(ctx, job.Media.Source.URL, rawPath, job.Episode.Key, sink); err != nil {
@@ -265,7 +295,7 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		domain.F("output", job.OutPath),
 	)
 
-	tempPath := job.OutPath + ".tmp"
+	tempPath := d.workPath(job.OutPath, ".tmp")
 	// The master playlist already told us the frame size, so a source over the
 	// height cap is scaled here, in the pass that runs anyway.
 	fit := d.fitArgs(hls.Resolution, hls.FrameRate, hls.BitrateKbps, hls.Codec)
@@ -325,7 +355,7 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		return domain.ErrEmptyOutput
 	}
 
-	if err := os.Rename(tempPath, job.OutPath); err != nil {
+	if err := moveFile(tempPath, job.OutPath); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("rename temp to final: %w", err)
 	}
@@ -344,7 +374,7 @@ func (d *Downloader) RemuxLocal(ctx context.Context, job domain.Job, localPath s
 		domain.F("output", job.OutPath),
 	)
 
-	tempPath := job.OutPath + ".tmp"
+	tempPath := d.workPath(job.OutPath, ".tmp")
 	args := BuildRemuxArgs(job, localPath, tempPath)
 
 	// Run ffmpeg (no proxy env, no auth — local file).
@@ -360,7 +390,7 @@ func (d *Downloader) RemuxLocal(ctx context.Context, job domain.Job, localPath s
 		return domain.ErrEmptyOutput
 	}
 
-	if err := os.Rename(tempPath, job.OutPath); err != nil {
+	if err := moveFile(tempPath, job.OutPath); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("rename temp to final: %w", err)
 	}
@@ -383,7 +413,7 @@ func (d *Downloader) downloadDirect(ctx context.Context, job domain.Job, sink do
 	}
 
 	// 2. Compute temp path.
-	tempPath := job.OutPath + ".tmp"
+	tempPath := d.workPath(job.OutPath, ".tmp")
 
 	// 3. Build ffmpeg args.
 	args := BuildFFmpegArgs(job, proxyEnv, d.auth, tempPath, d.effectiveArgs(job))
@@ -451,7 +481,7 @@ func (d *Downloader) downloadDirect(ctx context.Context, job domain.Job, sink do
 	}
 
 	// 8. Atomic rename to final path.
-	if err := os.Rename(tempPath, job.OutPath); err != nil {
+	if err := moveFile(tempPath, job.OutPath); err != nil {
 		d.logger.Error("rename failed",
 			domain.F("error", err.Error()),
 			domain.F("from", tempPath),

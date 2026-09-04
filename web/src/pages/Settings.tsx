@@ -29,6 +29,7 @@ export function SettingsPage() {
   const [form, setForm] = useState<Settings>(settings);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [pickOutput, setPickOutput] = useState(false);
+  const [pickWork, setPickWork] = useState(false);
   const [pickLib, setPickLib] = useState(false);
 
   // Settings persist automatically on every edit (debounced) — no Save button.
@@ -114,6 +115,28 @@ export function SettingsPage() {
             <FolderOpen className="h-4 w-4 shrink-0 text-gold-400" />
             <span className="truncate font-mono text-xs">{form.outputPath || t("Choose…")}</span>
           </button>
+        </Field>
+
+        <Field
+          label={t("Working folder")}
+          hint={t("Where partial segments, the raw file and the muxer's temp file are kept. Empty keeps them next to the finished file. Pointing it at another drive stops the remux from reading and writing the same disk at once — on a hard drive that is most of the wait.")}
+        >
+          <div className="flex gap-2">
+            <button className="input flex flex-1 items-center gap-2 text-left" onClick={() => setPickWork(true)} type="button">
+              <FolderOpen className="h-4 w-4 shrink-0 text-gold-400" />
+              <span className="truncate font-mono text-xs">{form.workPath || t("Next to the finished file")}</span>
+            </button>
+            {form.workPath && (
+              <button
+                className="btn-ghost px-3"
+                type="button"
+                onClick={() => set("workPath", "")}
+                title={t("Clear")}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -210,6 +233,7 @@ export function SettingsPage() {
       <UpdateCard />
 
       <DirPicker open={pickOutput} initial={form.outputPath} onClose={() => setPickOutput(false)} onSelect={(p) => set("outputPath", p)} />
+      <DirPicker open={pickWork} initial={form.workPath || form.outputPath} onClose={() => setPickWork(false)} onSelect={(p) => set("workPath", p)} />
       <DirPicker
         open={pickLib}
         initial={form.outputPath}
