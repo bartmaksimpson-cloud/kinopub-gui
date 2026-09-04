@@ -255,6 +255,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/library/delete-episode", s.handleDeleteLibraryEpisode)
 	mux.HandleFunc("POST /api/open", s.handleOpenPath)
 	mux.HandleFunc("GET /api/fs", s.handleFS)
+	mux.HandleFunc("GET /api/crash-report", s.handleCrashReport)
 	mux.HandleFunc("GET /api/img", s.handleImage)
 
 	// SPA / static assets.
@@ -1015,6 +1016,15 @@ func (s *Server) libraryDirs() []string {
 		add(d)
 	}
 	return dirs
+}
+
+// handleCrashReport hands the UI a prefilled GitHub issue for the last panic,
+// already stripped of tokens and home paths. The app never posts anything
+// itself: submitting is the user's click, in their own browser, under their
+// own account — so no credential has to ship inside the binary.
+func (s *Server) handleCrashReport(w http.ResponseWriter, r *http.Request) {
+	u := crashReportURL(s.version)
+	writeJSON(w, http.StatusOK, map[string]any{"available": u != "", "url": u})
 }
 
 func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {

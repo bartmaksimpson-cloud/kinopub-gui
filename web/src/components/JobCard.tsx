@@ -616,6 +616,27 @@ export function JobCard({ job }: { job: JobView }) {
               <span className="min-w-0 break-words">{errorText}</span>
             </div>
           )}
+          {errorText && !canceledStop && !timedOut && (
+            // Only worth offering for a real failure: a stop the user asked
+            // for, or an unreachable host, is nothing to file a bug about.
+            <button
+              className="mt-1 text-[11px] text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
+              onClick={async () => {
+                try {
+                  const { available, url } = await api.crashReport();
+                  if (!available) {
+                    toast(t("No crash details were recorded for this failure."), "info");
+                    return;
+                  }
+                  window.open(url, "_blank", "noopener");
+                } catch (e: any) {
+                  toast(e.message || "Error", "error");
+                }
+              }}
+            >
+              {t("Report this crash")}
+            </button>
+          )}
 
           <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
             {totalEps > 0 && !single && (

@@ -620,6 +620,7 @@ export const api = {
   deleteLibraryEpisode: (dir: string, key: string) =>
     req<{ deleted: boolean }>("POST", "/api/library/delete-episode", { dir, key }),
   openPath: (path: string, reveal = false) => req<{ ok: boolean }>("POST", "/api/open", { path, reveal }),
+  crashReport: () => req<{ available: boolean; url: string }>("GET", "/api/crash-report"),
   fs: (path: string) => req<FSListing>("GET", `/api/fs?path=${encodeURIComponent(path)}`),
 
   // Official kino.watch API auth (device-code).

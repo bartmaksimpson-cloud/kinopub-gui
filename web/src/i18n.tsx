@@ -473,6 +473,8 @@ const RU: Record<string, string> = {
   Maximum: "максимум",
   "All countries": "Все страны",
   "Search country…": "Поиск страны…",
+  "Report this crash": "Сообщить об ошибке",
+  "No crash details were recorded for this failure.": "Для этой ошибки не записано подробностей.",
   "Sound & subtitles": "Звук и субтитры",
   Subtitles: "Субтитры",
   KP: "КП",
