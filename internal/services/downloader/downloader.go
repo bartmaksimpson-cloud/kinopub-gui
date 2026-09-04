@@ -45,6 +45,7 @@ type Downloader struct {
 	auth          domain.RequestAuth
 	extraArgs     []string
 	transcodeHEVC bool
+	maxHeight     int
 	noChunked     bool
 	httpClient    *http.Client
 }
@@ -61,12 +62,33 @@ func WithTranscodeHEVC(v bool) Option {
 	}
 }
 
+// WithMaxHeight caps the frame height of finished files: anything taller is
+// scaled down to it (aspect kept). 0 leaves every frame as it came. See
+// domain.RunConfig.MaxHeight for why a height limit and not a "4K" switch.
+func WithMaxHeight(n int) Option {
+	return func(d *Downloader) {
+		if n > 0 {
+			d.maxHeight = n
+		}
+	}
+}
+
+// fitArgs are the arguments that bring one source inside the height cap, or
+// nil when it already fits (or its resolution is unknown).
+func (d *Downloader) fitArgs(resolution string) []string {
+	return scaleToHeightArgs(heightOf(resolution), d.maxHeight, d.ffmpegPath)
+}
+
 // effectiveArgs is the ffmpeg tail for one job: the encoder preset first (only
 // when this job actually needs converting), then the user's manual arguments so
 // they can still override it.
 func (d *Downloader) effectiveArgs(job domain.Job) []string {
 	var args []string
-	if d.transcodeHEVC && !isHEVCSource(job.Media.Source.Codec) {
+	if fit := d.fitArgs(job.Media.Video.Resolution); len(fit) > 0 {
+		// Scaling re-encodes anyway, and it encodes to HEVC — adding the HEVC
+		// preset on top would only repeat the same options.
+		args = append(args, fit...)
+	} else if d.transcodeHEVC && !isHEVCSource(job.Media.Source.Codec) {
 		args = append(args, hevcEncoderArgs(d.ffmpegPath)...)
 	}
 	return append(args, d.extraArgs...)
@@ -219,7 +241,17 @@ func (d *Downloader) MuxHLS(ctx context.Context, job domain.Job, hls *domain.HLS
 	)
 
 	tempPath := job.OutPath + ".tmp"
-	args := BuildHLSMuxArgs(job, hls, tempPath)
+	// The master playlist already told us the frame size, so a source over the
+	// height cap is scaled here, in the pass that runs anyway.
+	fit := d.fitArgs(hls.Resolution)
+	if len(fit) > 0 {
+		d.logger.Info("frame taller than the limit, scaling while muxing",
+			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+			domain.F("source", hls.Resolution),
+			domain.F("max_height", d.maxHeight),
+		)
+	}
+	args := BuildHLSMuxArgs(job, hls, tempPath, fit...)
 
 	runErr := d.run(ctx, d.ffmpegPath, args, nil, nil)
 	if runErr != nil && len(hls.Subtitles) > 0 && ctx.Err() == nil {
@@ -233,7 +265,7 @@ func (d *Downloader) MuxHLS(ctx context.Context, job domain.Job, hls *domain.HLS
 		os.Remove(tempPath)
 		withoutSubs := *hls
 		withoutSubs.Subtitles = nil
-		runErr = d.run(ctx, d.ffmpegPath, BuildHLSMuxArgs(job, &withoutSubs, tempPath), nil, nil)
+		runErr = d.run(ctx, d.ffmpegPath, BuildHLSMuxArgs(job, &withoutSubs, tempPath, fit...), nil, nil)
 	}
 	if runErr != nil {
 		os.Remove(tempPath)

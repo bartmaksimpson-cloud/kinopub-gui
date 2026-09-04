@@ -141,6 +141,7 @@ export interface Settings {
   theme: string;
   libraryDirs: string[] | null;
   transcodeHevc: boolean;
+  maxHeight: number;
 }
 
 export interface Snapshot {

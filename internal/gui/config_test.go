@@ -238,3 +238,47 @@ func TestBuildRunConfig_FFmpegArgsSplit(t *testing.T) {
 		t.Errorf("FFmpegExtraArgs = %v", cfg.FFmpegExtraArgs)
 	}
 }
+
+// Settings used to be merged field by field, and only the strings were copied:
+// every bool and number in the file — transcodeHevc, and now maxHeight — was
+// silently reset to its default on restart.
+func TestSettingsLoad_KeepsNonStringFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gui.json")
+	body := `{"outputPath":"/tmp/out","transcodeHevc":true,"maxHeight":2160,"quality":""}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &settingsStore{cur: defaultSettings(), path: path}
+	s.load()
+
+	got := s.get()
+	if !got.TranscodeHEVC {
+		t.Error("transcodeHevc не пережил перезапуск")
+	}
+	if got.MaxHeight != 2160 {
+		t.Errorf("maxHeight = %d, ожидалось 2160", got.MaxHeight)
+	}
+	if got.OutputPath != "/tmp/out" {
+		t.Errorf("outputPath = %q", got.OutputPath)
+	}
+	// A field written empty must fall back to the default, not stay empty.
+	if got.Quality != defaultSettings().Quality {
+		t.Errorf("пустое quality затёрло значение по умолчанию: %q", got.Quality)
+	}
+}
+
+// An impossible cap would scale every download to nothing.
+func TestSettingsSave_ClampsMaxHeight(t *testing.T) {
+	s := &settingsStore{cur: defaultSettings()}
+	for _, bad := range []int{-1, 10000} {
+		saved, err := s.save(Settings{Container: "mkv", MaxHeight: bad})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if saved.MaxHeight != 0 {
+			t.Errorf("maxHeight %d не сброшен, сохранено %d", bad, saved.MaxHeight)
+		}
+	}
+}

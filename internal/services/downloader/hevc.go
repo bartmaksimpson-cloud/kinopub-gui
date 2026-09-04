@@ -1,7 +1,9 @@
 package downloader
 
 import (
+	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -53,6 +55,35 @@ func hevcEncoderArgs(ffmpegPath string) []string {
 		encoderArgs = []string{"-c:v", "libx265", "-crf", "22", "-preset", "medium", "-tag:v", "hvc1"}
 	})
 	return encoderArgs
+}
+
+// scaleToHeightArgs returns the ffmpeg arguments that shrink a frame taller than
+// maxHeight down to it, keeping the aspect ratio and an even width. Nil when
+// nothing needs shrinking, so the caller keeps its plain stream copy.
+//
+// Scaling always means re-encoding, and it encodes to HEVC: the players this
+// exists for decode HEVC in hardware, and the file comes out smaller.
+func scaleToHeightArgs(srcHeight, maxHeight int, ffmpegPath string) []string {
+	if maxHeight <= 0 || srcHeight <= 0 || srcHeight <= maxHeight {
+		return nil
+	}
+	args := []string{"-vf", fmt.Sprintf("scale=-2:%d", maxHeight)}
+	return append(args, hevcEncoderArgs(ffmpegPath)...)
+}
+
+// heightOf reads the height out of an "1920x1080" resolution string. 0 when it
+// is missing or unparseable — the caller then leaves the frame alone rather
+// than guessing.
+func heightOf(resolution string) int {
+	_, h, ok := strings.Cut(resolution, "x")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(h))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // listEncoders asks ffmpeg which encoders it was built with. A name present here

@@ -143,6 +143,20 @@ export function SettingsPage() {
           checked={form.transcodeHevc}
           onChange={(v) => set("transcodeHevc", v)}
         />
+        <Field
+          label={t("Maximum frame height")}
+          hint={t("Taller files are scaled down to this on download, keeping the aspect ratio. TV decoders declare a maximum frame and fall back to stuttering software playback above it — a 3840x2880 release is one such case.")}
+        >
+          <select
+            className="input"
+            value={String(form.maxHeight ?? 0)}
+            onChange={(e) => set("maxHeight", Number(e.target.value))}
+          >
+            <option value="0">{t("No limit")}</option>
+            <option value="2160">{t("2160 — TV hardware decoders")}</option>
+            <option value="1080">1080</option>
+          </select>
+        </Field>
       </div>
 
       <div className="card space-y-3 p-5">

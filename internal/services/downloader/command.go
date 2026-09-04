@@ -401,7 +401,7 @@ func BuildRemuxArgs(job domain.Job, localInput, tempPath string) []string {
 //	-c copy
 //	-metadata:s:a:N title=... language=...
 //	-metadata:s:s:N title=... language=...
-func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath string) []string {
+func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath string, extra ...string) []string {
 	var args []string
 
 	args = append(args, "-y")
@@ -454,6 +454,11 @@ func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath str
 	if len(hls.Subtitles) > 0 && outFormat == "mp4" {
 		args = append(args, "-c:s", "mov_text")
 	}
+
+	// Anything that overrides the copy above — the scaling filter and its
+	// encoder — goes last of the codec options: ffmpeg honours the last one
+	// given for a stream type.
+	args = append(args, extra...)
 
 	// Audio metadata: labels and languages.
 	labels := make([]string, len(hls.AudioTracks))

@@ -91,6 +91,16 @@ type RunConfig struct {
 	// taking the HEVC files that exist is free, converting the rest is not.
 	TranscodeToHEVC bool
 
+	// MaxHeight caps the frame height of the finished file, scaling anything
+	// taller down to it (aspect ratio kept). 0 leaves the frame alone.
+	//
+	// It exists because TV decoders declare a maximum frame and refuse what is
+	// over it: a 3840x2880 "open matte" release is well inside the width limit
+	// and far over the height one, so the hardware decoder bails out and the
+	// player falls back to software, which stutters. Scaling to 2880x2160 once,
+	// on the machine that downloads, restores hardware playback for good.
+	MaxHeight int
+
 	// NoChunked disables the chunked HTTP download mode. When false (default),
 	// progressive MP4 sources are downloaded via HTTP Range requests with
 	// resume capability. When true, all downloads go through ffmpeg directly.

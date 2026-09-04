@@ -78,6 +78,11 @@ type Settings struct {
 	// 4K HEVC in hardware but fall back to software for 4K H.264, which stutters;
 	// converting once on the way in fixes playback for good.
 	TranscodeHEVC bool `json:"transcodeHevc"`
+	// MaxHeight scales anything taller than this down to it on download (0 = no
+	// limit). For TVs whose decoder declares a maximum frame: a 3840x2880
+	// release is over the height limit, the hardware decoder refuses it, and
+	// playback falls back to software and stutters.
+	MaxHeight int `json:"maxHeight"`
 }
 
 func defaultSettings() Settings {
@@ -95,6 +100,7 @@ func defaultSettings() Settings {
 		LibraryDirs: nil,
 		// Off by default: re-encoding is lossy and slow, so it stays opt-in.
 		TranscodeHEVC: false,
+		MaxHeight:     0,
 	}
 }
 
@@ -137,29 +143,32 @@ func (s *settingsStore) load() {
 	if err != nil {
 		return
 	}
-	var loaded Settings
-	if err := json.Unmarshal(data, &loaded); err != nil {
+	// Unmarshal ON TOP of the defaults: a field the file does not carry keeps its
+	// default, and every field it does carry is loaded — including new ones,
+	// without a line here. The previous field-by-field merge copied only the
+	// strings, so the saved transcodeHevc setting was silently dropped on every
+	// restart.
+	merged := defaultSettings()
+	if err := json.Unmarshal(data, &merged); err != nil {
 		return
 	}
-	// Merge over defaults so new fields keep sensible values.
-	merged := defaultSettings()
-	if loaded.OutputPath != "" {
-		merged.OutputPath = loaded.OutputPath
+	// A file written with empty strings must not erase the defaults.
+	def := defaultSettings()
+	if merged.OutputPath == "" {
+		merged.OutputPath = def.OutputPath
 	}
-	if loaded.Quality != "" {
-		merged.Quality = loaded.Quality
+	if merged.Quality == "" {
+		merged.Quality = def.Quality
 	}
-	if loaded.Container != "" {
-		merged.Container = loaded.Container
+	if merged.Container == "" {
+		merged.Container = def.Container
 	}
-	merged.Proxy = loaded.Proxy
-	if loaded.Verbosity != "" {
-		merged.Verbosity = loaded.Verbosity
+	if merged.Verbosity == "" {
+		merged.Verbosity = def.Verbosity
 	}
-	if loaded.Theme != "" {
-		merged.Theme = loaded.Theme
+	if merged.Theme == "" {
+		merged.Theme = def.Theme
 	}
-	merged.LibraryDirs = loaded.LibraryDirs
 	s.cur = merged
 }
 
@@ -175,6 +184,10 @@ func (s *settingsStore) save(in Settings) (Settings, error) {
 	// Validate / clamp.
 	if in.Container != "mp4" {
 		in.Container = "mkv"
+	}
+	// A negative or absurd cap would scale every file to nothing.
+	if in.MaxHeight < 0 || in.MaxHeight > 4320 {
+		in.MaxHeight = 0
 	}
 	s.cur = in
 	if s.path == "" {

@@ -344,3 +344,31 @@ func TestBuildHLSMuxArgs_NoSubtitlesNoSubtitleArgs(t *testing.T) {
 		t.Errorf("субтитровые аргументы появились без дорожек: %v", args)
 	}
 }
+
+// A frame taller than the cap is scaled down in the same pass that muxes, and
+// the scaling options must land AFTER "-c copy" — ffmpeg honours the last
+// option given for a stream type, so the wrong order would copy the video
+// unchanged and the file would still not play.
+func TestBuildHLSMuxArgs_ExtraArgsOverrideCopy(t *testing.T) {
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 1}},
+		OutPath: "/out/S01E01.mkv",
+	}
+	hls := &domain.HLSDownloadResult{VideoPath: "/tmp/video.ts", Resolution: "3840x2880"}
+
+	args := BuildHLSMuxArgs(job, hls, "/tmp/S01E01.mkv.tmp", "-vf", "scale=-2:2160", "-c:v", "hevc_videotoolbox")
+
+	copyAt := indexOf(args, "-c")
+	scaleAt := indexOf(args, "-vf")
+	encAt := indexOf(args, "-c:v")
+	if copyAt < 0 || scaleAt < 0 || encAt < 0 {
+		t.Fatalf("не все аргументы на месте: %v", args)
+	}
+	if scaleAt < copyAt || encAt < copyAt {
+		t.Errorf("масштабирование стоит до -c copy и будет им перекрыто: %v", args)
+	}
+	// The output path stays last, or ffmpeg reads the options as a second output.
+	if args[len(args)-1] != "/tmp/S01E01.mkv.tmp" {
+		t.Errorf("выходной файл не последний: %v", args[len(args)-3:])
+	}
+}

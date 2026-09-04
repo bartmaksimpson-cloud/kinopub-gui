@@ -478,6 +478,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// A property of the player the files are for, not of one download — so it
+	// comes from the settings rather than from every start request.
+	cfg.MaxHeight = s.settings.get().MaxHeight
 	if cfg.InputURL == "" {
 		writeErr(w, http.StatusBadRequest, "a kino.watch URL is required")
 		return

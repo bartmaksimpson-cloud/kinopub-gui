@@ -73,6 +73,7 @@ func buildEngineDeps(
 		downloader.WithAuth(auth),
 		downloader.WithExtraArgs(cfg.FFmpegExtraArgs),
 		downloader.WithTranscodeHEVC(cfg.TranscodeToHEVC),
+		downloader.WithMaxHeight(cfg.MaxHeight),
 		downloader.WithNoChunked(cfg.NoChunked),
 		downloader.WithHTTPClient(httpClient),
 	)
