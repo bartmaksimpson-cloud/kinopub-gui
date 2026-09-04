@@ -173,7 +173,7 @@ func bestManifest(files []File) string {
 // not be mistaken for HEVC, or a download would skip a conversion it needed.
 func isHEVCCodec(codec string) bool {
 	c := strings.ToLower(codec)
-	return strings.Contains(c, "265") || strings.Contains(c, "hevc") || strings.Contains(c, "hvc")
+	return strings.Contains(c, "265") || strings.Contains(c, "hev") || strings.Contains(c, "hvc")
 }
 
 // bestHEVCManifest returns the HLS master URL of the highest-resolution HEVC

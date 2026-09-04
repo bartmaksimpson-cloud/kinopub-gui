@@ -1194,6 +1194,12 @@ func (e *engine) buildSeriesFromPlaylist(playlist *domain.PagePlaylist, cfg doma
 	// Group episodes by season.
 	seasonMap := make(map[int][]domain.Episode)
 	for _, pe := range playlist.Episodes {
+		// H.264 stays the default so nothing changes for existing downloads;
+		// the HEVC variant is taken only when asked for and actually offered.
+		hlsURL, hlsCodec := pe.ManifestURL, ""
+		if cfg.PreferHEVC && pe.ManifestURLHEVC != "" {
+			hlsURL, hlsCodec = pe.ManifestURLHEVC, "h265"
+		}
 		ep := domain.Episode{
 			Key: domain.EpisodeKey{
 				Series:  series.ID,
@@ -1204,7 +1210,10 @@ func (e *engine) buildSeriesFromPlaylist(playlist *domain.PagePlaylist, cfg doma
 			Duration: time.Duration(pe.Duration) * time.Second,
 			MediaSources: []domain.MediaSource{{
 				Kind: domain.MediaHLS,
-				URL:  pe.ManifestURL,
+				// Download the HEVC variant when it exists and was asked for:
+				// far cheaper than fetching H.264 and re-encoding it afterwards.
+				URL:   hlsURL,
+				Codec: hlsCodec,
 			}},
 		}
 		seasonMap[pe.Season] = append(seasonMap[pe.Season], ep)

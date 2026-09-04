@@ -139,7 +139,7 @@ export function SettingsPage() {
         </div>
         <Toggle
           label={t("Convert video to HEVC")}
-          hint={t("Default for the checkbox that appears when 4K is selected. Slower download, but plays on devices that stutter on 4K H.264; audio and subtitles are copied untouched.")}
+          hint={t("Default for the checkbox that appears when 4K is selected. Downloads the HEVC version when the service has one, and converts only when it does not.")}
           checked={form.transcodeHevc}
           onChange={(v) => set("transcodeHevc", v)}
         />

@@ -75,7 +75,11 @@ const RU: Record<string, string> = {
   "Extra ffmpeg args": "Доп. аргументы ffmpeg",
   "Convert video to HEVC": "Перекодировать видео в HEVC",
   "Convert to HEVC": "Перекодировать в HEVC",
-  "For players that stutter on 4K H.264": "Для плееров, которые не тянут 4K в H.264",
+  "HEVC version when available, otherwise converted": "Версия в HEVC, если есть; иначе перекодируется",
+  "Takes the HEVC version when there is one; converts only otherwise.":
+    "Берёт версию в HEVC, если она есть; перекодирует только когда её нет.",
+  "Default for the checkbox that appears when 4K is selected. Downloads the HEVC version when the service has one, and converts only when it does not.":
+    "Значение по умолчанию для галочки, которая появляется при выборе 4K. Скачивает версию в HEVC, если сервис её отдаёт, и перекодирует только когда её нет.",
   "For players that stutter on 4K H.264. Audio and subtitles are copied untouched.":
     "Для плееров, которые не тянут 4K в H.264. Звук и субтитры копируются без изменений.",
   "Default for the checkbox that appears when 4K is selected. Slower download, but plays on devices that stutter on 4K H.264; audio and subtitles are copied untouched.":

@@ -34,13 +34,13 @@ type DoctorIssueView struct {
 
 // DoctorReportView is the serialized doctor.Report plus captured logs.
 type DoctorReportView struct {
-	StateFile    string            `json:"stateFile"`
-	SeriesID     string            `json:"seriesId,omitempty"`
-	SeriesTitle  string            `json:"seriesTitle,omitempty"`
-	TotalInState int               `json:"totalInState"`
-	Healthy      int               `json:"healthy"`
-	Fixed        bool              `json:"fixed"`
-	HasIssues    bool              `json:"hasIssues"`
+	StateFile    string `json:"stateFile"`
+	SeriesID     string `json:"seriesId,omitempty"`
+	SeriesTitle  string `json:"seriesTitle,omitempty"`
+	TotalInState int    `json:"totalInState"`
+	Healthy      int    `json:"healthy"`
+	Fixed        bool   `json:"fixed"`
+	HasIssues    bool   `json:"hasIssues"`
 	// RepairBlocked reports that repair/cleanup was requested but refused because
 	// unfinished downloads are writing into the same folder. The check itself
 	// still ran, so the user sees what's wrong — just nothing was deleted.

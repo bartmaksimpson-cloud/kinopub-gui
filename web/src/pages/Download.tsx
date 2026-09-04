@@ -272,7 +272,7 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
               <div className="grid gap-2 sm:grid-cols-2">
                 <Toggle
                   label={t("Convert video to HEVC")}
-                  hint={t("For players that stutter on 4K H.264. Audio and subtitles are copied untouched.")}
+                  hint={t("Takes the HEVC version when there is one; converts only otherwise.")}
                   checked={form.transcodeHevc}
                   onChange={(v) => set("transcodeHevc", v)}
                 />

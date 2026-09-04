@@ -845,7 +845,7 @@ export function TitleDetail({
                 {willFetch4K && (
                   <Toggle
                     label={t("Convert to HEVC")}
-                    hint={t("For players that stutter on 4K H.264")}
+                    hint={t("HEVC version when available, otherwise converted")}
                     checked={hevc}
                     onChange={setHevc}
                   />

@@ -44,12 +44,32 @@ type Downloader struct {
 	ffmpegPath string
 	auth       domain.RequestAuth
 	extraArgs  []string
+	preferHEVC bool
 	noChunked  bool
 	httpClient *http.Client
 }
 
 // Option configures the Downloader.
 type Option func(*Downloader)
+
+// WithPreferHEVC asks for HEVC video. Sources that already carry it are left
+// alone; only the rest are re-encoded.
+func WithPreferHEVC(v bool) Option {
+	return func(d *Downloader) {
+		d.preferHEVC = v
+	}
+}
+
+// effectiveArgs is the ffmpeg tail for one job: the encoder preset first (only
+// when this job actually needs converting), then the user's manual arguments so
+// they can still override it.
+func (d *Downloader) effectiveArgs(job domain.Job) []string {
+	var args []string
+	if d.preferHEVC && !isHEVCSource(job.Media.Source.Codec) {
+		args = append(args, hevcEncoderArgs(d.ffmpegPath)...)
+	}
+	return append(args, d.extraArgs...)
+}
 
 // WithFFmpegPath sets a custom ffmpeg binary path.
 func WithFFmpegPath(path string) Option {
@@ -123,7 +143,7 @@ func (d *Downloader) Download(ctx context.Context, job domain.Job, sink domain.P
 		d.httpClient != nil &&
 		job.Media.Source.Kind == domain.MediaProgressive &&
 		isRemoteURL &&
-		len(d.extraArgs) == 0 // extra ffmpeg args imply transcoding, skip chunked
+		len(d.effectiveArgs(job)) == 0 // transcoding rules out chunked: it needs one continuous ffmpeg pass
 
 	if useChunked {
 		err := d.downloadChunked(ctx, job, sink)
@@ -272,7 +292,7 @@ func (d *Downloader) downloadDirect(ctx context.Context, job domain.Job, sink do
 	tempPath := job.OutPath + ".tmp"
 
 	// 3. Build ffmpeg args.
-	args := BuildFFmpegArgs(job, proxyEnv, d.auth, tempPath, d.extraArgs)
+	args := BuildFFmpegArgs(job, proxyEnv, d.auth, tempPath, d.effectiveArgs(job))
 
 	// 4. Set up progress parsing.
 	duration := estimateDuration(job)

@@ -15,6 +15,10 @@ type MediaSource struct {
 	Kind    MediaKind
 	URL     string
 	Quality string // declared quality for selection (Req 3.6)
+	// Codec is the video codec this source carries ("h265" when the HEVC variant
+	// was chosen, empty when unknown). The downloader needs it to skip a
+	// conversion the file does not require.
+	Codec string
 }
 
 // ResolvedMedia holds all tracks resolved for an episode's selected media source.
@@ -54,7 +58,7 @@ type SubtitleTrack struct {
 type TrackKind int
 
 const (
-	TrackVideo    TrackKind = iota
+	TrackVideo TrackKind = iota
 	TrackAudio
 	TrackSubtitle
 )

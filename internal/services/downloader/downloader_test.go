@@ -17,12 +17,12 @@ import (
 // testLogger is a no-op logger for tests.
 type testLogger struct{}
 
-func (testLogger) Debug(_ string, _ ...domain.Field) {}
-func (testLogger) Info(_ string, _ ...domain.Field)  {}
-func (testLogger) Warn(_ string, _ ...domain.Field)  {}
-func (testLogger) Error(_ string, _ ...domain.Field) {}
-func (l testLogger) With(_ ...domain.Field) domain.Logger  { return l }
-func (l testLogger) Component(_ string) domain.Logger      { return l }
+func (testLogger) Debug(_ string, _ ...domain.Field)      {}
+func (testLogger) Info(_ string, _ ...domain.Field)       {}
+func (testLogger) Warn(_ string, _ ...domain.Field)       {}
+func (testLogger) Error(_ string, _ ...domain.Field)      {}
+func (l testLogger) With(_ ...domain.Field) domain.Logger { return l }
+func (l testLogger) Component(_ string) domain.Logger     { return l }
 
 // testProxy is a minimal ProxyProvider for tests.
 type testProxy struct {
@@ -30,9 +30,9 @@ type testProxy struct {
 	err error
 }
 
-func (p *testProxy) HTTPClient() *http.Client      { return nil }
-func (p *testProxy) FFmpegEnv() ([]string, error)  { return p.env, p.err }
-func (p *testProxy) Mode() domain.ProxyMode        { return domain.ProxyDirect }
+func (p *testProxy) HTTPClient() *http.Client     { return nil }
+func (p *testProxy) FFmpegEnv() ([]string, error) { return p.env, p.err }
+func (p *testProxy) Mode() domain.ProxyMode       { return domain.ProxyDirect }
 
 // testProgressSink records progress updates.
 type testProgressSink struct {

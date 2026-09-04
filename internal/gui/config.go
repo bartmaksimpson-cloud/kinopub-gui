@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -229,26 +228,6 @@ type RunRequest struct {
 	Verbosity     string `json:"verbosity"`
 }
 
-// hevcEncoderArgs returns ffmpeg arguments that re-encode video to HEVC and
-// leave audio and subtitles alone. They land after the "-c copy" the muxer
-// already emits, and ffmpeg honours the last option for a stream type, so only
-// video is affected — every audio track and subtitle is still copied verbatim.
-//
-// The encoder is chosen per platform because a hardware one is roughly an order
-// of magnitude faster, which is what makes converting a 4K episode practical.
-func hevcEncoderArgs() []string {
-	switch runtime.GOOS {
-	case "darwin":
-		// VideoToolbox ships with every supported macOS release.
-		return []string{"-c:v", "hevc_videotoolbox", "-q:v", "60", "-tag:v", "hvc1"}
-	default:
-		// Software x265 elsewhere: correct everywhere, slow. Hardware encoders on
-		// Linux and Windows (VAAPI, NVENC, QSV) need device probing and a fallback
-		// path, which is not worth carrying until someone actually asks for it.
-		return []string{"-c:v", "libx265", "-crf", "22", "-preset", "medium", "-tag:v", "hvc1"}
-	}
-}
-
 // buildRunConfig translates a RunRequest into a validated domain.RunConfig.
 func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 	cont := domain.ContainerMKV
@@ -294,13 +273,8 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 	}
 
 	var extraFFmpeg []string
-	if req.TranscodeHEVC {
-		extraFFmpeg = append(extraFFmpeg, hevcEncoderArgs()...)
-	}
 	if req.FFmpegArgs != "" {
-		// Manual arguments go last on purpose: they must be able to override the
-		// preset above for anyone who wants a different encoder or quality.
-		extraFFmpeg = append(extraFFmpeg, splitShellArgs(req.FFmpegArgs)...)
+		extraFFmpeg = splitShellArgs(req.FFmpegArgs)
 	}
 
 	cfg := domain.RunConfig{
@@ -325,6 +299,7 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		DryRun:           req.DryRun,
 		UserAgent:        ua,
 		FFmpegExtraArgs:  extraFFmpeg,
+		PreferHEVC:       req.TranscodeHEVC,
 		AudioPref:        audioPref,
 		AudioMenu:        req.AudioMenu,
 		UseAPI:           true,

@@ -80,6 +80,12 @@ type RunConfig struct {
 	// transcode on the fly) or add filters.
 	FFmpegExtraArgs []string
 
+	// PreferHEVC asks for HEVC video: the HEVC source variant when the service
+	// has one, and re-encoding only when it does not. Kept as an intent rather
+	// than ready-made ffmpeg arguments because whether to encode is only known
+	// once the episode's source is picked.
+	PreferHEVC bool
+
 	// NoChunked disables the chunked HTTP download mode. When false (default),
 	// progressive MP4 sources are downloaded via HTTP Range requests with
 	// resume capability. When true, all downloads go through ffmpeg directly.

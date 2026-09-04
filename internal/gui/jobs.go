@@ -117,29 +117,29 @@ type AudioRequestView struct {
 
 // JobView is the full serializable snapshot of a job sent to the UI.
 type JobView struct {
-	ID           string            `json:"id"`
-	URL          string            `json:"url"`
-	Status       string            `json:"status"`
-	Title        string            `json:"title"`
-	PosterURL    string            `json:"posterUrl,omitempty"`
-	OutputPath   string            `json:"outputPath"`
-	DryRun       bool              `json:"dryRun"`
-	Quality      string            `json:"quality"`
-	CreatedAt    time.Time         `json:"createdAt"`
-	StartedAt    *time.Time        `json:"startedAt,omitempty"`
-	FinishedAt   *time.Time        `json:"finishedAt,omitempty"`
-	Plan     *PlanView     `json:"plan,omitempty"`
-	Episodes []EpisodeView `json:"episodes"`
+	ID         string        `json:"id"`
+	URL        string        `json:"url"`
+	Status     string        `json:"status"`
+	Title      string        `json:"title"`
+	PosterURL  string        `json:"posterUrl,omitempty"`
+	OutputPath string        `json:"outputPath"`
+	DryRun     bool          `json:"dryRun"`
+	Quality    string        `json:"quality"`
+	CreatedAt  time.Time     `json:"createdAt"`
+	StartedAt  *time.Time    `json:"startedAt,omitempty"`
+	FinishedAt *time.Time    `json:"finishedAt,omitempty"`
+	Plan       *PlanView     `json:"plan,omitempty"`
+	Episodes   []EpisodeView `json:"episodes"`
 	// SelectedEpisodes is the run's explicit episode selection ("S1E2" keys),
 	// exposed so the browser half of the duplicate rule (web/src/lib/queue.ts)
 	// can reason about a job that has not resolved its plan yet the same way the
 	// server's queueCoverage does — instead of locking the whole title while a
 	// one-episode job waits for a slot.
-	SelectedEpisodes []string     `json:"selectedEpisodes,omitempty"`
-	Summary          *SummaryView `json:"summary,omitempty"`
-	Error        string            `json:"error,omitempty"`
-	PendingAudio *AudioRequestView `json:"pendingAudio,omitempty"`
-	Logs         []LogEntry        `json:"logs"`
+	SelectedEpisodes []string          `json:"selectedEpisodes,omitempty"`
+	Summary          *SummaryView      `json:"summary,omitempty"`
+	Error            string            `json:"error,omitempty"`
+	PendingAudio     *AudioRequestView `json:"pendingAudio,omitempty"`
+	Logs             []LogEntry        `json:"logs"`
 }
 
 // Job is the live, mutable server-side representation of a download run.
@@ -155,7 +155,7 @@ type Job struct {
 	// seriesDir is the folder the engine reported writing into. It cannot be
 	// derived from title + outputPath: a job started from a search result keeps
 	// that view's short title while the folder carries the full one.
-	seriesDir string
+	seriesDir  string
 	dryRun     bool
 	quality    string
 	createdAt  time.Time
