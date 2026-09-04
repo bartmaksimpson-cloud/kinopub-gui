@@ -61,14 +61,14 @@ func TestProxiedHLSURL(t *testing.T) {
 func TestHLSTargetAllowed(t *testing.T) {
 	cases := map[string]bool{
 		"https://cdn.kino.watch/a.ts": true, // hostname
-		"https://8.8.8.8/a.ts":      true, // public IP literal
-		"https://127.0.0.1/a.ts":    false,
-		"https://10.0.0.1/a.ts":     false,
-		"https://192.168.1.1/a.ts":  false,
-		"https://[::1]/a.ts":        false,
-		"https://169.254.0.1/a.ts":  false,
-		"://bad":                    false, // unparseable URL → rejected
-		"https://example.com/a.ts":  true,  // arbitrary hostname (no IP literal) → allowed
+		"https://8.8.8.8/a.ts":        true, // public IP literal
+		"https://127.0.0.1/a.ts":      false,
+		"https://10.0.0.1/a.ts":       false,
+		"https://192.168.1.1/a.ts":    false,
+		"https://[::1]/a.ts":          false,
+		"https://169.254.0.1/a.ts":    false,
+		"://bad":                      false, // unparseable URL → rejected
+		"https://example.com/a.ts":    true,  // arbitrary hostname (no IP literal) → allowed
 	}
 	for raw, want := range cases {
 		if got := hlsTargetAllowed(raw); got != want {
