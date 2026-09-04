@@ -436,6 +436,7 @@ func (m *JobManager) attachStore(store *jobStore) {
 func (m *JobManager) persistLoop() {
 	defer func() {
 		if r := recover(); r != nil {
+			logPanic("persistLoop", r)
 			go m.persistLoop()
 		}
 	}()
@@ -514,6 +515,7 @@ func (m *JobManager) startAdaptiveAdmission() { go m.admissionLoop() }
 func (m *JobManager) admissionLoop() {
 	defer func() {
 		if r := recover(); r != nil {
+			logPanic("admissionLoop", r)
 			go m.admissionLoop()
 		}
 	}()
@@ -688,6 +690,7 @@ func (m *JobManager) dropPending(id string) bool {
 func (m *JobManager) flushLoop() {
 	defer func() {
 		if r := recover(); r != nil {
+			logPanic("flushLoop", r)
 			go m.flushLoop()
 		}
 	}()
@@ -1271,7 +1274,7 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 	// whole server (and every other in-flight download).
 	defer func() {
 		if r := recover(); r != nil {
-			m.failJob(j, fmt.Sprintf("internal error: %v", r))
+			m.failJob(j, "internal error: "+logPanic("job run", r))
 		}
 	}()
 	defer cancel()
