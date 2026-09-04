@@ -142,6 +142,7 @@ export interface Settings {
   libraryDirs: string[] | null;
   transcodeHevc: boolean;
   maxHeight: number;
+  maxFps: number;
 }
 
 export interface Snapshot {

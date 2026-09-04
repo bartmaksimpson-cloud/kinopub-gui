@@ -745,6 +745,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		Resolution:    selected.Resolution,
 		BitrateKbps:   selected.BitrateKbps(),
 		Codec:         codec,
+		FrameRate:     selected.FrameRate,
 		TotalBytes:    totalBytes,
 		VideoPath:     videoPath,
 		AudioTracks:   resultAudio,

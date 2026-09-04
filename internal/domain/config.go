@@ -101,6 +101,14 @@ type RunConfig struct {
 	// on the machine that downloads, restores hardware playback for good.
 	MaxHeight int
 
+	// MaxFPS caps the frame rate of 4K-class output, halving it until it fits
+	// (48→24, 60→30) so the original cadence is kept exactly. 0 leaves it alone.
+	//
+	// Separate from MaxHeight because it is a different failure: a 3840x1600
+	// stream at 48 fps IS accepted by the TV decoder, which then drops two
+	// thirds of the frames because it cannot keep up at a 4K frame.
+	MaxFPS float64
+
 	// NoChunked disables the chunked HTTP download mode. When false (default),
 	// progressive MP4 sources are downloaded via HTTP Range requests with
 	// resume capability. When true, all downloads go through ffmpeg directly.

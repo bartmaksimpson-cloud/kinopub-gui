@@ -21,6 +21,10 @@ type Variant struct {
 	// SubtitleGroup is the GROUP-ID of the subtitle renditions this variant
 	// declares (empty = the master offers none for it).
 	SubtitleGroup string
+	// FrameRate is the FRAME-RATE the master declares, 0 when it does not.
+	// A 4K stream at 48 fps is where a TV decoder stops keeping up even though
+	// the frame itself fits, so this number decides as much as the resolution.
+	FrameRate float64
 }
 
 // IsH265 reports whether this variant uses HEVC/H.265 codec.

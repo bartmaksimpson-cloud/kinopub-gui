@@ -289,3 +289,10 @@ func TestSettingsSave_ClampsMaxHeight(t *testing.T) {
 		}
 	}
 }
+
+// Авторежим: частота кадров для 4K тоже ограничена без настройки руками.
+func TestDefaultSettings_LimitsFrameRate(t *testing.T) {
+	if got := defaultSettings().MaxFPS; got != 30 {
+		t.Errorf("по умолчанию maxFps = %v, ожидалось 30", got)
+	}
+}

@@ -85,6 +85,11 @@ type Settings struct {
 	// software and stutters. Files at 2160 and below are copied untouched, so
 	// the default costs nothing for everything that already plays.
 	MaxHeight int `json:"maxHeight"`
+	// MaxFPS caps the frame rate of 4K-class downloads (0 = no limit). Defaults
+	// to 30: a 4K stream at 48 fps is decoded by a TV chip and then dropped two
+	// frames in three, and a 60/30 Hz panel could not show 48 evenly anyway.
+	// The rate is halved (48→24), so the film's own cadence is what remains.
+	MaxFPS float64 `json:"maxFps"`
 }
 
 func defaultSettings() Settings {
@@ -105,6 +110,7 @@ func defaultSettings() Settings {
 		// On by default: a frame taller than this plays nowhere in hardware, and
 		// the alternative to one conversion is a file that stutters forever.
 		MaxHeight: 2160,
+		MaxFPS:    30,
 	}
 }
 
@@ -192,6 +198,9 @@ func (s *settingsStore) save(in Settings) (Settings, error) {
 	// A negative or absurd cap would scale every file to nothing.
 	if in.MaxHeight < 0 || in.MaxHeight > 4320 {
 		in.MaxHeight = 0
+	}
+	if in.MaxFPS < 0 || in.MaxFPS > 240 {
+		in.MaxFPS = 0
 	}
 	s.cur = in
 	if s.path == "" {

@@ -266,6 +266,9 @@ func parseVariantAttrs(attrs string) Variant {
 	v.Codecs = parsed["CODECS"]
 	v.AudioGroup = parsed["AUDIO"]
 	v.SubtitleGroup = parsed["SUBTITLES"]
+	if fr, err := strconv.ParseFloat(parsed["FRAME-RATE"], 64); err == nil && fr > 0 {
+		v.FrameRate = fr
+	}
 
 	return v
 }

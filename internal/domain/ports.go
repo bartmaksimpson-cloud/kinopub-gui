@@ -196,7 +196,9 @@ type HLSDownloadResult struct {
 	Resolution  string // e.g. "1920x1080"
 	BitrateKbps int    // selected variant bitrate
 	Codec       string // "h264" or "h265"
-	TotalBytes  int64
+	// FrameRate is what the master playlist declared, 0 when it did not say.
+	FrameRate  float64
+	TotalBytes int64
 
 	// VideoPath is the local path to the concatenated video .ts file.
 	VideoPath string

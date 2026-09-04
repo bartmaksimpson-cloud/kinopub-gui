@@ -157,6 +157,20 @@ export function SettingsPage() {
             <option value="1080">1080</option>
           </select>
         </Field>
+        <Field
+          label={t("Maximum frame rate for 4K")}
+          hint={t("A 4K stream above this is halved (48→24, 60→30), which keeps the film's own cadence. TV decoders accept 4K at 48 fps and then drop most of the frames, and a 60 Hz panel cannot show 48 evenly either. Smaller frames are never touched.")}
+        >
+          <select
+            className="input"
+            value={String(form.maxFps ?? 30)}
+            onChange={(e) => set("maxFps", Number(e.target.value))}
+          >
+            <option value="30">{t("Automatic — no more than 30 fps at 4K")}</option>
+            <option value="0">{t("No limit (keep the source rate)")}</option>
+            <option value="60">60</option>
+          </select>
+        </Field>
       </div>
 
       <div className="card space-y-3 p-5">

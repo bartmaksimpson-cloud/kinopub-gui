@@ -46,6 +46,7 @@ type Downloader struct {
 	extraArgs     []string
 	transcodeHEVC bool
 	maxHeight     int
+	maxFPS        float64
 	noChunked     bool
 	httpClient    *http.Client
 }
@@ -73,11 +74,27 @@ func WithMaxHeight(n int) Option {
 	}
 }
 
-// fitArgs are the arguments that bring one source inside the height cap, or
-// nil when it already fits (or its resolution is unknown). srcKbps is the
-// source bitrate to carry over, 0 when it is not known.
-func (d *Downloader) fitArgs(resolution string, srcKbps int) []string {
-	return scaleToHeightArgs(heightOf(resolution), d.maxHeight, srcKbps, d.ffmpegPath)
+// WithMaxFPS caps the frame rate of finished files whose frame is 4K-class:
+// above the cap the rate is halved until it fits (48→24, 60→30), which keeps
+// the original cadence. 0 leaves the frame rate alone.
+func WithMaxFPS(f float64) Option {
+	return func(d *Downloader) {
+		if f > 0 {
+			d.maxFPS = f
+		}
+	}
+}
+
+// fitArgs are the arguments that bring one source inside what a player can
+// decode, or nil when it already fits. resolution and fps come from the master
+// playlist; srcKbps is the bitrate to carry over, 0 when unknown.
+func (d *Downloader) fitArgs(resolution string, fps float64, srcKbps int) []string {
+	w, h := sizeOf(resolution)
+	return fitArgsFor(
+		fitSource{Width: w, Height: h, FPS: fps, Kbps: srcKbps},
+		fitLimits{Height: d.maxHeight, FPS: d.maxFPS},
+		d.ffmpegPath,
+	)
 }
 
 // effectiveArgs is the ffmpeg tail for one job: the encoder preset first (only
@@ -85,7 +102,7 @@ func (d *Downloader) fitArgs(resolution string, srcKbps int) []string {
 // they can still override it.
 func (d *Downloader) effectiveArgs(job domain.Job) []string {
 	var args []string
-	if fit := d.fitArgs(job.Media.Video.Resolution, job.Media.Video.BitRate); len(fit) > 0 {
+	if fit := d.fitArgs(job.Media.Video.Resolution, 0, job.Media.Video.BitRate); len(fit) > 0 {
 		// Scaling re-encodes anyway, and it encodes to HEVC — adding the HEVC
 		// preset on top would only repeat the same options.
 		args = append(args, fit...)
@@ -251,12 +268,14 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 	tempPath := job.OutPath + ".tmp"
 	// The master playlist already told us the frame size, so a source over the
 	// height cap is scaled here, in the pass that runs anyway.
-	fit := d.fitArgs(hls.Resolution, hls.BitrateKbps)
+	fit := d.fitArgs(hls.Resolution, hls.FrameRate, hls.BitrateKbps)
 	if len(fit) > 0 {
-		d.logger.Info("frame taller than the limit, scaling while muxing",
+		d.logger.Info("source beyond what a player decodes, fitting while muxing",
 			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
 			domain.F("source", hls.Resolution),
+			domain.F("source_fps", hls.FrameRate),
 			domain.F("max_height", d.maxHeight),
+			domain.F("max_fps", d.maxFPS),
 			// The bitrate is carried over rather than re-guessed: fewer pixels in
 			// a better codec on the same budget is what keeps the picture.
 			domain.F("bitrate_kbps", hls.BitrateKbps),

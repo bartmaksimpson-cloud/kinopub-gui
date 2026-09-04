@@ -67,6 +67,7 @@ const emptySettings: Settings = {
   libraryDirs: null,
   transcodeHevc: false,
   maxHeight: 2160,
+  maxFps: 30,
 };
 
 function sortJobs(jobs: JobView[]): JobView[] {

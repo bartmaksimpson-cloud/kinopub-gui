@@ -60,3 +60,60 @@ func TestScaleToHeightArgs(t *testing.T) {
 		}
 	}
 }
+
+// Дюна: 3840x1600 при 47,952 к/с. Кадр в предел железа влезает, а поток — нет:
+// декодер принимает файл, запускается и выбрасывает две трети кадров.
+func TestFitArgsFor_HalvesHighFrameRateAt4K(t *testing.T) {
+	got := fitArgsFor(
+		fitSource{Width: 3840, Height: 1600, FPS: 47.952, Kbps: 9000},
+		fitLimits{Height: 2160, FPS: 30},
+		"ffmpeg",
+	)
+	joined := strings.Join(got, " ")
+	// Ровно половина, а не «30»: так сохраняется исходная каденция фильма и ни
+	// один кадр не показывается дважды.
+	if !strings.Contains(joined, "-r 23.976") {
+		t.Errorf("частота не поделена пополам: %q", joined)
+	}
+	// Кадр в предел влезает — масштабировать нечего.
+	if strings.Contains(joined, "scale=") {
+		t.Errorf("кадр 1600 масштабировать не нужно: %q", joined)
+	}
+	if !strings.Contains(joined, "-b:v 9000k") {
+		t.Errorf("битрейт источника не перенесён: %q", joined)
+	}
+}
+
+// На маленьком кадре высокая частота железу не мешает — портить её нельзя.
+func TestFitArgsFor_LeavesSmallFramesAlone(t *testing.T) {
+	if got := fitArgsFor(
+		fitSource{Width: 1920, Height: 1080, FPS: 60},
+		fitLimits{Height: 2160, FPS: 30},
+		"ffmpeg",
+	); got != nil {
+		t.Errorf("1080p60 трогать не надо, получено %v", got)
+	}
+}
+
+// Оба предела сразу: и кадр выше, и частота выше.
+func TestFitArgsFor_ScalesAndHalvesTogether(t *testing.T) {
+	joined := strings.Join(fitArgsFor(
+		fitSource{Width: 3840, Height: 2880, FPS: 60, Kbps: 20000},
+		fitLimits{Height: 2160, FPS: 30},
+		"ffmpeg",
+	), " ")
+	if !strings.Contains(joined, "scale=-16:2160") || !strings.Contains(joined, "-r 30") {
+		t.Errorf("нужны и масштабирование, и деление частоты: %q", joined)
+	}
+}
+
+// Обычный 4K24: ничего не трогаем, файл копируется как есть.
+func TestFitArgsFor_PassesStandard4K(t *testing.T) {
+	if got := fitArgsFor(
+		fitSource{Width: 3840, Height: 2160, FPS: 23.976},
+		fitLimits{Height: 2160, FPS: 30},
+		"ffmpeg",
+	); got != nil {
+		t.Errorf("настоящий 4K должен копироваться без изменений, получено %v", got)
+	}
+}

@@ -74,11 +74,76 @@ func hevcEncoderArgs(ffmpegPath string) []string {
 // same budget now covers fewer pixels in a more efficient codec. 0 falls back to
 // the encoder's quality preset.
 func scaleToHeightArgs(srcHeight, maxHeight, srcKbps int, ffmpegPath string) []string {
-	if maxHeight <= 0 || srcHeight <= 0 || srcHeight <= maxHeight {
+	return fitArgsFor(fitSource{Height: srcHeight, Kbps: srcKbps}, fitLimits{Height: maxHeight}, ffmpegPath)
+}
+
+// fitSource is what the master playlist says about the stream we are about to
+// hand to a player: frame size, declared frame rate, bitrate.
+type fitSource struct {
+	Width  int
+	Height int
+	FPS    float64
+	Kbps   int
+}
+
+// fitLimits is what the player can actually take. Height is the decoder's frame
+// limit; FPS is its throughput limit at a large frame. 0 disables either.
+type fitLimits struct {
+	Height int
+	FPS    float64
+}
+
+// hfrWidth is where the frame-rate limit starts to apply. A decoder that stalls
+// on 4K at 48 fps handles 1080p at 60 without noticing, so capping small frames
+// would throw away smoothness for nothing.
+const hfrWidth = 1920
+
+// fitArgsFor returns the ffmpeg arguments that bring one source inside what the
+// player can decode, or nil when it already fits — in which case the file is
+// stream-copied and real 4K is kept untouched.
+//
+// Two independent limits, both measured on a TCL/Realtek TV:
+//   - Frame too tall (3840x2880): the decoder refuses the frame outright, falls
+//     back to software, and a quarter of the frames are lost.
+//   - Frame rate too high (3840x1600 at 48 fps): the decoder accepts it, runs,
+//     and still drops two thirds of the frames — it simply cannot keep up at a
+//     4K frame. The panel is 60/30 Hz anyway, so 48 fps could never be shown
+//     evenly even if it did.
+//
+// The frame rate is halved rather than set to the limit: 48→24, 50→25, 60→30
+// keeps the original cadence exactly, so no frame is ever shown twice or
+// interpolated.
+func fitArgsFor(src fitSource, lim fitLimits, ffmpegPath string) []string {
+	var filters []string
+	if lim.Height > 0 && src.Height > lim.Height {
+		filters = append(filters, fmt.Sprintf("scale=-16:%d", lim.Height))
+	}
+
+	rate := 0.0
+	// The width to judge by is the one that comes out, not the one that went in.
+	outWidth := src.Width
+	if outWidth == 0 {
+		outWidth = hfrWidth + 1 // unknown width: a height limit only fires on big frames anyway
+	}
+	if lim.FPS > 0 && src.FPS > lim.FPS && outWidth > hfrWidth {
+		rate = src.FPS
+		for rate > lim.FPS {
+			rate /= 2
+		}
+	}
+
+	if len(filters) == 0 && rate == 0 {
 		return nil
 	}
-	args := []string{"-vf", fmt.Sprintf("scale=-16:%d", maxHeight)}
-	return append(args, hevcEncoderAt(ffmpegPath, srcKbps)...)
+
+	var args []string
+	if len(filters) > 0 {
+		args = append(args, "-vf", strings.Join(filters, ","))
+	}
+	if rate > 0 {
+		args = append(args, "-r", strconv.FormatFloat(rate, 'f', -1, 64))
+	}
+	return append(args, hevcEncoderAt(ffmpegPath, src.Kbps)...)
 }
 
 // hevcEncoderAt is the HEVC encoder this machine has, told to hold a bitrate
@@ -97,19 +162,26 @@ func hevcEncoderAt(ffmpegPath string, kbps int) []string {
 	return []string{"-c:v", preset[1], "-b:v", fmt.Sprintf("%dk", kbps), "-tag:v", "hvc1"}
 }
 
-// heightOf reads the height out of an "1920x1080" resolution string. 0 when it
-// is missing or unparseable — the caller then leaves the frame alone rather
-// than guessing.
-func heightOf(resolution string) int {
-	_, h, ok := strings.Cut(resolution, "x")
+// sizeOf reads width and height out of an "1920x1080" resolution string. Zeroes
+// when it is missing or unparseable — the caller then leaves the frame alone
+// rather than guessing.
+func sizeOf(resolution string) (int, int) {
+	wStr, hStr, ok := strings.Cut(resolution, "x")
 	if !ok {
-		return 0
+		return 0, 0
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(h))
-	if err != nil || n <= 0 {
-		return 0
+	w, werr := strconv.Atoi(strings.TrimSpace(wStr))
+	h, herr := strconv.Atoi(strings.TrimSpace(hStr))
+	if werr != nil || herr != nil || w <= 0 || h <= 0 {
+		return 0, 0
 	}
-	return n
+	return w, h
+}
+
+// heightOf is sizeOf when only the height matters.
+func heightOf(resolution string) int {
+	_, h := sizeOf(resolution)
+	return h
 }
 
 // listEncoders asks ffmpeg which encoders it was built with. A name present here
