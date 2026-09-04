@@ -105,8 +105,9 @@ type DiscoverDetail struct {
 	// exists and is simply downloaded) or means a long re-encode.
 	QualitiesHEVC []string `json:"qualitiesHevc,omitempty"`
 	// Variants is every downloadable file as the service actually offers it:
-	// one entry per resolution and codec. Sampled from the first episode that
-	// has files, so a title whose seasons differ may not match on every episode.
+	// one entry per resolution and codec, collected across all episodes. A
+	// variant present on only some episodes still appears: the download falls
+	// back per episode rather than refusing the whole title.
 	Variants []DiscoverVariant `json:"variants,omitempty"`
 }
 
@@ -332,9 +333,10 @@ func collectSeasons(it kinopubapi.Item) ([]DiscoverSeason, int) {
 }
 
 // collectQualities returns the distinct downloadable quality labels available
-// for an item (e.g. ["2160p","1080p","720p","480p"]), highest first. It samples
-// the first episode/video with files; mixed-codec masters list each quality
-// twice (H.264 + HEVC), so labels are deduped.
+// for an item (e.g. ["2160p","1080p","720p","480p"]), highest first, together
+// with the qualities that ship an HEVC file and the full list of variants.
+// Every episode is scanned; mixed-codec masters list each quality twice
+// (H.264 + HEVC), so labels are deduped.
 func collectQualities(it kinopubapi.Item) ([]string, []string, []DiscoverVariant) {
 	maxH := map[string]int{}
 	hasHEVC := map[string]bool{}
@@ -360,24 +362,18 @@ func collectQualities(it kinopubapi.Item) ([]string, []string, []DiscoverVariant
 			}
 		}
 	}
+	// Every episode, not a sample: a season is not always encoded uniformly, and
+	// a menu built from episode one would quietly misdescribe the rest. The data
+	// is already in memory, so scanning all of it costs nothing.
 	if len(it.Seasons) > 0 {
 		for _, s := range it.Seasons {
 			for _, e := range s.Episodes {
-				if len(e.Files) > 0 {
-					add(e.Files)
-					break
-				}
-			}
-			if len(maxH) > 0 {
-				break
+				add(e.Files)
 			}
 		}
 	} else {
 		for _, v := range it.Videos {
-			if len(v.Files) > 0 {
-				add(v.Files)
-				break
-			}
+			add(v.Files)
 		}
 	}
 	labels := make([]string, 0, len(maxH))

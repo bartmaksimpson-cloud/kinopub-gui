@@ -309,7 +309,7 @@ func TestCollectQualities_DedupSortDescending(t *testing.T) {
 	}
 }
 
-func TestCollectQualities_SerialSamplesFirstWithFiles(t *testing.T) {
+func TestCollectQualities_SerialSkipsEpisodesWithoutFiles(t *testing.T) {
 	it := kinopubapi.Item{
 		Seasons: []kinopubapi.Season{
 			{Episodes: []kinopubapi.Episode{
@@ -321,6 +321,27 @@ func TestCollectQualities_SerialSamplesFirstWithFiles(t *testing.T) {
 	got, _, _ := collectQualities(it)
 	if !reflect.DeepEqual(got, []string{"720p"}) {
 		t.Errorf("collectQualities = %v, want [720p]", got)
+	}
+}
+
+// A season is not always encoded uniformly. Building the menu from episode one
+// would hide a variant that later episodes do have, so every episode counts.
+func TestCollectQualities_UnionAcrossEpisodes(t *testing.T) {
+	it := kinopubapi.Item{
+		Seasons: []kinopubapi.Season{{Episodes: []kinopubapi.Episode{
+			{Files: []kinopubapi.File{{Quality: "1080p", H: 1080, Codec: "h264"}}},
+			{Files: []kinopubapi.File{{Quality: "2160p", H: 2160, Codec: "hevc"}}},
+		}}},
+	}
+	labels, hevc, variants := collectQualities(it)
+	if !reflect.DeepEqual(labels, []string{"2160p", "1080p"}) {
+		t.Errorf("labels = %v, want [2160p 1080p] — 4K живёт во второй серии", labels)
+	}
+	if !reflect.DeepEqual(hevc, []string{"2160p"}) {
+		t.Errorf("hevc = %v, want [2160p]", hevc)
+	}
+	if len(variants) != 2 {
+		t.Errorf("variants = %v, want два варианта", variants)
 	}
 }
 
