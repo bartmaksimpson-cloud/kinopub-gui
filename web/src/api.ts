@@ -245,6 +245,9 @@ export interface DiscoverDetail extends DiscoverItem {
   episodeCount: number;
   itemUrl: string;
   qualities?: string[]; // distinct downloadable resolutions, highest first
+  // Subset of qualities that also ship an HEVC file: asking for HEVC on these
+  // just downloads it, on the others it means a long re-encode.
+  qualitiesHevc?: string[];
 }
 
 export interface DiscoverCollection {

@@ -302,7 +302,7 @@ func TestCollectQualities_DedupSortDescending(t *testing.T) {
 			}},
 		},
 	}
-	got := collectQualities(it)
+	got, _ := collectQualities(it)
 	want := []string{"2160p", "1080p", "720p"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("collectQualities = %v, want %v", got, want)
@@ -318,9 +318,29 @@ func TestCollectQualities_SerialSamplesFirstWithFiles(t *testing.T) {
 			}},
 		},
 	}
-	got := collectQualities(it)
+	got, _ := collectQualities(it)
 	if !reflect.DeepEqual(got, []string{"720p"}) {
 		t.Errorf("collectQualities = %v, want [720p]", got)
+	}
+}
+
+// The HEVC list is what lets the download screen say whether asking for HEVC
+// costs nothing or means a long re-encode, so it must name only the qualities
+// that really ship an HEVC file.
+func TestCollectQualities_ReportsHEVCVariants(t *testing.T) {
+	it := kinopubapi.Item{
+		Videos: []kinopubapi.Video{{Files: []kinopubapi.File{
+			{Quality: "2160p", H: 2160, Codec: "h264"},
+			{Quality: "2160p", H: 2160, Codec: "hevc"},
+			{Quality: "1080p", H: 1080, Codec: "h264"},
+		}}},
+	}
+	labels, hevc := collectQualities(it)
+	if !reflect.DeepEqual(labels, []string{"2160p", "1080p"}) {
+		t.Errorf("labels = %v, want [2160p 1080p]", labels)
+	}
+	if !reflect.DeepEqual(hevc, []string{"2160p"}) {
+		t.Errorf("hevc = %v, want [2160p] — 1080p has no HEVC twin", hevc)
 	}
 }
 

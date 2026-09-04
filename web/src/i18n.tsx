@@ -75,7 +75,11 @@ const RU: Record<string, string> = {
   "Extra ffmpeg args": "Доп. аргументы ffmpeg",
   "Convert video to HEVC": "Перекодировать видео в HEVC",
   "Convert to HEVC": "Перекодировать в HEVC",
-  "HEVC version when available, otherwise converted": "Версия в HEVC, если есть; иначе перекодируется",
+  "Download in HEVC": "Скачать в HEVC",
+  "Ready HEVC file — no re-encoding, no quality loss":
+    "На сервере есть готовый HEVC — без перекодирования и без потери качества",
+  "No HEVC here: the file will be re-encoded, which takes long":
+    "Готового HEVC нет: файл будет перекодирован, это долго",
   "Takes the HEVC version when there is one; converts only otherwise.":
     "Берёт версию в HEVC, если она есть; перекодирует только когда её нет.",
   "Default for the checkbox that appears when 4K is selected. Downloads the HEVC version when the service has one, and converts only when it does not.":

@@ -100,6 +100,10 @@ type DiscoverDetail struct {
 	// this title (highest first), so the download menu shows real options instead
 	// of a hardcoded list.
 	Qualities []string `json:"qualities,omitempty"`
+	// QualitiesHEVC lists the subset of Qualities that also ship an HEVC file.
+	// The UI needs it to say whether asking for HEVC costs nothing (the variant
+	// exists and is simply downloaded) or means a long re-encode.
+	QualitiesHEVC []string `json:"qualitiesHevc,omitempty"`
 }
 
 // DiscoverCollection is a подборка card.
@@ -318,8 +322,9 @@ func collectSeasons(it kinopubapi.Item) ([]DiscoverSeason, int) {
 // for an item (e.g. ["2160p","1080p","720p","480p"]), highest first. It samples
 // the first episode/video with files; mixed-codec masters list each quality
 // twice (H.264 + HEVC), so labels are deduped.
-func collectQualities(it kinopubapi.Item) []string {
+func collectQualities(it kinopubapi.Item) ([]string, []string) {
 	maxH := map[string]int{}
+	hasHEVC := map[string]bool{}
 	add := func(files []kinopubapi.File) {
 		for _, f := range files {
 			if f.Quality == "" {
@@ -327,6 +332,11 @@ func collectQualities(it kinopubapi.Item) []string {
 			}
 			if h, ok := maxH[f.Quality]; !ok || f.H > h {
 				maxH[f.Quality] = f.H
+			}
+			// The duplicate label this function dedupes is exactly the useful
+			// signal: a second file at the same quality is the HEVC twin.
+			if isHEVCQuality(f.Codec) {
+				hasHEVC[f.Quality] = true
 			}
 		}
 	}
@@ -355,22 +365,38 @@ func collectQualities(it kinopubapi.Item) []string {
 		labels = append(labels, label)
 	}
 	sort.Slice(labels, func(a, b int) bool { return maxH[labels[a]] > maxH[labels[b]] })
-	return labels
+
+	hevc := make([]string, 0, len(hasHEVC))
+	for _, label := range labels {
+		if hasHEVC[label] {
+			hevc = append(hevc, label)
+		}
+	}
+	return labels, hevc
+}
+
+// isHEVCQuality mirrors the codec check used when picking a manifest: explicit
+// about what HEVC looks like, so an unknown codec is never taken for one.
+func isHEVCQuality(codec string) bool {
+	c := strings.ToLower(codec)
+	return strings.Contains(c, "265") || strings.Contains(c, "hev") || strings.Contains(c, "hvc")
 }
 
 func toDiscoverDetail(it kinopubapi.Item) DiscoverDetail {
 	seasons, count := collectSeasons(it)
+	qualities, qualitiesHEVC := collectQualities(it)
 	d := DiscoverDetail{
-		DiscoverItem: toDiscoverItem(it),
-		Plot:         it.Plot,
-		Cast:         it.Cast,
-		Countries:    titleNames(it.Countries),
-		DurationMin:  int(it.Duration.Average) / 60,
-		Audios:       collectAudios(it),
-		Seasons:      seasons,
-		EpisodeCount: count,
-		ItemURL:      kinopubapi.ItemURL(it.ID.String()),
-		Qualities:    collectQualities(it),
+		DiscoverItem:  toDiscoverItem(it),
+		Plot:          it.Plot,
+		Cast:          it.Cast,
+		Countries:     titleNames(it.Countries),
+		DurationMin:   int(it.Duration.Average) / 60,
+		Audios:        collectAudios(it),
+		Seasons:       seasons,
+		EpisodeCount:  count,
+		ItemURL:       kinopubapi.ItemURL(it.ID.String()),
+		Qualities:     qualities,
+		QualitiesHEVC: qualitiesHEVC,
 	}
 	return d
 }

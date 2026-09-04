@@ -90,9 +90,12 @@ export function TitleDetail({
   // "Auto (highest)" counts when the title actually offers 2160p. Seeded from
   // the global setting so the usual answer needs no clicking.
   const [hevc, setHevc] = useState(settings.transcodeHevc);
-  const willFetch4K =
-    quality === "2160p" ||
-    (quality === "" && (detail?.qualities ?? []).includes("2160p"));
+  // "Auto (highest)" resolves to the first entry: the list arrives highest-first.
+  const effectiveQuality = quality || (detail?.qualities ?? [])[0] || "";
+  const willFetch4K = effectiveQuality === "2160p";
+  // Whether the service already has HEVC at that quality decides what the box
+  // actually does — download the ready file, or spend hours re-encoding.
+  const sourceHasHEVC = (detail?.qualitiesHevc ?? []).includes(effectiveQuality);
 
   // Selected озвучка labels. Empty set → keep every track.
   const [audioSel, setAudioSel] = useState<Set<string>>(new Set());
@@ -844,8 +847,12 @@ export function TitleDetail({
                 </select>
                 {willFetch4K && (
                   <Toggle
-                    label={t("Convert to HEVC")}
-                    hint={t("HEVC version when available, otherwise converted")}
+                    label={sourceHasHEVC ? t("Download in HEVC") : t("Convert to HEVC")}
+                    hint={
+                      sourceHasHEVC
+                        ? t("Ready HEVC file — no re-encoding, no quality loss")
+                        : t("No HEVC here: the file will be re-encoded, which takes long")
+                    }
                     checked={hevc}
                     onChange={setHevc}
                   />
