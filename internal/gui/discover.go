@@ -353,12 +353,7 @@ func collectQualities(it kinopubapi.Item) ([]string, []string, []DiscoverVariant
 			if isHEVCQuality(f.Codec) {
 				hasHEVC[f.Quality] = true
 			}
-			codec := "h264"
-			if isHEVCQuality(f.Codec) {
-				codec = "hevc"
-			} else if f.Codec == "" {
-				codec = ""
-			}
+			codec := normalizeCodec(f.Codec)
 			if key := f.Quality + "/" + codec; !seen[key] {
 				seen[key] = true
 				variants = append(variants, DiscoverVariant{Quality: f.Quality, Codec: codec, Height: f.H})
@@ -405,6 +400,25 @@ func collectQualities(it kinopubapi.Item) ([]string, []string, []DiscoverVariant
 		return variants[a].Codec == "hevc" && variants[b].Codec != "hevc"
 	})
 	return labels, hevc, variants
+}
+
+// normalizeCodec maps a kino.watch codec string to a short name the menu shows.
+// Anything unrecognised is passed through rather than folded into H.264: a file
+// the service adds later (AV1, say) must not be labelled as something it is not.
+func normalizeCodec(codec string) string {
+	c := strings.ToLower(strings.TrimSpace(codec))
+	switch {
+	case c == "":
+		return ""
+	case isHEVCQuality(c):
+		return "hevc"
+	case strings.Contains(c, "264") || strings.Contains(c, "avc"):
+		return "h264"
+	case strings.Contains(c, "av1") || strings.Contains(c, "av01"):
+		return "av1"
+	default:
+		return c
+	}
 }
 
 // isHEVCQuality mirrors the codec check used when picking a manifest: explicit

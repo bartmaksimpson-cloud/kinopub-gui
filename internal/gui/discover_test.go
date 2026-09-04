@@ -324,6 +324,29 @@ func TestCollectQualities_SerialSamplesFirstWithFiles(t *testing.T) {
 	}
 }
 
+// A codec the service may add later must keep its own name in the menu. Folding
+// everything unrecognised into "h264" would label an AV1 file as H.264 — and the
+// menu is the one place the user relies on to know what is being downloaded.
+func TestCollectQualities_DoesNotMislabelOtherCodecs(t *testing.T) {
+	it := kinopubapi.Item{
+		Videos: []kinopubapi.Video{{Files: []kinopubapi.File{
+			{Quality: "2160p", H: 2160, Codec: "av1"},
+			{Quality: "2160p", H: 2160, Codec: "hevc"},
+			{Quality: "1080p", H: 1080, Codec: "avc1"},
+		}}},
+	}
+	_, _, variants := collectQualities(it)
+	got := map[string]string{}
+	for _, v := range variants {
+		got[v.Quality+"@"+v.Codec] = v.Codec
+	}
+	for _, want := range []string{"2160p@av1", "2160p@hevc", "1080p@h264"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("вариант %q не найден; получены %v", want, got)
+		}
+	}
+}
+
 // The HEVC list is what lets the download screen say whether asking for HEVC
 // costs nothing or means a long re-encode, so it must name only the qualities
 // that really ship an HEVC file.

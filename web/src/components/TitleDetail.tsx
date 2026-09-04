@@ -43,6 +43,14 @@ import { Modal, PosterImage } from "./ui";
 import { Ratings } from "./Ratings";
 import { Player } from "./Player";
 
+// Known codecs get their usual spelling; anything else is shown as the service
+// named it rather than guessed at — the menu must not claim a file is H.264
+// just because it is not HEVC.
+function codecLabel(codec: string): string {
+  const known: Record<string, string> = { hevc: "HEVC", h264: "H.264", av1: "AV1" };
+  return known[codec] ?? codec.toUpperCase();
+}
+
 const QUALITIES = ["", "2160p", "1080p", "720p", "480p", "360p"];
 
 // Seasons are expanded on open only while the whole list stays scannable; past
@@ -852,7 +860,7 @@ export function TitleDetail({
                       <option value="">{t("Auto (highest)")}</option>
                       {detail.variants.map((v) => (
                         <option key={`${v.quality}|${v.codec}`} value={`${v.quality}|${v.codec}`}>
-                          {v.codec ? `${v.quality} · ${v.codec === "hevc" ? "HEVC" : "H.264"}` : v.quality}
+                          {v.codec ? `${v.quality} · ${codecLabel(v.codec)}` : v.quality}
                         </option>
                       ))}
                     </>
