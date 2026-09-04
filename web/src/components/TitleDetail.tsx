@@ -39,7 +39,7 @@ import {
   writeAudioPref,
 } from "../lib/audio";
 import { initialEpisodeSelection, isQueued, nothingLeftToQueue, queueCoverage } from "../lib/queue";
-import { Modal, PosterImage, Toggle } from "./ui";
+import { Modal, PosterImage } from "./ui";
 import { Ratings } from "./Ratings";
 import { Player } from "./Player";
 
@@ -89,13 +89,16 @@ export function TitleDetail({
   // 1080p fine, so the option stays hidden until 4K is what will be fetched —
   // "Auto (highest)" counts when the title actually offers 2160p. Seeded from
   // the global setting so the usual answer needs no clicking.
-  const [hevc, setHevc] = useState(settings.transcodeHevc);
-  // "Auto (highest)" resolves to the first entry: the list arrives highest-first.
-  const effectiveQuality = quality || (detail?.qualities ?? [])[0] || "";
-  const willFetch4K = effectiveQuality === "2160p";
-  // Whether the service already has HEVC at that quality decides what the box
-  // actually does — download the ready file, or spend hours re-encoding.
-  const sourceHasHEVC = (detail?.qualitiesHevc ?? []).includes(effectiveQuality);
+  // Selected "<quality>|<codec>" from the variant menu; "" is auto (best).
+  const [variantKey, setVariantKey] = useState("");
+  // One menu instead of a resolution list plus a codec guess: the service hands
+  // us the real files, so the choice offered is exactly what can be downloaded.
+  const variants = detail?.variants ?? [];
+  // "" means auto — the first variant, since they arrive highest-first with HEVC
+  // ahead of H.264 at the same height.
+  const chosen = variants.find((v) => `${v.quality}|${v.codec}` === variantKey);
+  // On auto the menu made no codec choice, so the global preference decides.
+  const wantHEVC = chosen ? chosen.codec === "hevc" : settings.transcodeHevc;
 
   // Selected озвучка labels. Empty set → keep every track.
   const [audioSel, setAudioSel] = useState<Set<string>>(new Set());
@@ -382,9 +385,9 @@ export function TitleDetail({
         force: false,
         dryRun: false,
         ffmpegArgs: "",
-        // Never convert what was not fetched in 4K, even if the box was ticked
-        // before the quality changed.
-        transcodeHevc: willFetch4K && hevc,
+        // The menu already picked a real file, so this only says which of the two
+        // codec variants to take — never a re-encode of something the service has.
+        transcodeHevc: wantHEVC,
         ffmpegPath: "",
         userAgent: "",
         verbosity: settings.verbosity,
@@ -836,27 +839,32 @@ export function TitleDetail({
                 <select
                   className="input w-auto"
                   title={t("Quality")}
-                  value={quality}
-                  onChange={(e) => setQuality(e.target.value)}
+                  value={detail.variants?.length ? variantKey : quality}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!detail.variants?.length) return setQuality(v);
+                    setVariantKey(v);
+                    setQuality(v ? v.split("|")[0] : "");
+                  }}
                 >
-                  {["", ...(detail.qualities?.length ? detail.qualities : QUALITIES.filter(Boolean))].map((q) => (
-                    <option key={q} value={q}>
-                      {q === "" ? t("Auto (highest)") : q}
-                    </option>
-                  ))}
+                  {detail.variants?.length ? (
+                    <>
+                      <option value="">{t("Auto (highest)")}</option>
+                      {detail.variants.map((v) => (
+                        <option key={`${v.quality}|${v.codec}`} value={`${v.quality}|${v.codec}`}>
+                          {v.codec ? `${v.quality} · ${v.codec === "hevc" ? "HEVC" : "H.264"}` : v.quality}
+                        </option>
+                      ))}
+                    </>
+                  ) : (
+                    ["", ...QUALITIES.filter(Boolean)].map((q) => (
+                      <option key={q} value={q}>
+                        {q === "" ? t("Auto (highest)") : q}
+                      </option>
+                    ))
+                  )}
                 </select>
-                {willFetch4K && (
-                  <Toggle
-                    label={sourceHasHEVC ? t("Download in HEVC") : t("Convert to HEVC")}
-                    hint={
-                      sourceHasHEVC
-                        ? t("Ready HEVC file — no re-encoding, no quality loss")
-                        : t("No HEVC here: the file will be re-encoded, which takes long")
-                    }
-                    checked={hevc}
-                    onChange={setHevc}
-                  />
-                )}
+
                 {nothingLeft ? (
                   <button
                     className="btn border border-emerald-500/40 bg-emerald-500/[0.16] text-emerald-200 hover:bg-emerald-500/[0.24]"

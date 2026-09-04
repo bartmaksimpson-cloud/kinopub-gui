@@ -302,7 +302,7 @@ func TestCollectQualities_DedupSortDescending(t *testing.T) {
 			}},
 		},
 	}
-	got, _ := collectQualities(it)
+	got, _, _ := collectQualities(it)
 	want := []string{"2160p", "1080p", "720p"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("collectQualities = %v, want %v", got, want)
@@ -318,7 +318,7 @@ func TestCollectQualities_SerialSamplesFirstWithFiles(t *testing.T) {
 			}},
 		},
 	}
-	got, _ := collectQualities(it)
+	got, _, _ := collectQualities(it)
 	if !reflect.DeepEqual(got, []string{"720p"}) {
 		t.Errorf("collectQualities = %v, want [720p]", got)
 	}
@@ -335,7 +335,7 @@ func TestCollectQualities_ReportsHEVCVariants(t *testing.T) {
 			{Quality: "1080p", H: 1080, Codec: "h264"},
 		}}},
 	}
-	labels, hevc := collectQualities(it)
+	labels, hevc, _ := collectQualities(it)
 	if !reflect.DeepEqual(labels, []string{"2160p", "1080p"}) {
 		t.Errorf("labels = %v, want [2160p 1080p]", labels)
 	}

@@ -248,6 +248,8 @@ export interface DiscoverDetail extends DiscoverItem {
   // Subset of qualities that also ship an HEVC file: asking for HEVC on these
   // just downloads it, on the others it means a long re-encode.
   qualitiesHevc?: string[];
+  // Every downloadable file as the service offers it: resolution plus codec.
+  variants?: { quality: string; codec: string; height: number }[];
 }
 
 export interface DiscoverCollection {
