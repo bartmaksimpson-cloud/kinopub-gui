@@ -38,6 +38,27 @@ type browserTransport struct {
 	mu        sync.Mutex
 	h1        *http.Transport
 	h2Clients map[string]*http2.ClientConn // host → h2 conn
+
+	h2Once sync.Once
+	h2Tr   *http2.Transport
+	h2Err  error
+}
+
+// h2Transport returns the shared HTTP/2 transport used to adopt connections we
+// dialed ourselves (uTLS gives us the conn; http2 only has to speak the
+// protocol over it).
+//
+// It has to come from ConfigureTransports. A bare &http2.Transport{} leaves
+// the embedded net/http transport nil, and since x/net v0.55 on Go 1.27
+// NewClientConn reaches straight for it (transport_wrap.go: t.t1.NewClientConn)
+// without the init() every other entry point in that file calls first — so the
+// first h2 request panicked with a nil pointer dereference. Building it once
+// also stops a fresh transport being allocated per request.
+func (t *browserTransport) h2Transport() (*http2.Transport, error) {
+	t.h2Once.Do(func() {
+		t.h2Tr, t.h2Err = http2.ConfigureTransports(&http.Transport{})
+	})
+	return t.h2Tr, t.h2Err
 }
 
 func (t *browserTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -173,7 +194,11 @@ func (t *browserTransport) roundTripH2(req *http.Request, conn net.Conn, addr st
 	}
 
 	// Create new HTTP/2 client connection.
-	tr := &http2.Transport{}
+	tr, err := t.h2Transport()
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("h2 transport: %w", err)
+	}
 	cc, err := tr.NewClientConn(conn)
 	if err != nil {
 		conn.Close()
