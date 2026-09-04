@@ -209,7 +209,86 @@ func TestFetchSegmentDetectsTruncatedBody(t *testing.T) {
 			t.Fatalf("error %q should report both the received and expected size", err)
 		}
 	}
-	if _, statErr := os.Stat(out); statErr == nil {
-		t.Fatal("the short file must not be left on disk for the concat step")
+	// The partial file is deliberately KEPT: it is the offset the next attempt
+	// resumes from (see TestFetchSegmentResumesAfterTruncation). Cleanup of a
+	// segment that is given up on for good belongs to the caller, which removes
+	// segPath once downloadSegment has exhausted its retries.
+	fi, statErr := os.Stat(out)
+	if statErr != nil {
+		t.Fatalf("the partial file must survive for the retry to resume: %v", statErr)
+	}
+	if fi.Size() != 1000 {
+		t.Fatalf("partial file is %d bytes, want the 1000 that arrived", fi.Size())
+	}
+}
+
+// TestFetchSegmentResumesAfterTruncation is the one that matters for data
+// integrity: a body cut in half must be continued with a Range request, and
+// the file left on disk must equal the original byte for byte. Segments here
+// run to tens of megabytes, so restarting from zero on every cut is how a
+// download dies after five attempts.
+func TestFetchSegmentResumesAfterTruncation(t *testing.T) {
+	full := make([]byte, 8192)
+	for i := range full {
+		full[i] = byte(i % 251)
+	}
+
+	var ranges []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rng := r.Header.Get("Range")
+		ranges = append(ranges, rng)
+
+		if rng == "" {
+			// First attempt: promise everything, deliver half, then kill the
+			// connection so the client sees a truncated body.
+			w.Header().Set("Content-Length", strconv.Itoa(len(full)))
+			w.WriteHeader(http.StatusOK)
+			w.Write(full[:len(full)/2])
+			panic(http.ErrAbortHandler)
+		}
+
+		var from int64
+		if _, err := fmt.Sscanf(rng, "bytes=%d-", &from); err != nil || from < 0 || from > int64(len(full)) {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", from, len(full)-1, len(full)))
+		w.Header().Set("Content-Length", strconv.FormatInt(int64(len(full))-from, 10))
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write(full[from:])
+	}))
+	defer srv.Close()
+
+	d := New(http.DefaultClient, domain.RequestAuth{}, nopLogger{})
+	out := filepath.Join(t.TempDir(), "seg.ts")
+
+	if _, err := d.fetchSegment(context.Background(), srv.URL+"/seg.ts", out); err == nil {
+		t.Fatal("the truncated first attempt must fail")
+	}
+	fi, err := os.Stat(out)
+	if err != nil {
+		t.Fatalf("the partial file must survive for the retry to resume from: %v", err)
+	}
+	if fi.Size() != int64(len(full)/2) {
+		t.Fatalf("partial file is %d bytes, want %d", fi.Size(), len(full)/2)
+	}
+
+	n, err := d.fetchSegment(context.Background(), srv.URL+"/seg.ts", out)
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if n != int64(len(full)) {
+		t.Fatalf("reported %d bytes, want the whole segment (%d)", n, len(full))
+	}
+
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, full) {
+		t.Fatalf("resumed file differs from the original (%d bytes vs %d)", len(got), len(full))
+	}
+	if len(ranges) != 2 || ranges[0] != "" || ranges[1] != fmt.Sprintf("bytes=%d-", len(full)/2) {
+		t.Fatalf("Range headers were %q, want [\"\", \"bytes=%d-\"]", ranges, len(full)/2)
 	}
 }

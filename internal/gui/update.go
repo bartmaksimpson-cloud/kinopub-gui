@@ -211,6 +211,20 @@ func (u *updateChecker) latestRelease(ctx context.Context) (*ghRelease, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		// "HTTP 401" alone sends you looking in the wrong place: the status
+		// distinguishes a bad credential from a good one that cannot see the
+		// repo, and those have completely different fixes.
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return nil, fmt.Errorf("GitHub rejected the token (HTTP 401) — it is invalid, expired or revoked; re-issue it and paste it again")
+		case http.StatusForbidden:
+			return nil, fmt.Errorf("GitHub refused the request (HTTP 403) — the token is valid but lacks access to %s, or the rate limit is exhausted", u.repo())
+		case http.StatusNotFound:
+			if u.githubToken() != "" {
+				return nil, fmt.Errorf("no release found in %s (HTTP 404) — the repository has no releases yet, or the token cannot see it", u.repo())
+			}
+			return nil, fmt.Errorf("no release found in %s (HTTP 404)", u.repo())
+		}
 		return nil, fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)
 	}
 	var rel ghRelease

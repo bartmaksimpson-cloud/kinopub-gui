@@ -723,52 +723,85 @@ func (d *Downloader) fetchSegment(ctx context.Context, segURL, outPath string) (
 	}
 	applyHLSAuth(req, d.auth)
 
+	// Resume where the last attempt died. Segments here reach tens of
+	// megabytes, and a connection cut two thirds of the way in used to throw
+	// all of it away and start over — five times, then fail the download. The
+	// partial file the previous attempt left behind is the offset to ask for.
+	var offset int64
+	if fi, statErr := os.Stat(outPath); statErr == nil && fi.Size() > 0 {
+		offset = fi.Size()
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+
 	resp, err := d.client.Do(req)
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// A fresh request, or a server that ignored Range and is resending the
+		// whole thing: start from the top either way.
+		offset = 0
+	case http.StatusPartialContent:
+		// Resuming — the body carries only the remainder.
+	default:
 		return 0, &statusError{
 			Code:       resp.StatusCode,
 			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
 
-	f, err := os.Create(outPath)
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset == 0 {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(outPath, flags, 0o644)
 	if err != nil {
 		return 0, err
+	}
+	if offset > 0 {
+		if _, seekErr := f.Seek(offset, io.SeekStart); seekErr != nil {
+			f.Close()
+			return 0, seekErr
+		}
 	}
 
 	started := time.Now()
 	n, copyErr := io.Copy(f, resp.Body)
 	closeErr := f.Close()
 
+	have := offset + n
+	// want is the size of the WHOLE segment: a 206 only describes the
+	// remainder, so what is already on disk has to be added back.
+	want := resp.ContentLength
+	if want >= 0 {
+		want += offset
+	}
+
 	if copyErr != nil {
-		os.Remove(outPath)
-		// A bare "unexpected EOF" says nothing about WHY the body stopped. How
+		// The partial file STAYS on disk — it is what the next attempt resumes
+		// from. The caller removes it once the segment is given up for good.
+		// A bare "unexpected EOF" says nothing about WHY the body stopped; how
 		// much arrived, of how much was promised, over how long and on which
-		// protocol separates a stalled stream (little data, near the timeout)
-		// from an outright reset (nothing) — and h2 shares one connection
-		// across every parallel segment, so the protocol matters.
+		// protocol tells a stalled stream from an outright reset.
 		return 0, fmt.Errorf("%w (got %d of %d bytes in %s over %s)",
-			copyErr, n, resp.ContentLength, time.Since(started).Round(time.Millisecond), resp.Proto)
+			copyErr, have, want, time.Since(started).Round(time.Millisecond), resp.Proto)
 	}
 	// A body that ends early without an error is truncation the transport did
-	// not flag: treat it as a failure so the retry re-fetches, rather than
+	// not flag: treat it as a failure so the retry resumes, rather than
 	// concatenating a short segment into the finished file.
-	if resp.ContentLength >= 0 && n != resp.ContentLength {
-		os.Remove(outPath)
+	if want >= 0 && have != want {
 		return 0, fmt.Errorf("truncated segment: got %d of %d bytes in %s over %s",
-			n, resp.ContentLength, time.Since(started).Round(time.Millisecond), resp.Proto)
+			have, want, time.Since(started).Round(time.Millisecond), resp.Proto)
 	}
 	if closeErr != nil {
 		os.Remove(outPath)
 		return 0, closeErr
 	}
 
-	return n, nil
+	return have, nil
 }
 
 // concatenateSegmentsDir joins all segment files from segDir into outPath. HLS
