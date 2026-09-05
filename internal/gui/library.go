@@ -121,6 +121,50 @@ func seriesMatchesItem(s LibrarySeries, itemID string) bool {
 	return s.InputURL != "" && kinopubapi.ItemIDFromURL(s.InputURL) == itemID
 }
 
+// resolveEpisodePath finds the file an episode record refers to, next to the
+// state file that mentions it.
+//
+// The recorded path may have been written by another machine: one NAS folder is
+// "/Volumes/Video/…" on a Mac and "Z:\…" on Windows, and neither path is
+// absolute to the other OS. filepath.Join then glued the foreign path onto the
+// scan directory — "Z:\Сериал\Volumes\Video\Сериал\Season 01\S01E01.mkv" —
+// and every episode of a library shared between two computers read as missing.
+//
+// The file is next to its own state file, so that is where to look: the
+// recorded path first (it is right on the machine that wrote it), then the
+// layout this app produces.
+func resolveEpisodePath(dir, recorded string, season int) (string, bool) {
+	if recorded == "" {
+		return "", false
+	}
+
+	candidates := []string{recorded}
+	if !filepath.IsAbs(recorded) {
+		candidates = append(candidates, filepath.Join(dir, recorded))
+	}
+	// The name alone, in the layouts this app writes: a serial keeps seasons,
+	// a film sits directly in the title's folder.
+	base := filepath.Base(filepath.FromSlash(strings.ReplaceAll(recorded, "\\", "/")))
+	if base != "" && base != "." {
+		candidates = append(candidates,
+			filepath.Join(dir, fmt.Sprintf("Season %02d", season), base),
+			filepath.Join(dir, base),
+		)
+	}
+
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if _, err := os.Stat(c); err == nil {
+			return c, true
+		}
+	}
+	// Nothing found: report the most plausible place so the UI can say WHERE it
+	// is missing from, rather than pointing at another machine's filesystem.
+	return candidates[len(candidates)-1], false
+}
+
 // scanLibrary walks the given directories looking for kinopub state files and
 // builds a catalog of completed downloads.
 func scanLibrary(dirs []string) LibraryResponse {
@@ -436,16 +480,7 @@ func readLibraryState(stateFile string) (LibrarySeries, bool) {
 	}
 
 	for key, rec := range state.Completed {
-		fullPath := rec.Path
-		if fullPath != "" && !filepath.IsAbs(fullPath) {
-			fullPath = filepath.Join(dir, fullPath)
-		}
-		exists := false
-		if fullPath != "" {
-			if _, statErr := os.Stat(fullPath); statErr == nil {
-				exists = true
-			}
-		}
+		fullPath, exists := resolveEpisodePath(dir, rec.Path, rec.Season)
 		item.Episodes = append(item.Episodes, LibraryEpisode{
 			Key:         key,
 			Season:      rec.Season,

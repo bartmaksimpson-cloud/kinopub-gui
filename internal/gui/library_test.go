@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -446,5 +447,60 @@ func TestDownloadedForItem_CarriesVoiceover(t *testing.T) {
 	second, ok := byKey["S1E2"]
 	if !ok || !second.AudioFallback {
 		t.Errorf("S1E2 should be marked as substituted: %+v", second)
+	}
+}
+
+// Одна и та же папка на NAS называется «/Volumes/Video/…» на Маке и «Z:\…» на
+// Windows, и ни один из этих путей не абсолютен для другой системы. Раньше
+// чужой путь приклеивался к папке сканирования, получалось
+// «Z:\Сериал\Volumes\Video\Сериал\Season 01\S01E01.mkv», и вся библиотека,
+// общая для двух компьютеров, читалась как пропавшая.
+func TestResolveEpisodePath_FindsFileNextToState(t *testing.T) {
+	dir := t.TempDir()
+	season := filepath.Join(dir, "Season 01")
+	if err := os.MkdirAll(season, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(season, "S01E01.mkv")
+	if err := os.WriteFile(file, []byte("кино"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Путь, записанный на другой машине.
+	foreign := "/Volumes/Video/Сериал/Season 01/S01E01.mkv"
+	got, exists := resolveEpisodePath(dir, foreign, 1)
+	if !exists {
+		t.Fatalf("файл не найден, получено %q", got)
+	}
+	if got != file {
+		t.Errorf("найден %q, ожидался %q", got, file)
+	}
+
+	// Windows-путь, прочитанный на macOS, — тот же случай наоборот.
+	got, exists = resolveEpisodePath(dir, `Z:\Сериал\Season 01\S01E01.mkv`, 1)
+	if !exists || got != file {
+		t.Errorf("обратный случай: получено %q (найден=%v)", got, exists)
+	}
+
+	// Фильм лежит без папки сезона.
+	movie := filepath.Join(dir, "Фильм.mkv")
+	if err := os.WriteFile(movie, []byte("кино"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, exists := resolveEpisodePath(dir, "/Volumes/Video/Фильм.mkv", 1); !exists || got != movie {
+		t.Errorf("фильм: получено %q (найден=%v)", got, exists)
+	}
+}
+
+// Пропавший файл должен указывать туда, где его ждали ЗДЕСЬ, а не на чужую
+// файловую систему: иначе в интерфейсе непонятно, где именно его нет.
+func TestResolveEpisodePath_MissingPointsHere(t *testing.T) {
+	dir := t.TempDir()
+	got, exists := resolveEpisodePath(dir, "/Volumes/Video/Сериал/Season 01/S01E09.mkv", 1)
+	if exists {
+		t.Fatal("несуществующий файл объявлен найденным")
+	}
+	if !strings.HasPrefix(got, dir) {
+		t.Errorf("путь пропавшего файла ведёт мимо папки сканирования: %q", got)
 	}
 }
