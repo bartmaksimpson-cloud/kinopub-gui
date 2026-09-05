@@ -1,9 +1,14 @@
 package downloader
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/ZioSHik/kinopub-gui/internal/domain"
 )
 
 func TestMoveFile_SameFilesystem(t *testing.T) {
@@ -68,5 +73,44 @@ func TestMoveFile_MissingSourceLeavesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(to + ".moving"); !os.IsNotExist(err) {
 		t.Error("промежуточный файл не убран")
+	}
+}
+
+// Половина смысла раздельных папок — в том, ЧТО и КУДА пишется на каждом шаге.
+// Временный файл склейки должен лежать рядом с готовым файлом, а не в рабочей
+// папке: иначе ffmpeg читает и пишет один и тот же диск, а следом ещё и
+// переносит результат целиком. Правильная раскладка: читаем с рабочего диска,
+// пишем на выходной, перенос вырождается в переименование.
+func TestMuxTempSitsNextToOutput(t *testing.T) {
+	work := t.TempDir()
+	out := filepath.Join(t.TempDir(), "Сериал", "Season 01", "S01E01.mkv")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var seenTemp string
+	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer) error {
+		seenTemp = args[len(args)-1]
+		return os.WriteFile(seenTemp, make([]byte, 4096), 0o644)
+	}
+	d := New(run, &testProxy{}, testLogger{},
+		WithFFmpegPath("ffmpeg"), WithWorkDir(work), WithOutputRoot(filepath.Dir(filepath.Dir(out))))
+
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 1}},
+		OutPath: out,
+	}
+	if err := d.MuxHLS(context.Background(), job, &domain.HLSDownloadResult{VideoPath: filepath.Join(work, "video.ts")}); err != nil {
+		t.Fatalf("мукс: %v", err)
+	}
+
+	if seenTemp != out+".tmp" {
+		t.Errorf("ffmpeg писал в %q, а должен был рядом с готовым файлом (%q)", seenTemp, out+".tmp")
+	}
+	if strings.HasPrefix(seenTemp, work) {
+		t.Errorf("временный файл склейки оказался в рабочей папке: %q", seenTemp)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("готовый файл не появился: %v", err)
 	}
 }

@@ -309,7 +309,13 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		domain.F("output", job.OutPath),
 	)
 
-	tempPath := d.workPath(job.OutPath, ".tmp")
+	// Пишется РЯДОМ С ГОТОВЫМ ФАЙЛОМ, а не в рабочую папку. Это половина смысла
+	// раздельных папок: ffmpeg читает собранные дорожки с рабочего диска и пишет
+	// результат на выходной — две последовательные операции на разных
+	// устройствах вместо одной головки, мечущейся между чтением и записью.
+	// Заодно исчезает перенос: файл уже там, где ему быть, и остаётся
+	// переименование внутри одной файловой системы.
+	tempPath := job.OutPath + ".tmp"
 	// The master playlist already told us the frame size, so a source over the
 	// height cap is scaled here, in the pass that runs anyway.
 	fit := d.fitArgs(hls.Resolution, hls.FrameRate, hls.BitrateKbps, hls.Codec)
@@ -485,7 +491,13 @@ func (d *Downloader) RemuxLocal(ctx context.Context, job domain.Job, localPath s
 		domain.F("output", job.OutPath),
 	)
 
-	tempPath := d.workPath(job.OutPath, ".tmp")
+	// Пишется РЯДОМ С ГОТОВЫМ ФАЙЛОМ, а не в рабочую папку. Это половина смысла
+	// раздельных папок: ffmpeg читает собранные дорожки с рабочего диска и пишет
+	// результат на выходной — две последовательные операции на разных
+	// устройствах вместо одной головки, мечущейся между чтением и записью.
+	// Заодно исчезает перенос: файл уже там, где ему быть, и остаётся
+	// переименование внутри одной файловой системы.
+	tempPath := job.OutPath + ".tmp"
 	args := BuildRemuxArgs(job, localPath, tempPath)
 
 	// Run ffmpeg (no proxy env, no auth — local file).
@@ -524,7 +536,13 @@ func (d *Downloader) downloadDirect(ctx context.Context, job domain.Job, sink do
 	}
 
 	// 2. Compute temp path.
-	tempPath := d.workPath(job.OutPath, ".tmp")
+	// Пишется РЯДОМ С ГОТОВЫМ ФАЙЛОМ, а не в рабочую папку. Это половина смысла
+	// раздельных папок: ffmpeg читает собранные дорожки с рабочего диска и пишет
+	// результат на выходной — две последовательные операции на разных
+	// устройствах вместо одной головки, мечущейся между чтением и записью.
+	// Заодно исчезает перенос: файл уже там, где ему быть, и остаётся
+	// переименование внутри одной файловой системы.
+	tempPath := job.OutPath + ".tmp"
 
 	// 3. Build ffmpeg args.
 	args := BuildFFmpegArgs(job, proxyEnv, d.auth, tempPath, d.effectiveArgs(job))
