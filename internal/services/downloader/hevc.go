@@ -46,7 +46,7 @@ var (
 // guessing wrong means either a failed run or hours of software encoding.
 func hevcEncoderArgs(ffmpegPath string) []string {
 	encoderOnce.Do(func() {
-		available := listEncoders(ffmpegPath)
+		available := listEncoders(ffmpegPath, hevcEncoderNames())
 		for _, e := range hardwareHEVCEncoders {
 			if !available[e.name] || !encoderOpens(ffmpegPath, e.name) {
 				continue
@@ -178,23 +178,68 @@ func fitArgsFor(src fitSource, lim fitLimits, ffmpegPath string) []string {
 	if rate > 0 {
 		args = append(args, "-r", strconv.FormatFloat(rate, 'f', -1, 64))
 	}
-	return append(args, hevcEncoderAt(ffmpegPath, src.Kbps)...)
+	return append(args, fitEncoderArgs(ffmpegPath, src.Kbps)...)
 }
 
-// hevcEncoderAt is the HEVC encoder this machine has, told to hold a bitrate
-// instead of a quality level. Every encoder in the list takes -b:v, and a
-// number carried over from the source is the safest way to not lose picture.
-func hevcEncoderAt(ffmpegPath string, kbps int) []string {
-	if kbps <= 0 {
+// fitEncoders, in the order that gets a playable file soonest.
+//
+// HEVC first: the file is smaller and a TV's HEVC budget is the bigger one.
+// Then hardware H.264 — and that is not a compromise, because a fitted frame is
+// by construction no more than 3840x2160 at 30 fps, which is exactly what every
+// decoder still manages in AVC. A GeForce GT 730 is the case this exists for:
+// its NVENC encodes H.264 only, so the HEVC candidates cannot open at all, and
+// without this the machine would fall to software encoding for hours.
+//
+// libx264 closes the list rather than libx265: with no hardware at all, x264 is
+// several times faster at 4K, and a bigger file beats an encode that never ends.
+var fitEncoders = []string{
+	"hevc_videotoolbox", "hevc_nvenc", "hevc_qsv", "hevc_amf",
+	"h264_videotoolbox", "h264_nvenc", "h264_qsv", "h264_amf",
+	"libx264",
+}
+
+var (
+	fitOnce        sync.Once
+	fitEncoderName string
+)
+
+// pickFitEncoder returns the first encoder in fitEncoders that this ffmpeg has
+// AND this machine can actually open. Empty when none can.
+func pickFitEncoder(ffmpegPath string) string {
+	fitOnce.Do(func() {
+		available := listEncoders(ffmpegPath, fitEncoders)
+		for _, name := range fitEncoders {
+			if available[name] && encoderOpens(ffmpegPath, name) {
+				fitEncoderName = name
+				return
+			}
+		}
+	})
+	return fitEncoderName
+}
+
+// fitEncoderArgs encodes at the source bitrate: the same budget now covers
+// fewer pixels (or fewer frames) in a codec at least as efficient, which is what
+// keeps the picture. kbps 0 falls back to the HEVC quality preset.
+func fitEncoderArgs(ffmpegPath string, kbps int) []string {
+	name := pickFitEncoder(ffmpegPath)
+	if name == "" || kbps <= 0 {
 		return hevcEncoderArgs(ffmpegPath)
 	}
-	// hevcEncoderArgs always starts with "-c:v <name>"; the rest is the quality
-	// preset this replaces.
-	preset := hevcEncoderArgs(ffmpegPath)
-	if len(preset) < 2 {
-		return preset
+	args := []string{"-c:v", name, "-b:v", fmt.Sprintf("%dk", kbps)}
+	if strings.HasPrefix(name, "hevc") {
+		args = append(args, "-tag:v", "hvc1")
 	}
-	return []string{"-c:v", preset[1], "-b:v", fmt.Sprintf("%dk", kbps), "-tag:v", "hvc1"}
+	return args
+}
+
+// hevcEncoderNames lists the hardware HEVC candidates for the build check.
+func hevcEncoderNames() []string {
+	names := make([]string, 0, len(hardwareHEVCEncoders))
+	for _, e := range hardwareHEVCEncoders {
+		names = append(names, e.name)
+	}
+	return names
 }
 
 // sizeOf reads width and height out of an "1920x1080" resolution string. Zeroes
@@ -219,10 +264,10 @@ func heightOf(resolution string) int {
 	return h
 }
 
-// listEncoders asks ffmpeg which encoders it was built with. A name present here
-// is not proof the hardware works, but its absence is proof it does not — enough
-// to avoid choosing an encoder that cannot start.
-func listEncoders(ffmpegPath string) map[string]bool {
+// listEncoders asks ffmpeg which of the given encoders it was built with. A name
+// present here is not proof the hardware works — that is what encoderOpens is
+// for — but its absence is proof it does not.
+func listEncoders(ffmpegPath string, names []string) map[string]bool {
 	out := map[string]bool{}
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
@@ -232,9 +277,9 @@ func listEncoders(ffmpegPath string) map[string]bool {
 		return out
 	}
 	for _, line := range strings.Split(string(b), "\n") {
-		for _, e := range hardwareHEVCEncoders {
-			if strings.Contains(line, e.name) {
-				out[e.name] = true
+		for _, name := range names {
+			if strings.Contains(line, name) {
+				out[name] = true
 			}
 		}
 	}

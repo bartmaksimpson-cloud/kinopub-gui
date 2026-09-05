@@ -156,7 +156,40 @@ func TestHEVCEncoder_IsProbedNotAssumed(t *testing.T) {
 	}
 	// Программный x265 есть в любой полной сборке — проверка не должна врать в
 	// другую сторону и отвергать то, что работает.
-	if listEncoders("ffmpeg")["hevc_videotoolbox"] && !encoderOpens("ffmpeg", "hevc_videotoolbox") {
+	if listEncoders("ffmpeg", []string{"hevc_videotoolbox"})["hevc_videotoolbox"] && !encoderOpens("ffmpeg", "hevc_videotoolbox") {
 		t.Log("videotoolbox есть в сборке, но не открывается на этой машине — это допустимо")
+	}
+}
+
+// Подгонка не обязана быть в HEVC: уменьшённый кадр по построению не выше
+// 3840x2160 при 30 к/с, а это ровно то, что любое железо ещё берёт в H.264.
+// Карта вроде GeForce GT 730 кодирует только H.264 — гнать её на процессорный
+// x265 значило бы часы вместо минут.
+func TestFitEncoders_FallBackToHardwareH264(t *testing.T) {
+	h264At := -1
+	x265At := -1
+	for i, name := range fitEncoders {
+		if h264At < 0 && strings.HasPrefix(name, "h264_") {
+			h264At = i
+		}
+		if name == "libx265" {
+			x265At = i
+		}
+	}
+	if h264At < 0 {
+		t.Fatal("в списке нет ни одного аппаратного H.264")
+	}
+	if x265At >= 0 {
+		t.Errorf("libx265 в списке подгонки: на 4K без железа он считает часами")
+	}
+	// Программный запасной вариант обязан быть последним и обязан существовать.
+	if last := fitEncoders[len(fitEncoders)-1]; last != "libx264" {
+		t.Errorf("последним должен быть libx264, а не %q", last)
+	}
+	// И аппаратный HEVC обязан идти раньше аппаратного H.264.
+	for i, name := range fitEncoders {
+		if strings.HasPrefix(name, "hevc_") && i > h264At {
+			t.Errorf("аппаратный %s стоит после H.264", name)
+		}
 	}
 }
