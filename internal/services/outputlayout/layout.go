@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
@@ -26,27 +28,71 @@ func New(container domain.Container) *Layout {
 	return &Layout{ext: ext}
 }
 
-// EpisodePath builds the full output path for an episode:
+// EpisodePath builds the full output path for one downloaded file.
 //
-//	root/<sanitized series title>/Season <NN>/S<NN>E<NN>.<ext>
+// A serial keeps the nested layout, now with the episode's own name:
 //
-// The series directory name is derived from the series title via
-// fsutil.SanitizeComponent, with a fallback based on the series ID.
-// The season directory uses the episode's season number zero-padded to 2 digits.
-// The filename uses S<NN>E<NN> format with the configured container extension.
+//	root/<series title>/Season <NN>/S<NN>E<NN> - <episode title>.<ext>
+//
+// A film is a file, not a series of one:
+//
+//	root/<film title>.<ext>
+//
+// It used to be laid out like a serial — a folder per film, "Season 01" inside
+// it and a file called S01E01 — which said nothing about what was in it. When
+// the service publishes a film as several files (Дюна: "24 fps" and "48 fps"),
+// the second and later ones carry their own name in brackets so they cannot
+// collide.
 func (l *Layout) EpisodePath(root string, series domain.Series, ep domain.Episode) (string, error) {
-	// Derive series directory name.
 	fallback := fmt.Sprintf("series_%s", string(series.ID))
-	seriesDir := fsutil.SanitizeComponent(series.Title, fallback)
+	title := fsutil.SanitizeComponent(series.Title, fallback)
 
-	// Derive season directory name.
+	if series.IsMovie {
+		name := title
+		// The first file is the film itself; the rest are alternatives and say
+		// which one they are.
+		if ep.Key.Episode > 1 {
+			variant := episodeName(ep)
+			if variant == "" {
+				variant = fmt.Sprintf("версия %d", ep.Key.Episode)
+			}
+			name = fmt.Sprintf("%s (%s)", title, variant)
+		}
+		return filepath.Join(root, fsutil.SanitizeComponent(name, fallback)+l.ext), nil
+	}
+
 	seasonDir := fmt.Sprintf("Season %02d", ep.Key.Season)
+	filename := fmt.Sprintf("S%02dE%02d", ep.Key.Season, ep.Key.Episode)
+	if name := episodeName(ep); name != "" {
+		filename += " - " + name
+	}
+	filename = fsutil.SanitizeComponent(filename, fmt.Sprintf("S%02dE%02d", ep.Key.Season, ep.Key.Episode))
 
-	// Derive episode filename.
-	filename := fmt.Sprintf("S%02dE%02d%s", ep.Key.Season, ep.Key.Episode, l.ext)
-
-	return filepath.Join(root, seriesDir, seasonDir, filename), nil
+	return filepath.Join(root, title, seasonDir, filename+l.ext), nil
 }
+
+// maxTitleRunes caps the part of a name that comes from the source. Filesystems
+// stop at 255 bytes, and a Cyrillic title spends two of them per character, so a
+// long name would be truncated by the OS — or refused outright.
+const maxTitleRunes = 80
+
+// episodeName is the episode's own title, or "" when the source has nothing to
+// add. A generic "Серия 4" is nothing to add: the file already says E04, and
+// repeating it only makes the name longer.
+func episodeName(ep domain.Episode) string {
+	name := strings.TrimSpace(ep.Title)
+	if name == "" || genericEpisodeTitle.MatchString(name) {
+		return ""
+	}
+	if r := []rune(name); len(r) > maxTitleRunes {
+		name = strings.TrimSpace(string(r[:maxTitleRunes]))
+	}
+	return name
+}
+
+// genericEpisodeTitle matches the placeholder names the service (and this app)
+// fill in when an episode has no title of its own.
+var genericEpisodeTitle = regexp.MustCompile(`(?i)^(серия|эпизод|episode|ep\.?)\s*\d+$`)
 
 // EnsureDirs creates all directories in the path up to and including the
 // directory containing the file at path. It is idempotent: existing directories

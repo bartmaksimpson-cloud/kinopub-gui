@@ -73,10 +73,13 @@ func BuildPagePlaylist(item Item) (*domain.PagePlaylist, error) {
 	id, _ := strconv.Atoi(item.ID.String())
 	pl := &domain.PagePlaylist{
 		ItemID: id,
-		Title:  item.Title,
-		Poster: item.Posters.Best(),
-		Type:   item.Type,
-		Genres: genreTitles(item.Genres),
+		// videos[] rather than seasons[]: a film, even when the service publishes
+		// it as several files (Дюна: "24 fps" и "48 fps").
+		IsMovie: len(item.Seasons) == 0,
+		Title:   item.Title,
+		Poster:  item.Posters.Best(),
+		Type:    item.Type,
+		Genres:  genreTitles(item.Genres),
 	}
 	seasonCounts := map[int]int{}
 

@@ -1198,6 +1198,7 @@ func (e *engine) buildSeriesFromPlaylist(playlist *domain.PagePlaylist, cfg doma
 		ID:        domain.SeriesID(fmt.Sprintf("%d", playlist.ItemID)),
 		Title:     playlist.Title,
 		PosterURL: playlist.Poster,
+		IsMovie:   playlist.IsMovie,
 	}
 
 	// Group episodes by season.

@@ -156,6 +156,7 @@ func seriesFromPlaylist(playlist *domain.PagePlaylist) domain.Series {
 		ID:        domain.SeriesID(fmt.Sprintf("%d", playlist.ItemID)),
 		Title:     playlist.Title,
 		PosterURL: playlist.Poster,
+		IsMovie:   playlist.IsMovie,
 	}
 	seasonMap := make(map[int][]domain.Episode)
 	for _, pe := range playlist.Episodes {

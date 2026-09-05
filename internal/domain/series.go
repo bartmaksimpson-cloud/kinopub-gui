@@ -12,7 +12,9 @@ type Series struct {
 	OriginalTitle string
 	Description   string
 	PosterURL     string
-	Seasons       []Season // ascending by Number (Req 2.4)
+	// IsMovie marks a film rather than a serial; the output layout differs.
+	IsMovie bool
+	Seasons []Season // ascending by Number (Req 2.4)
 }
 
 // Season groups episodes by season number.

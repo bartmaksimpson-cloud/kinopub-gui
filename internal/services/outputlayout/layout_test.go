@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
@@ -193,5 +194,94 @@ func TestEnsureDirs_UnwritableError(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrOutputDirUnwritable) {
 		t.Errorf("expected ErrOutputDirUnwritable, got: %v", err)
+	}
+}
+
+// Фильм — это файл, а не сериал из одной серии. Раньше он ложился как
+// «Фильм/Season 01/S01E01.mkv»: папка ни о чём, и имя файла ничего не говорит.
+func TestEpisodePath_MovieIsAFile(t *testing.T) {
+	l := New(domain.ContainerMKV)
+	movie := domain.Series{ID: "100468", Title: "Дюна: Часть вторая", IsMovie: true}
+
+	got, err := l.EpisodePath("/out", movie, domain.Episode{
+		Key:   domain.EpisodeKey{Series: "100468", Season: 1, Episode: 1},
+		Title: "24 fps",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Двоеточие — запрещённый в именах файлов символ, санитайзер меняет его на «_».
+	if want := filepath.Join("/out", "Дюна_ Часть вторая.mkv"); got != want {
+		t.Errorf("получено %q, ожидалось %q", got, want)
+	}
+}
+
+// Когда сервис выкладывает фильм несколькими файлами, второй и последующие
+// называют себя сами — иначе они затирали бы друг друга.
+func TestEpisodePath_MovieVariantsDoNotCollide(t *testing.T) {
+	l := New(domain.ContainerMKV)
+	movie := domain.Series{ID: "100468", Title: "Дюна: Часть вторая", IsMovie: true}
+
+	first, _ := l.EpisodePath("/out", movie, domain.Episode{
+		Key: domain.EpisodeKey{Season: 1, Episode: 1}, Title: "24 fps",
+	})
+	second, _ := l.EpisodePath("/out", movie, domain.Episode{
+		Key: domain.EpisodeKey{Season: 1, Episode: 2}, Title: "48 fps",
+	})
+	if first == second {
+		t.Fatalf("обе версии легли в один файл: %q", first)
+	}
+	if want := filepath.Join("/out", "Дюна_ Часть вторая (48 fps).mkv"); second != want {
+		t.Errorf("вторая версия: получено %q, ожидалось %q", second, want)
+	}
+
+	// Без собственного имени версия всё равно должна отличаться.
+	noName, _ := l.EpisodePath("/out", movie, domain.Episode{Key: domain.EpisodeKey{Season: 1, Episode: 3}})
+	if noName == first {
+		t.Errorf("безымянная версия совпала с первой: %q", noName)
+	}
+}
+
+// У сериала раскладка по сезонам остаётся, но название серии больше не теряется.
+func TestEpisodePath_SerialKeepsEpisodeTitle(t *testing.T) {
+	l := New(domain.ContainerMKV)
+	serial := domain.Series{ID: "8634", Title: "Южный Парк"}
+
+	got, _ := l.EpisodePath("/out", serial, domain.Episode{
+		Key:   domain.EpisodeKey{Season: 1, Episode: 2},
+		Title: "Вулкан",
+	})
+	want := filepath.Join("/out", "Южный Парк", "Season 01", "S01E02 - Вулкан.mkv")
+	if got != want {
+		t.Errorf("получено %q, ожидалось %q", got, want)
+	}
+}
+
+// Пустое и служебное название не добавляется: «S01E04 - Серия 4» — это шум,
+// номер уже стоит в начале имени.
+func TestEpisodePath_SkipsGenericEpisodeTitles(t *testing.T) {
+	l := New(domain.ContainerMKV)
+	serial := domain.Series{ID: "8634", Title: "Сериал"}
+	for _, title := range []string{"", "   ", "Серия 4", "серия 4", "Episode 4", "Эпизод 4"} {
+		got, _ := l.EpisodePath("/out", serial, domain.Episode{
+			Key: domain.EpisodeKey{Season: 1, Episode: 4}, Title: title,
+		})
+		want := filepath.Join("/out", "Сериал", "Season 01", "S01E04.mkv")
+		if got != want {
+			t.Errorf("название %q: получено %q, ожидалось %q", title, got, want)
+		}
+	}
+}
+
+// Длинное название не должно упереться в предел файловой системы: 255 БАЙТ,
+// а кириллица тратит по два на символ.
+func TestEpisodePath_TruncatesLongTitles(t *testing.T) {
+	l := New(domain.ContainerMKV)
+	long := strings.Repeat("длинное название ", 20)
+	got, _ := l.EpisodePath("/out", domain.Series{ID: "1", Title: "Сериал"}, domain.Episode{
+		Key: domain.EpisodeKey{Season: 1, Episode: 1}, Title: long,
+	})
+	if n := len([]byte(filepath.Base(got))); n > 255 {
+		t.Errorf("имя файла %d байт — файловая система его не примет", n)
 	}
 }

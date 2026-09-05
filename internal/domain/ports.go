@@ -274,10 +274,14 @@ type PageScraper interface {
 
 // PagePlaylist holds extracted playlist data from a kino.watch page.
 type PagePlaylist struct {
-	ItemID   int
-	Title    string
-	Poster   string
-	Type     string   // kino.watch item type: movie, serial, documovie, …
+	ItemID int
+	Title  string
+	Poster string
+	Type   string // kino.watch item type: movie, serial, documovie, …
+	// IsMovie marks a title that has no seasons: one film, published as one or
+	// several files. It decides how the output is laid out — a film is a file,
+	// not a series folder with "Season 01" in it.
+	IsMovie  bool
 	Genres   []string // genre titles
 	Episodes []PageEpisode
 	Seasons  []PageSeason
