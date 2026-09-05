@@ -314,11 +314,17 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 	}
 	// Say what is happening now: a copy takes seconds, a fit re-encodes the whole
 	// episode, and the two look identical from outside without this.
+	threads := 0
+	if len(fit) > 0 {
+		threads = encodeThreads(time.Now())
+	}
 	if stager, ok := sink.(domain.EpisodeStageSink); ok {
 		stage := domain.EpisodeStage{Phase: "mux"}
 		if len(fit) > 0 {
 			stage.Phase = "encode"
 			stage.Format = describeFit(fit, hls)
+			stage.Encoder = encoderLabel(fit)
+			stage.Threads = threads
 		}
 		stager.EpisodeStage(job.Episode.Key, stage)
 	}
@@ -380,7 +386,7 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		if a.pipe && parser != nil {
 			args = append(append([]string{}, args...), "-progress", "pipe:1")
 		}
-		full := BuildHLSMuxArgs(job, a.hls, tempPath, args...)
+		full := withDecodeThreads(BuildHLSMuxArgs(job, a.hls, tempPath, args...), threads)
 
 		var out io.Writer
 		if a.pipe {
@@ -628,6 +634,30 @@ func describeFit(fit []string, hls *domain.HLSDownloadResult) string {
 		parts = append([]string{"↓" + height}, parts...)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// encoderLabel names who does the encoding the way a person would look it up in
+// a task manager: the vendor, not the ffmpeg codec name. Empty when the pass is
+// a plain copy.
+func encoderLabel(fit []string) string {
+	for i := 0; i < len(fit)-1; i++ {
+		if fit[i] != "-c:v" {
+			continue
+		}
+		switch name := fit[i+1]; {
+		case strings.HasSuffix(name, "_nvenc"):
+			return "NVIDIA (NVENC)"
+		case strings.HasSuffix(name, "_amf"):
+			return "AMD (AMF)"
+		case strings.HasSuffix(name, "_qsv"):
+			return "Intel (Quick Sync)"
+		case strings.HasSuffix(name, "_videotoolbox"):
+			return "Apple (VideoToolbox)"
+		default:
+			return "процессор"
+		}
+	}
+	return ""
 }
 
 // roundTo16 rounds a computed width to the nearest multiple of 16, matching the

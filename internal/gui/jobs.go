@@ -90,8 +90,13 @@ type EpisodeView struct {
 	// nothing on the card to say why.
 	Stage       string `json:"stage,omitempty"`
 	StageFormat string `json:"stageFormat,omitempty"`
-	Attempts    int    `json:"attempts"`
-	Error       string `json:"error,omitempty"`
+	// StageEncoder is who does the encoding ("NVIDIA (NVENC)", "процессор"), and
+	// StageThreads how many CPU threads it is allowed — the two questions asked
+	// while watching a fan spin up.
+	StageEncoder string `json:"stageEncoder,omitempty"`
+	StageThreads int    `json:"stageThreads,omitempty"`
+	Attempts     int    `json:"attempts"`
+	Error        string `json:"error,omitempty"`
 
 	// internal speed-sampling state (not serialized)
 	lastBytes int64

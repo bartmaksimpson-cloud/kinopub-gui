@@ -201,6 +201,13 @@ type EpisodeStage struct {
 	// Format is what comes out of it, in the user's terms: "2880x2160 · HEVC ·
 	// 12000 kbps". Empty when there is nothing to add.
 	Format string
+	// Encoder is who is doing the encoding, named the way a person would check
+	// it in a task manager: "NVIDIA (NVENC)", "AMD (AMF)", "процессор".
+	Encoder string
+	// Threads is how many CPU threads the pass is allowed to take. Reported
+	// because a re-encode that eats every core makes the machine unusable, and
+	// the card is where you look to find out why.
+	Threads int
 }
 
 // EpisodeStageSink is a ProgressSink that also accepts stage reports. Optional,

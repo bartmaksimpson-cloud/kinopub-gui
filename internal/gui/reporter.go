@@ -143,7 +143,7 @@ func (r *eventReporter) EpisodeCompleted(key domain.EpisodeKey) {
 	// Стадия относится к работе, которой больше нет: иначе готовый эпизод
 	// остаётся с надписью «перекодирование».
 	if ev, ok := r.job.episodes[epKey(key)]; ok {
-		ev.Stage, ev.StageFormat = "", ""
+		ev.Stage, ev.StageFormat, ev.StageEncoder, ev.StageThreads = "", "", "", 0
 	}
 	// Success beat a simultaneous per-episode cancel: the file landed on disk,
 	// so the row cancelEpisode deleted comes back (via ensureEpisode below) —
@@ -285,6 +285,8 @@ func (r *eventReporter) EpisodeStage(key domain.EpisodeKey, stage domain.Episode
 	ev := r.job.ensureEpisode(key)
 	ev.Stage = stage.Phase
 	ev.StageFormat = stage.Format
+	ev.StageEncoder = stage.Encoder
+	ev.StageThreads = stage.Threads
 	r.job.mu.Unlock()
 	r.mgr.publish(r.job)
 }
