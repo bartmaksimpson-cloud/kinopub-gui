@@ -578,7 +578,30 @@ func (d *Downloader) downloadEpisodeInternal(
 
 	// downloadTrack fetches every segment of a single track into segDir (with
 	// resume + bounded concurrency), then concatenates them into outPath.
-	downloadTrack := func(ctx context.Context, trackIdx int, initURI string, segments []Segment, segDir, outPath string) error {
+	// Склейка сегментов в один файл — это полная перезапись эпизода на диск,
+	// для 4K десятки гигабайт. Без отдельной стадии она выглядит как зависшая
+	// загрузка на 100%: сегменты уже скачаны, а ffmpeg ещё не запущен.
+	stager, _ := sink.(domain.EpisodeStageSink)
+	assembleProgress := func(total int64) func(int64) {
+		if stager == nil {
+			return nil
+		}
+		var last time.Time
+		return func(done int64) {
+			// Раз в полсекунды: чаще — это только шум в интерфейсе.
+			if time.Since(last) < 500*time.Millisecond && done < total {
+				return
+			}
+			last = time.Now()
+			format := formatHLSBytes(done)
+			if total > 0 {
+				format = fmt.Sprintf("%s из %s", formatHLSBytes(done), formatHLSBytes(total))
+			}
+			stager.EpisodeStage(key, domain.EpisodeStage{Phase: "assemble", Format: format})
+		}
+	}
+
+	downloadTrack := func(ctx context.Context, trackIdx int, initURI string, segments []Segment, segDir, outPath string, onConcat func(int64)) error {
 		if err := os.MkdirAll(segDir, 0755); err != nil {
 			return fmt.Errorf("create segment dir: %w", err)
 		}
@@ -661,7 +684,7 @@ func (d *Downloader) downloadEpisodeInternal(
 			}
 		}
 
-		return d.concatenateSegmentsDir(initPath, segments, segDir, outPath)
+		return d.concatenateSegmentsDir(initPath, segments, segDir, outPath, onConcat)
 	}
 
 	// 6. Download all tracks (video + audio) in parallel. Segments within and
@@ -720,7 +743,13 @@ func (d *Downloader) downloadEpisodeInternal(
 	trackWG.Add(1)
 	go func() {
 		defer trackWG.Done()
-		if err := downloadTrack(ctx, 0, videoPlaylist.InitURI, videoPlaylist.Segments, videoDir, videoPath); err != nil {
+		// Показывается ход сборки только видео: остальные дорожки на его фоне —
+		// доли процента, и три счётчика сразу мешали бы друг другу.
+		videoBytes := int64(0)
+		progMu.Lock()
+		videoBytes = trackInfos[0].DownloadedBytes
+		progMu.Unlock()
+		if err := downloadTrack(ctx, 0, videoPlaylist.InitURI, videoPlaylist.Segments, videoDir, videoPath, assembleProgress(videoBytes)); err != nil {
 			recordErr(fmt.Errorf("video track: %w", err))
 		}
 	}()
@@ -731,7 +760,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		go func(ai int, aj audioJob) {
 			defer trackWG.Done()
 			audioDir := filepath.Join(tmpDir, fmt.Sprintf("audio_%d", ai))
-			if err := downloadTrack(ctx, 1+ai, aj.playlist.InitURI, aj.playlist.Segments, audioDir, aj.outFile); err != nil {
+			if err := downloadTrack(ctx, 1+ai, aj.playlist.InitURI, aj.playlist.Segments, audioDir, aj.outFile, nil); err != nil {
 				recordErr(fmt.Errorf("audio track %d: %w", ai, err))
 				return
 			}
@@ -750,7 +779,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		go func(si int, sj subtitleJob) {
 			defer trackWG.Done()
 			subDir := filepath.Join(tmpDir, fmt.Sprintf("sub_%d", si))
-			if err := downloadTrack(ctx, 1+len(audioJobs)+si, sj.playlist.InitURI, sj.playlist.Segments, subDir, sj.outFile); err != nil {
+			if err := downloadTrack(ctx, 1+len(audioJobs)+si, sj.playlist.InitURI, sj.playlist.Segments, subDir, sj.outFile, nil); err != nil {
 				d.logger.Warn("subtitle track failed, continuing without it",
 					domain.F("episode", epLabel),
 					domain.F("subtitle", sj.rendition.Name),
@@ -1009,7 +1038,7 @@ func (d *Downloader) fetchSegment(ctx context.Context, segURL, outPath string) (
 // MPEG-TS segments concatenate byte-by-byte; fMP4/CMAF segments do too, but only
 // once the EXT-X-MAP init segment (ftyp+moov) is written first — initPath points
 // to it (empty for plain TS streams).
-func (d *Downloader) concatenateSegmentsDir(initPath string, segments []Segment, segDir, outPath string) error {
+func (d *Downloader) concatenateSegmentsDir(initPath string, segments []Segment, segDir, outPath string, onBytes func(int64)) error {
 	out, err := os.Create(outPath)
 	if err != nil {
 		return err
@@ -1028,16 +1057,26 @@ func (d *Downloader) concatenateSegmentsDir(initPath string, segments []Segment,
 		}
 	}
 
+	// Буфер на мегабайт вместо стандартных 32 КБ: на эпизоде в двадцать
+	// гигабайт это на два порядка меньше системных вызовов, и на Windows
+	// разница заметна невооружённым глазом.
+	buf := make([]byte, 1<<20)
+
+	var written int64
 	for _, seg := range segments {
 		segPath := filepath.Join(segDir, fmt.Sprintf("seg_%05d.ts", seg.Index))
 		f, err := os.Open(segPath)
 		if err != nil {
 			return fmt.Errorf("open segment %d: %w", seg.Index, err)
 		}
-		_, err = io.Copy(out, f)
+		n, err := io.CopyBuffer(out, f, buf)
 		f.Close()
 		if err != nil {
 			return fmt.Errorf("copy segment %d: %w", seg.Index, err)
+		}
+		written += n
+		if onBytes != nil {
+			onBytes(written)
 		}
 	}
 

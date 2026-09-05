@@ -2,6 +2,7 @@ package hlsdownloader
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,5 +142,56 @@ func TestJoinWebVTT_RejectsEmpty(t *testing.T) {
 	}
 	if err := joinWebVTT(path); err == nil {
 		t.Error("пустой файл принят как годная дорожка")
+	}
+}
+
+// Склейка сегментов — это полная перезапись эпизода на диск, и без отчёта она
+// выглядит как зависшая на 100% загрузка: сегменты скачаны, ffmpeg ещё не
+// запущен, в диспетчере задач пусто. Проверяем, что ход сборки сообщается и
+// что файл собирается верно.
+func TestConcatenateSegmentsDir_ReportsProgress(t *testing.T) {
+	dir := t.TempDir()
+	segDir := filepath.Join(dir, "video")
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	segments := make([]Segment, 3)
+	want := ""
+	for i := range segments {
+		segments[i] = Segment{Index: i}
+		body := strings.Repeat(string(rune('a'+i)), 1000)
+		want += body
+		if err := os.WriteFile(filepath.Join(segDir, fmt.Sprintf("seg_%05d.ts", i)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var reports []int64
+	out := filepath.Join(dir, "video.ts")
+	d := &Downloader{}
+	if err := d.concatenateSegmentsDir("", segments, segDir, out, func(done int64) {
+		reports = append(reports, done)
+	}); err != nil {
+		t.Fatalf("склейка: %v", err)
+	}
+
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("склеенный файл отличается: %d байт вместо %d", len(got), len(want))
+	}
+	if len(reports) != len(segments) {
+		t.Fatalf("отчётов %d, ожидалось %d", len(reports), len(segments))
+	}
+	// Счётчик обязан расти и заканчиваться полным размером.
+	for i := 1; i < len(reports); i++ {
+		if reports[i] <= reports[i-1] {
+			t.Errorf("счётчик не растёт: %v", reports)
+		}
+	}
+	if reports[len(reports)-1] != int64(len(want)) {
+		t.Errorf("итог %d, ожидалось %d", reports[len(reports)-1], len(want))
 	}
 }

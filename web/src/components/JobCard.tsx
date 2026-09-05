@@ -261,7 +261,9 @@ function EpisodeMeta({
           >
             {ep.stage === "download"
               ? t("downloading")
-              : ep.stage === "mux"
+              : ep.stage === "assemble"
+                ? t("assembling the file")
+                : ep.stage === "mux"
                 ? t("muxing")
                 : ep.stage === "move"
                   ? t("moving to the output folder")

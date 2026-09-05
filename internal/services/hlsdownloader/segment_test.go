@@ -132,7 +132,7 @@ func TestConcatenateSegmentsDir_MissingSegmentErrors(t *testing.T) {
 	}
 	segs := []Segment{{Index: 0}, {Index: 1}}
 	out := filepath.Join(t.TempDir(), "out.ts")
-	err := d.concatenateSegmentsDir("", segs, segDir, out)
+	err := d.concatenateSegmentsDir("", segs, segDir, out, nil)
 	if err == nil {
 		t.Fatal("expected an error for missing segment file")
 	}
@@ -154,7 +154,7 @@ func TestConcatenateSegmentsDir_OrderAndInit(t *testing.T) {
 	}
 	segs := []Segment{{Index: 0}, {Index: 1}, {Index: 2}}
 	out := filepath.Join(t.TempDir(), "out.ts")
-	if err := d.concatenateSegmentsDir(initPath, segs, segDir, out); err != nil {
+	if err := d.concatenateSegmentsDir(initPath, segs, segDir, out, nil); err != nil {
 		t.Fatalf("concat: %v", err)
 	}
 	b, _ := os.ReadFile(out)
@@ -167,7 +167,7 @@ func TestConcatenateSegmentsDir_MissingInitErrors(t *testing.T) {
 	d := New(http.DefaultClient, domain.RequestAuth{}, nopLogger{})
 	segDir := t.TempDir()
 	out := filepath.Join(t.TempDir(), "out.ts")
-	err := d.concatenateSegmentsDir(filepath.Join(segDir, "nonexistent-init.mp4"), nil, segDir, out)
+	err := d.concatenateSegmentsDir(filepath.Join(segDir, "nonexistent-init.mp4"), nil, segDir, out, nil)
 	if err == nil {
 		t.Fatal("expected an error when init segment is missing")
 	}

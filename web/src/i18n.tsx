@@ -257,6 +257,7 @@ const RU: Record<string, string> = {
   "This folder cannot be written to.": "В эту папку нельзя писать.",
   downloading: "скачивание",
   muxing: "склейка",
+  "assembling the file": "сборка файла из сегментов",
   "re-encoding": "перекодирование",
   "moving to the output folder": "перенос в папку загрузки",
   Version: "Версия",
