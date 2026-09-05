@@ -252,6 +252,8 @@ const RU: Record<string, string> = {
   muxing: "склейка",
   "re-encoding": "перекодирование",
   "moving to the output folder": "перенос в папку загрузки",
+  Version: "Версия",
+  "(the service publishes this film as several files)": "(сервис выкладывает этот фильм несколькими файлами)",
   "Loading subtitle list…": "Загружаю список субтитров…",
   "Could not load subtitles": "Не удалось загрузить субтитры",
   "This title has no subtitles.": "У этого тайтла нет субтитров.",

@@ -89,17 +89,33 @@ type DiscoverSeason struct {
 	Episodes []DiscoverEpisode `json:"episodes"`
 }
 
+// DiscoverVersion is one of several files a MOVIE is published as: kino.watch
+// puts them in videos[], and they are not parts of one film but alternatives —
+// "Дюна: Часть вторая" ships as "24 fps" and "48 fps".
+//
+// They used to be mapped onto episodes S1E1/S1E2 and, since a movie has no
+// episode picker, both were downloaded: two 4K files for one film, one of them
+// the high-frame-rate copy that no TV decoder plays properly.
+type DiscoverVersion struct {
+	Episode     int    `json:"episode"`
+	Title       string `json:"title"`
+	DurationMin int    `json:"durationMin,omitempty"`
+}
+
 // DiscoverDetail is the full title view.
 type DiscoverDetail struct {
 	DiscoverItem
-	Plot         string           `json:"plot,omitempty"`
-	Cast         string           `json:"cast,omitempty"`
-	Countries    []string         `json:"countries,omitempty"`
-	DurationMin  int              `json:"durationMin,omitempty"`
-	Audios       []DiscoverAudio  `json:"audios"`
-	Seasons      []DiscoverSeason `json:"seasons,omitempty"`
-	EpisodeCount int              `json:"episodeCount"`
-	ItemURL      string           `json:"itemUrl"`
+	Plot        string          `json:"plot,omitempty"`
+	Cast        string          `json:"cast,omitempty"`
+	Countries   []string        `json:"countries,omitempty"`
+	DurationMin int             `json:"durationMin,omitempty"`
+	Audios      []DiscoverAudio `json:"audios"`
+	// Versions is filled only for a movie published as several files; the UI
+	// then asks which one instead of taking them all.
+	Versions     []DiscoverVersion `json:"versions,omitempty"`
+	Seasons      []DiscoverSeason  `json:"seasons,omitempty"`
+	EpisodeCount int               `json:"episodeCount"`
+	ItemURL      string            `json:"itemUrl"`
 	// Qualities are the distinct downloadable resolutions actually available for
 	// this title (highest first), so the download menu shows real options instead
 	// of a hardcoded list.
@@ -340,6 +356,27 @@ func collectSeasons(it kinopubapi.Item) ([]DiscoverSeason, int) {
 	return seasons, count
 }
 
+// collectVersions lists the alternatives a movie is published as. Empty for a
+// serial, and for a movie with a single file — there is nothing to ask about.
+func collectVersions(it kinopubapi.Item) []DiscoverVersion {
+	if len(it.Seasons) > 0 || len(it.Videos) < 2 {
+		return nil
+	}
+	out := make([]DiscoverVersion, 0, len(it.Videos))
+	for i, v := range it.Videos {
+		num := v.Number
+		if num == 0 {
+			num = i + 1
+		}
+		title := v.Title
+		if title == "" {
+			title = fmt.Sprintf("Версия %d", num)
+		}
+		out = append(out, DiscoverVersion{Episode: num, Title: title, DurationMin: int(v.Duration) / 60})
+	}
+	return out
+}
+
 // collectQualities returns the distinct downloadable quality labels available
 // for an item (e.g. ["2160p","1080p","720p","480p"]), highest first, together
 // with the qualities that ship an HEVC file and the full list of variants.
@@ -455,6 +492,7 @@ func toDiscoverDetail(it kinopubapi.Item) DiscoverDetail {
 		Seasons:       seasons,
 		EpisodeCount:  count,
 		ItemURL:       kinopubapi.ItemURL(it.ID.String()),
+		Versions:      collectVersions(it),
 		Qualities:     qualities,
 		QualitiesHEVC: qualitiesHEVC,
 		Variants:      variants,
@@ -832,21 +870,74 @@ func (s *Server) handleDiscoverSubtitles(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Same auth the downloader uses: hls4 URLs are token-signed, the CDN only
-	// wants a User-Agent and a Referer.
-	auth := domain.RequestAuth{
-		UserAgent: defaultUserAgent,
-		Headers:   map[string]string{"Referer": "https://kino.watch/"},
-	}
-	// A logger with no handlers: this is a read-only listing, its noise belongs
-	// to nobody's job log.
-	dl := hlsdownloader.New(httpx.WithAuth(http.DefaultClient, auth), auth, logx.New(nil))
-	tracks, err := dl.ListSubtitleTracks(r.Context(), manifest, domain.Quality(s.settings.get().Quality))
+	tracks, err := s.manifestDownloader().ListSubtitleTracks(r.Context(), manifest, domain.Quality(s.settings.get().Quality))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"subtitles": tracks})
+}
+
+// handleDiscoverAudios lists the audio tracks the source actually offers for one
+// episode, read from the master playlist.
+//
+// The item's own "audios" array is a summary and cannot be trusted for picking:
+// on "Южный Парк" it lists four entries for five real tracks, names one of them
+// "rus" (a language code) and gives both the Russian and the Ukrainian MTV dub
+// the same label. A choice made from that list matches several tracks at once,
+// which is how voiceovers nobody asked for ended up in the file.
+func (s *Server) handleDiscoverAudios(w http.ResponseWriter, r *http.Request) {
+	client, ok := s.kpClientOrErr(w)
+	if !ok {
+		return
+	}
+	s.ensureUHD(r.Context(), client)
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	item, err := client.Item(r.Context(), id)
+	if err != nil {
+		s.kpFail(w, err)
+		return
+	}
+	pl, err := kinopubapi.BuildPagePlaylist(item)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	manifest := manifestFor(pl, queryInt(r, "season", 0), queryInt(r, "episode", 0))
+	if manifest == "" {
+		writeErr(w, http.StatusNotFound, "no playable stream for this item")
+		return
+	}
+	tracks, err := s.listManifestAudio(r.Context(), manifest, r.URL.Query().Get("quality"))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audios": tracks})
+}
+
+// listManifestAudio reads the audio renditions of one manifest at the given
+// quality (empty = the configured default).
+func (s *Server) listManifestAudio(ctx context.Context, manifest, quality string) ([]domain.AudioTrackInfo, error) {
+	if quality == "" {
+		quality = s.settings.get().Quality
+	}
+	return s.manifestDownloader().ListAudioTracks(ctx, manifest, domain.Quality(quality))
+}
+
+// manifestDownloader is a downloader used only for reading manifests: same auth
+// as a real download (hls4 URLs are token-signed, the CDN wants a User-Agent and
+// a Referer), no logging, no segment fetching.
+func (s *Server) manifestDownloader() *hlsdownloader.Downloader {
+	auth := domain.RequestAuth{
+		UserAgent: defaultUserAgent,
+		Headers:   map[string]string{"Referer": "https://kino.watch/"},
+	}
+	return hlsdownloader.New(httpx.WithAuth(http.DefaultClient, auth), auth, logx.New(nil))
 }
 
 // manifestFor picks the manifest of one episode, falling back to the first

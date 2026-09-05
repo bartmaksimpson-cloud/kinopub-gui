@@ -4,6 +4,7 @@ import {
   CalendarDays,
   Check,
   Captions,
+  Film,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -24,7 +25,9 @@ import {
   isNavigationAbort,
   type DiscoverDetail,
   type DiscoverItem,
+  type DiscoverAudio,
   type DownloadedEpisode,
+  type AudioTrack,
   type SubtitleTrack,
   imgURL,
 } from "../api";
@@ -122,6 +125,12 @@ export function TitleDetail({
   const [audioSel, setAudioSel] = useState<Set<string>>(new Set());
   // Субтитры: раздел свёрнут, список подгружается при первом раскрытии (он
   // стоит запроса мастер-плейлиста), и ни одна дорожка не выбрана по умолчанию.
+  // Версия фильма: kino.watch публикует «Дюну» как два файла (24 и 48 fps), и
+  // без выбора качались оба. Пусто = первая версия.
+  const [version, setVersion] = useState<number | null>(null);
+  // Озвучки из мастер-плейлиста: список из API неполон и назван так, что выбор
+  // по нему ловит лишние дорожки («MTV» — русскую и украинскую, «rus» — все).
+  const [mfAudios, setMfAudios] = useState<AudioTrack[] | null>(null);
   const [subsOpen, setSubsOpen] = useState(false);
   const [subs, setSubs] = useState<SubtitleTrack[] | null>(null);
   const [subsBusy, setSubsBusy] = useState(false);
@@ -157,6 +166,8 @@ export function TitleDetail({
     setSeeded(false);
     setAudioSel(new Set());
     setAudioPrefMissing(false);
+    setVersion(null);
+    setMfAudios(null);
     setSubsOpen(false);
     setSubs(null);
     setSubsErr("");
@@ -258,14 +269,14 @@ export function TitleDetail({
     setSeeded(true);
     setEpSel(initialEpisodeSelection(allEpKeys, downloaded, queuedKeys));
 
-    if (!detail.audios.length) return;
+    if (!audioList.length) return;
     // What to pre-tick, most truthful source first: the voiceover the episodes on
     // disk are actually in, then this title's own remembered choice, then the
     // last choice made anywhere as a mere starting guess.
     const onDisk = [...downloaded.values()].flatMap((e) => e.audio || []);
-    const fromDisk = matchDownloadedAudio(detail.audios, onDisk);
+    const fromDisk = matchDownloadedAudio(audioList, onDisk);
     const remembered = readAudioPref(id);
-    const matched = fromDisk.length ? fromDisk : matchRememberedAudio(detail.audios, remembered.prefs);
+    const matched = fromDisk.length ? fromDisk : matchRememberedAudio(audioList, remembered.prefs);
 
     if (matched.length) {
       setAudioSel(new Set(matched.map((a) => a.label)));
@@ -282,6 +293,54 @@ export function TitleDetail({
     setAudioSel(new Set());
     setAudioPrefMissing(onDisk.length > 0 || (remembered.scoped && remembered.prefs.length > 0));
   }, [detail, downloadedReady, seeded, allEpKeys, downloaded, queuedKeys, id]);
+
+  // Какая версия фильма поедет. По умолчанию первая: у «Дюны» это 24 fps —
+  // родная каденция, которую берёт любое железо.
+  const versions = detail?.versions || [];
+  const chosenVersion = version ?? versions[0]?.episode ?? 0;
+
+  // Список озвучек, каким его отдаёт сам плейлист. Грузится в фоне: до ответа
+  // показывается список из API, поэтому карточка не ждёт сеть.
+  useEffect(() => {
+    if (!detail) return;
+    let alive = true;
+    const first = detail.seasons?.[0]?.episodes?.[0];
+    api
+      .audios(id, first?.season, first?.episode, quality)
+      .then((r) => {
+        if (alive && r.audios && r.audios.length) setMfAudios(r.audios);
+      })
+      .catch(() => {
+        /* список из API остаётся запасным вариантом */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [detail, id, quality]);
+
+  // Одна форма для обоих источников, чтобы ниже ничего не раздваивать. Имя
+  // дорожки очищается от ведущего номера («01. MTV (RUS)» → «MTV (RUS)»): в
+  // другом эпизоде нумерация другая, а имя то же.
+  const audioList = useMemo<DiscoverAudio[]>(() => {
+    if (!mfAudios) return detail?.audios || [];
+    return mfAudios.map((t) => {
+      const name = t.Name.replace(/^\s*\d+\.\s*/, "").trim() || t.Language;
+      const tagged = TAGGED_CODECS.find((c) => name.toLowerCase().includes(c));
+      return {
+        index: t.Index,
+        lang: t.Language,
+        type: "",
+        author: "",
+        label: name,
+        // Правило отбора строится из filter: точное имя дорожки — это ровно
+        // одна дорожка, в отличие от студии или кода языка.
+        filter: name,
+        codec: tagged || "aac",
+        channels: 0,
+        surround: false,
+      } as DiscoverAudio;
+    });
+  }, [mfAudios, detail]);
 
   // Ключ дорожки для выбора: язык + признак форсированной. Не индекс и не имя —
   // имена содержат порядковый номер ("RUS #13"), который в другом эпизоде другой.
@@ -322,9 +381,9 @@ export function TitleDetail({
       return next;
     });
 
-  const allAudioOn = !!detail && detail.audios.length > 0 && audioSel.size === detail.audios.length;
+  const allAudioOn = !!detail && audioList.length > 0 && audioSel.size === audioList.length;
   const toggleAllAudio = () =>
-    setAudioSel(() => (allAudioOn ? new Set() : new Set((detail?.audios || []).map((a) => a.label))));
+    setAudioSel(() => (allAudioOn ? new Set() : new Set(audioList.map((a) => a.label))));
 
   const toggleEpisode = (key: string) => {
     if (queuedKeys.has(key)) return; // already lined up — nothing to select
@@ -395,8 +454,8 @@ export function TitleDetail({
       toast(t("Select at least one episode"), "error");
       return;
     }
-    const chosenAudios = detail.audios.filter((a) => audioSel.has(a.label));
-    if (detail.audios.length > 0 && chosenAudios.length === 0) {
+    const chosenAudios = audioList.filter((a) => audioSel.has(a.label));
+    if (audioList.length > 0 && chosenAudios.length === 0) {
       toast(t("Select at least one voiceover"), "error");
       return;
     }
@@ -410,7 +469,7 @@ export function TitleDetail({
     // which entries are pre-ticked — keeping a second copy here is how the two
     // drifted apart and one studio's AAC and AC3 renditions both got selected.
     const isTagged = isTaggedCodec;
-    const allSelected = chosenAudios.length === detail.audios.length;
+    const allSelected = chosenAudios.length === audioList.length;
     const audioSpecs =
       allSelected || chosenAudios.length === 0
         ? undefined
@@ -439,7 +498,15 @@ export function TitleDetail({
         episodes: "",
         // Belt and braces: the selection is already free of queued episodes, but
         // never let one through even if the pruning above lost a race.
-        episodeKeys: isSerial && epSel ? [...epSel].filter((k) => !queuedKeys.has(k)) : undefined,
+        episodeKeys: isSerial
+          ? epSel
+            ? [...epSel].filter((k) => !queuedKeys.has(k))
+            : undefined
+          : // Фильм: kino.watch иногда публикует его несколькими файлами
+            // (24 fps / 48 fps). Без явного ключа движок берёт их все.
+            versions.length > 1
+            ? [`S1E${chosenVersion}`]
+            : undefined,
         audio: "",
         audioSpecs,
         audioMenu: false,
@@ -630,25 +697,25 @@ export function TitleDetail({
                       : t("({n} selected)", { n: audioSel.size })
                 }
                 action={
-                  detail.audios.length > 1 && (
+                  audioList.length > 1 && (
                     <button onClick={toggleAllAudio} className="text-gold-300 transition hover:text-gold-200">
                       {allAudioOn ? t("Deselect all") : t("Select all")}
                     </button>
                   )
                 }
               >
-                {audioPrefMissing && detail.audios.length > 0 && (
+                {audioPrefMissing && audioList.length > 0 && (
                   <p className="mb-2 text-xs text-gold-300/90">
                     {t("Your last voiceover isn't available here — pick another.")}
                   </p>
                 )}
-                {detail.audios.length === 0 ? (
+                {audioList.length === 0 ? (
                   <p className="text-xs text-slate-500">
                     {t("Voiceover list appears after sign-in / for available titles.")}
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {detail.audios.map((a) => {
+                    {audioList.map((a) => {
                       const on = audioSel.has(a.label);
                       return (
                         <button
@@ -669,6 +736,39 @@ export function TitleDetail({
                   </div>
                 )}
               </Section>
+
+              {/* Версия фильма: несколько файлов одного фильма, а не части */}
+              {!isSerial && versions.length > 1 && (
+                <Section
+                  icon={<Film className="h-4 w-4" />}
+                  title={t("Version")}
+                  hint={t("(the service publishes this film as several files)")}
+                >
+                  <div className="flex flex-wrap gap-2">
+                    {versions.map((v) => {
+                      const on = v.episode === chosenVersion;
+                      return (
+                        <button
+                          key={v.episode}
+                          onClick={() => setVersion(v.episode)}
+                          className={clsx(
+                            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                            on
+                              ? "border-gold-500/50 bg-gold-500/[0.14] text-gold-200"
+                              : "border-white/[0.08] bg-white/[0.02] text-slate-400 hover:border-white/20 hover:text-slate-200",
+                          )}
+                        >
+                          {on && <Check className="h-3 w-3 shrink-0" strokeWidth={3} />}
+                          {v.title}
+                          {v.durationMin ? (
+                            <span className="text-slate-500">{v.durationMin} {t("min")}</span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Section>
+              )}
 
               {/* Субтитры: свёрнуты, грузятся по раскрытию, по умолчанию ничего не выбрано */}
               <Section
@@ -1017,7 +1117,7 @@ export function TitleDetail({
                     disabled={
                       starting ||
                       (isSerial && selectedCount === 0) ||
-                      (detail.audios.length > 0 && audioSel.size === 0)
+                      (audioList.length > 0 && audioSel.size === 0)
                     }
                   >
                     {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}

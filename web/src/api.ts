@@ -134,6 +134,18 @@ export interface UpdateStatus {
   note?: string;
 }
 
+export interface DiscoverVersion {
+  episode: number;
+  title: string;
+  durationMin?: number;
+}
+
+export interface AudioTrack {
+  Index: number;
+  Name: string;
+  Language: string;
+}
+
 export interface SubtitleTrack {
   Index: number;
   Name: string;
@@ -258,6 +270,7 @@ export interface DiscoverDetail extends DiscoverItem {
   countries?: string[];
   durationMin?: number;
   audios: DiscoverAudio[];
+  versions?: DiscoverVersion[];
   seasons?: DiscoverSeason[];
   episodeCount: number;
   itemUrl: string;
@@ -634,6 +647,15 @@ export const api = {
     }),
   jobLeftovers: (id: string) => req<Leftovers>("GET", `/api/jobs/${id}/leftovers`),
   clearJobs: () => req<{ removed: number }>("POST", "/api/jobs/clear"),
+  audios: (id: string, season?: number, episode?: number, quality?: string) =>
+    req<{ audios: AudioTrack[] | null }>(
+      "GET",
+      `/api/discover/audios?id=${encodeURIComponent(id)}` +
+        (season ? `&season=${season}` : "") +
+        (episode ? `&episode=${episode}` : "") +
+        (quality ? `&quality=${encodeURIComponent(quality)}` : ""),
+    ),
+
   subtitles: (id: string, season?: number, episode?: number) =>
     req<{ subtitles: SubtitleTrack[] | null }>(
       "GET",

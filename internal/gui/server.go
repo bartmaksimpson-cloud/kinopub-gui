@@ -215,6 +215,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /api/discover/similar", s.handleDiscoverSimilar)
 	mux.HandleFunc("GET /api/discover/stream", s.handleDiscoverStream)
 	mux.HandleFunc("GET /api/discover/subtitles", s.handleDiscoverSubtitles)
+	mux.HandleFunc("GET /api/discover/audios", s.handleDiscoverAudios)
 	mux.HandleFunc("POST /api/discover/marktime", s.handleDiscoverMarkTime)
 	mux.HandleFunc("GET /api/hls", s.handleHLSProxy)
 
