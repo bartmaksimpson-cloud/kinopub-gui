@@ -583,20 +583,25 @@ func (d *Downloader) downloadEpisodeInternal(
 	// для 4K десятки гигабайт. Без отдельной стадии она выглядит как зависшая
 	// загрузка на 100%: сегменты уже скачаны, а ffmpeg ещё не запущен.
 	stager, _ := sink.(domain.EpisodeStageSink)
-	assembleProgress := func(total int64) func(int64) {
+	// total считается ФУНКЦИЕЙ, а не числом: размер дорожки известен только
+	// когда она скачана, а колбэк создаётся до начала скачивания. Со снимком
+	// подпись показывала «2.7 GB из 2.3 GB» — за общий размер бралось то, что
+	// подхватила докачка.
+	assembleProgress := func(total func() int64) func(int64) {
 		if stager == nil {
 			return nil
 		}
 		var last time.Time
 		return func(done int64) {
+			t := total()
 			// Раз в полсекунды: чаще — это только шум в интерфейсе.
-			if time.Since(last) < 500*time.Millisecond && done < total {
+			if time.Since(last) < 500*time.Millisecond && done < t {
 				return
 			}
 			last = time.Now()
 			format := formatHLSBytes(done)
-			if total > 0 {
-				format = fmt.Sprintf("%s из %s", formatHLSBytes(done), formatHLSBytes(total))
+			if t > 0 {
+				format = fmt.Sprintf("%s из %s", formatHLSBytes(done), formatHLSBytes(t))
 			}
 			stager.EpisodeStage(key, domain.EpisodeStage{Phase: "assemble", Format: format})
 		}
@@ -746,10 +751,11 @@ func (d *Downloader) downloadEpisodeInternal(
 		defer trackWG.Done()
 		// Показывается ход сборки только видео: остальные дорожки на его фоне —
 		// доли процента, и три счётчика сразу мешали бы друг другу.
-		videoBytes := int64(0)
-		progMu.Lock()
-		videoBytes = trackInfos[0].DownloadedBytes
-		progMu.Unlock()
+		videoBytes := func() int64 {
+			progMu.Lock()
+			defer progMu.Unlock()
+			return trackInfos[0].DownloadedBytes
+		}
 		if err := downloadTrack(ctx, 0, videoPlaylist.InitURI, videoPlaylist.Segments, videoDir, videoPath, assembleProgress(videoBytes)); err != nil {
 			recordErr(fmt.Errorf("video track: %w", err))
 		}
