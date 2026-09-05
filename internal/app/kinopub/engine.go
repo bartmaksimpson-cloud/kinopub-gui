@@ -378,6 +378,9 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			pe.attempts--
 			pe.nextAt = time.Time{}
 			pe.lastErr = nil
+			// It was downloading when the user paused it: its slot stays empty
+			// until it is resumed or canceled.
+			pe.heldFromRunning = true
 			mu.Lock()
 			pausedHold = append(pausedHold, pe)
 			mu.Unlock()
@@ -585,6 +588,10 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			pauseMark[ks] = true // processOne will hold it when the attempt returns
 			c()                  // stop this episode's download now
 		} else if pe := takeFromQueues(key); pe != nil {
+			// Queued, not downloading: it holds no worker slot. Cleared
+			// explicitly because the same episode may have been paused mid-
+			// download earlier in this run.
+			pe.heldFromRunning = false
 			pausedHold = append(pausedHold, pe)
 		}
 	}
@@ -608,6 +615,20 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		}
 	}
 
+	// heldRunningCount is how many worker slots are held by episodes paused
+	// mid-download. Counted from the hold itself rather than kept as a separate
+	// number, so resuming or canceling one releases its slot with no bookkeeping
+	// to forget. Caller holds mu.
+	heldRunningCount := func() int {
+		n := 0
+		for _, pe := range pausedHold {
+			if pe.heldFromRunning {
+				n++
+			}
+		}
+		return n
+	}
+
 	// takeTask picks the next runnable episode under the lock. It returns
 	// (task, wait, done): a task to run now; or no task with a wait hint (sleep
 	// then re-poll — e.g. a retry still inside its backoff window, or other
@@ -618,6 +639,15 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		defer mu.Unlock()
 		drainPrioritize()
 		drainPause()
+		// Pausing a DOWNLOADING episode means "download less right now", not
+		// "swap it for the next one". Its worker slot is held empty until it is
+		// resumed or canceled — otherwise the pause achieved nothing: one
+		// episode stopped and another started in the same instant, which is
+		// exactly what the user saw and did not ask for. An episode paused while
+		// still queued holds no slot: there it means "not this one, carry on".
+		if held := heldRunningCount(); held > 0 && inFlight+held >= cfg.MaxConcurrency {
+			return nil, 300 * time.Millisecond, false
+		}
 		if len(newQueue) > 0 {
 			pe := newQueue[0]
 			newQueue = newQueue[1:]
@@ -896,6 +926,10 @@ type pendingEpisode struct {
 	attempts int       // attempts made so far
 	nextAt   time.Time // earliest time the next attempt may run (backoff)
 	lastErr  error     // error from the most recent attempt
+	// heldFromRunning marks an episode paused WHILE IT WAS DOWNLOADING, as
+	// opposed to one paused while still queued. The difference decides whether
+	// its worker slot is refilled: see takeTask.
+	heldFromRunning bool
 }
 
 // episodeOutcome classifies the result of a single download+mux attempt.

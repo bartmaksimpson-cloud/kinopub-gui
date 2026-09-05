@@ -275,3 +275,101 @@ func TestRunHLS_WholeJobPauseNoFailures(t *testing.T) {
 		t.Fatal("run did not finish after pause")
 	}
 }
+
+// Пауза одной серии — это «качать меньше», а не «поменять на следующую».
+// Раньше освободившийся рабочий тут же брал из очереди новый эпизод: одна
+// загрузка останавливалась, другая начиналась в тот же миг, и пауза не давала
+// ничего. Слот приостановленной серии держится пустым до снятия паузы.
+func TestRunHLS_PausedEpisodeDoesNotStartAnother(t *testing.T) {
+	k1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	k2 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 2}
+	g := newGatedHLS(k1, k2)
+	e, _, _ := newRetryTestEngine(g, &fakePageScraper{playlist: makePlaylist(2)})
+	pause := make(chan domain.EpisodeKey, 4)
+	resume := make(chan domain.EpisodeKey, 4)
+	e.deps.PauseRequests = pause
+	e.deps.ResumeRequests = resume
+
+	cfg := retryTestConfig()
+	cfg.MaxConcurrency = 1 // один рабочий: освободившийся слот сразу заметен
+	done := make(chan domain.RunResult, 1)
+	go func() {
+		res, _ := e.runHLS(context.Background(), cfg)
+		done <- res
+	}()
+
+	select {
+	case <-g.started[k1]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("первая серия так и не началась")
+	}
+	pause <- k1
+
+	// Вторая серия не должна стартовать, пока первая на паузе.
+	select {
+	case <-g.started[k2]:
+		t.Fatal("пауза на одной серии запустила следующую")
+	case <-time.After(700 * time.Millisecond):
+	}
+
+	// Снятие паузы возвращает слот: работа продолжается.
+	resume <- k1
+	select {
+	case <-g.started[k1]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("после снятия паузы серия не перезапустилась")
+	}
+	close(g.release[k1])
+	select {
+	case <-g.started[k2]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("вторая серия не начались после освобождения слота")
+	}
+	close(g.release[k2])
+
+	select {
+	case res := <-done:
+		if res.Succeeded != 2 {
+			t.Errorf("Succeeded = %d, ожидалось 2", res.Succeeded)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("запуск не завершился")
+	}
+}
+
+// Пауза серии, которая ещё СТОИТ В ОЧЕРЕДИ, слот не занимает: это «не эту,
+// продолжай дальше», и остальные должны идти на полной скорости.
+func TestRunHLS_PausedQueuedEpisodeHoldsNoSlot(t *testing.T) {
+	k1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	k2 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 2}
+	g := newGatedHLS(k1, k2)
+	e, _, _ := newRetryTestEngine(g, &fakePageScraper{playlist: makePlaylist(2)})
+	pause := make(chan domain.EpisodeKey, 4)
+	e.deps.PauseRequests = pause
+	e.deps.ResumeRequests = make(chan domain.EpisodeKey, 4)
+
+	cfg := retryTestConfig()
+	cfg.MaxConcurrency = 1
+	done := make(chan domain.RunResult, 1)
+	go func() {
+		res, _ := e.runHLS(context.Background(), cfg)
+		done <- res
+	}()
+
+	select {
+	case <-g.started[k1]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("первая серия так и не началась")
+	}
+	// Вторая ещё в очереди — ставим на паузу её.
+	pause <- k2
+	close(g.release[k1])
+
+	// Первая доработала, вторая на паузе — запуск остаётся живым, но ничего
+	// нового не начинает.
+	select {
+	case <-g.started[k2]:
+		t.Fatal("поставленная на паузу серия всё равно началась")
+	case <-time.After(700 * time.Millisecond):
+	}
+}
