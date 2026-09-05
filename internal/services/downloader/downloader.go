@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,7 @@ type Downloader struct {
 	maxHeight     int
 	maxFPS        float64
 	workDir       string
+	outputRoot    string
 	noChunked     bool
 	httpClient    *http.Client
 }
@@ -87,12 +89,22 @@ func WithWorkDir(dir string) Option {
 	}
 }
 
+// WithOutputRoot tells the downloader which folder the output paths are built
+// under, so the work folder can mirror that structure instead of flattening
+// every episode of every title into one pile.
+func WithOutputRoot(root string) Option {
+	return func(d *Downloader) {
+		d.outputRoot = root
+	}
+}
+
 // workPath is where an intermediate file for this job goes. The directory is
-// created on the way: a work folder the user typed once may not exist yet.
+// created on the way: a work folder the user typed once may not exist yet, and
+// neither do the series/season folders mirrored inside it.
 func (d *Downloader) workPath(outPath, suffix string) string {
-	p := domain.WorkPathFor(d.workDir, outPath) + suffix
+	p := domain.WorkPathFor(d.workDir, d.outputRoot, outPath) + suffix
 	if d.workDir != "" {
-		if err := os.MkdirAll(d.workDir, 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			// Unusable work folder must not fail the download: fall back to the
 			// output folder, which is known to work — it is where the file goes.
 			d.logger.Warn("work folder unusable, keeping temp files next to the output",

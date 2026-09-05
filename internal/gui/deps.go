@@ -76,6 +76,7 @@ func buildEngineDeps(
 		downloader.WithMaxHeight(cfg.MaxHeight),
 		downloader.WithMaxFPS(cfg.MaxFPS),
 		downloader.WithWorkDir(cfg.WorkPath),
+		downloader.WithOutputRoot(cfg.OutputPath),
 		downloader.WithNoChunked(cfg.NoChunked),
 		downloader.WithHTTPClient(httpClient),
 	)
