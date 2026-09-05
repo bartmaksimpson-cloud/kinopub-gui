@@ -251,6 +251,7 @@ const RU: Record<string, string> = {
   downloading: "скачивание",
   muxing: "склейка",
   "re-encoding": "перекодирование",
+  "moving to the output folder": "перенос в папку загрузки",
   "Loading subtitle list…": "Загружаю список субтитров…",
   "Could not load subtitles": "Не удалось загрузить субтитры",
   "This title has no subtitles.": "У этого тайтла нет субтитров.",

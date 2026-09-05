@@ -418,6 +418,15 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		return domain.ErrEmptyOutput
 	}
 
+	// Across disks the move is a full copy — minutes for a 4K episode — so it
+	// gets its own stage rather than looking like the job stalled at the finish.
+	// Within one filesystem it is a rename and the label is gone instantly.
+	if stager, ok := sink.(domain.EpisodeStageSink); ok && d.workDir != "" {
+		stager.EpisodeStage(job.Episode.Key, domain.EpisodeStage{
+			Phase:  "move",
+			Format: formatBytes(info.Size()),
+		})
+	}
 	if err := moveFile(tempPath, job.OutPath); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("rename temp to final: %w", err)

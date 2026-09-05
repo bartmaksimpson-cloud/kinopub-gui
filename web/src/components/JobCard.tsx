@@ -259,7 +259,13 @@ function EpisodeMeta({
                 : "bg-white/[0.06] text-slate-300",
             )}
           >
-            {ep.stage === "download" ? t("downloading") : ep.stage === "mux" ? t("muxing") : t("re-encoding")}
+            {ep.stage === "download"
+              ? t("downloading")
+              : ep.stage === "mux"
+                ? t("muxing")
+                : ep.stage === "move"
+                  ? t("moving to the output folder")
+                  : t("re-encoding")}
             {ep.stageFormat && <span className="text-slate-400">· {ep.stageFormat}</span>}
           </span>
         )}
