@@ -1,6 +1,10 @@
 package downloader
 
 import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -370,5 +374,63 @@ func TestBuildHLSMuxArgs_ExtraArgsOverrideCopy(t *testing.T) {
 	// The output path stays last, or ffmpeg reads the options as a second output.
 	if args[len(args)-1] != "/tmp/S01E01.mkv.tmp" {
 		t.Errorf("выходной файл не последний: %v", args[len(args)-3:])
+	}
+}
+
+// Копирующая склейка обязана дать файл примерно того же размера, что и вход.
+// Меньший — это ffmpeg, остановившийся раньше времени и вышедший с нулевым
+// кодом: шестнадцать гигабайт скачано, полтора в библиотеке, задание зелёное.
+// Такое должно падать, а не отмечаться выполненным.
+func TestMuxHLS_RejectsTruncatedCopy(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "S01E01.mkv")
+
+	// RunFunc «ffmpeg», который пишет крошечный файл и рапортует успех.
+	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer) error {
+		return os.WriteFile(args[len(args)-1], make([]byte, 1<<20), 0o644) // 1 МБ
+	}
+	d := New(run, &testProxy{}, testLogger{}, WithFFmpegPath("ffmpeg"))
+
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 1}},
+		OutPath: out,
+	}
+	hls := &domain.HLSDownloadResult{
+		VideoPath:  filepath.Join(dir, "video.ts"),
+		Resolution: "3840x2160",
+		TotalBytes: 16 << 30, // скачано 16 ГБ
+	}
+
+	err := d.MuxHLS(context.Background(), job, hls)
+	if err == nil {
+		t.Fatal("обрезанная склейка принята как успех")
+	}
+	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+		t.Error("обрезанный файл всё же оказался в папке загрузки")
+	}
+}
+
+// Перекодирование законно меняет размер — проверка не должна ему мешать.
+func TestMuxHLS_AllowsSmallerAfterReencode(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "S01E01.mkv")
+	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer) error {
+		return os.WriteFile(args[len(args)-1], make([]byte, 1<<20), 0o644)
+	}
+	// Предел по высоте включён, источник выше — значит идёт перекодирование.
+	d := New(run, &testProxy{}, testLogger{}, WithFFmpegPath("ffmpeg"), WithMaxHeight(2160))
+
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 1}},
+		OutPath: out,
+	}
+	hls := &domain.HLSDownloadResult{
+		VideoPath:   filepath.Join(dir, "video.ts"),
+		Resolution:  "3840x2880",
+		BitrateKbps: 12000,
+		TotalBytes:  16 << 30,
+	}
+	if err := d.MuxHLS(context.Background(), job, hls); err != nil {
+		t.Fatalf("перекодирование отвергнуто из-за размера: %v", err)
 	}
 }

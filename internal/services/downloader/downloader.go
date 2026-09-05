@@ -424,6 +424,26 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		return domain.ErrEmptyOutput
 	}
 
+	// A stream copy must come out about the size of what went in. When it does
+	// not, ffmpeg stopped early — a bad timestamp, a truncated input — and
+	// exited 0 anyway, which used to be reported as a finished episode: sixteen
+	// gigabytes downloaded, one and a half in the library, job green. Better to
+	// fail loudly and keep the segments for a retry than to call that success.
+	// Re-encoding legitimately changes the size, so the check applies only to
+	// the copy path.
+	if len(fit) == 0 && hls.TotalBytes > 0 {
+		if min := hls.TotalBytes / 2; info.Size() < min {
+			d.logger.Error("muxed file is far smaller than what was downloaded",
+				domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+				domain.F("downloaded", formatBytes(hls.TotalBytes)),
+				domain.F("muxed", formatBytes(info.Size())),
+			)
+			os.Remove(tempPath)
+			return fmt.Errorf("%w: склейка дала %s из скачанных %s — ffmpeg остановился раньше времени",
+				domain.ErrFFmpegFailed, formatBytes(info.Size()), formatBytes(hls.TotalBytes))
+		}
+	}
+
 	// Across disks the move is a full copy — minutes for a 4K episode — so it
 	// gets its own stage rather than looking like the job stalled at the finish.
 	// Within one filesystem it is a rename and the label is gone instantly.
