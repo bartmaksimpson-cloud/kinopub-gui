@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 )
 
@@ -127,5 +128,52 @@ func TestSanitizeComponent_NeverEmpty(t *testing.T) {
 	got := SanitizeComponent("\x00\x01\x02", "fallback")
 	if got == "" {
 		t.Error("result should never be empty")
+	}
+}
+
+// На сетевом диске os.MkdirAll возвращает «файл уже существует» вместо тихого
+// успеха: две серии создают «Season 01» одновременно, или сервер отвечает с
+// задержкой. Папка при этом на месте — значит работа сделана.
+func TestEnsureDir(t *testing.T) {
+	root := t.TempDir()
+
+	// Обычное создание вложенных папок.
+	deep := filepath.Join(root, "Во все тяжкие _ Breaking Bad", "Season 01")
+	if err := EnsureDir(deep); err != nil {
+		t.Fatalf("не создалась: %v", err)
+	}
+	if info, err := os.Stat(deep); err != nil || !info.IsDir() {
+		t.Fatalf("папки нет: %v", err)
+	}
+
+	// Повторный вызов на существующей — не ошибка.
+	if err := EnsureDir(deep); err != nil {
+		t.Errorf("повторный вызов вернул ошибку: %v", err)
+	}
+
+	// Одновременные вызовы — тот самый случай двух серий разом.
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = EnsureDir(filepath.Join(root, "Сериал", "Season 02"))
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("одновременный вызов %d вернул ошибку: %v", i, err)
+		}
+	}
+
+	// А вот файл на месте папки — настоящая ошибка, её глушить нельзя.
+	file := filepath.Join(root, "файл")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDir(file); err == nil {
+		t.Error("файл на месте папки принят за успех")
 	}
 }

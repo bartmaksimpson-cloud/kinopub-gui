@@ -104,3 +104,23 @@ func SanitizeComponent(name string, fallback string) string {
 	}
 	return result
 }
+
+// EnsureDir creates a directory and every parent it needs, treating "it is
+// already there" as success even when the filesystem says otherwise.
+//
+// os.MkdirAll re-checks with Lstat when mkdir reports ERROR_ALREADY_EXISTS, and
+// on a network share (a mapped Z:, an SMB mount) that re-check is not reliable:
+// two episodes creating "Season 01" at the same moment, or a server answering a
+// beat late, surface as "Cannot create a file when that file already exists"
+// and fail a download whose folder is sitting right there. Asking the
+// filesystem what is actually at the path is the honest answer.
+func EnsureDir(path string) error {
+	if err := os.MkdirAll(path, 0o755); err == nil {
+		return nil
+	} else if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+		// The directory exists: whatever mkdir complained about, the job is done.
+		return nil
+	} else {
+		return err
+	}
+}

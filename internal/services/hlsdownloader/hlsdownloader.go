@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 	"github.com/ZioSHik/kinopub-gui/internal/lib/httpx"
 )
 
@@ -362,7 +363,7 @@ func (d *Downloader) downloadEpisodeInternal(
 
 	// 3. Create temp directory.
 	tmpDir := outPath + ".hls-tmp"
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+	if err := fsutil.EnsureDir(tmpDir); err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 
@@ -602,7 +603,7 @@ func (d *Downloader) downloadEpisodeInternal(
 	}
 
 	downloadTrack := func(ctx context.Context, trackIdx int, initURI string, segments []Segment, segDir, outPath string, onConcat func(int64)) error {
-		if err := os.MkdirAll(segDir, 0755); err != nil {
+		if err := fsutil.EnsureDir(segDir); err != nil {
 			return fmt.Errorf("create segment dir: %w", err)
 		}
 

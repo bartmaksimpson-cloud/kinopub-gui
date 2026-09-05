@@ -4,7 +4,6 @@ package outputlayout
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -100,7 +99,7 @@ var genericEpisodeTitle = regexp.MustCompile(`(?i)^(серия|эпизод|epis
 // cannot be created.
 func (l *Layout) EnsureDirs(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := fsutil.EnsureDir(dir); err != nil {
 		return fmt.Errorf("%w: %s", domain.ErrOutputDirUnwritable, err.Error())
 	}
 	return nil

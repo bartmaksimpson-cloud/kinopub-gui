@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 )
 
 // Compile-time interface assertions.
@@ -104,7 +105,7 @@ func WithOutputRoot(root string) Option {
 func (d *Downloader) workPath(outPath, suffix string) string {
 	p := domain.WorkPathFor(d.workDir, d.outputRoot, outPath) + suffix
 	if d.workDir != "" {
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		if err := fsutil.EnsureDir(filepath.Dir(p)); err != nil {
 			// Unusable work folder must not fail the download: fall back to the
 			// output folder, which is known to work — it is where the file goes.
 			d.logger.Warn("work folder unusable, keeping temp files next to the output",
