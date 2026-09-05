@@ -1019,6 +1019,7 @@ func (e *engine) attemptHLSEpisode(
 	// Segments and the concatenated stream are intermediate files: they follow
 	// the work folder when there is one.
 	tsPath := domain.WorkPathFor(cfg.WorkPath, cfg.OutputPath, outPath) + ".ts"
+	adoptLegacyTemp(cfg, series, ep, tsPath, log)
 	hlsResult, dlErr := e.deps.HLSDownloader.DownloadEpisode(ctx, manifestURL, cfg.Quality, tsPath, ep.Key, e.deps.ProgressReporter)
 	if dlErr != nil {
 		if ctx.Err() != nil {
@@ -1096,6 +1097,72 @@ func (e *engine) attemptHLSEpisode(
 	_ = e.deps.StateStore.MarkCompleted(ctx, completedInfo)
 
 	return epSuccess, nil
+}
+
+// adoptLegacyTemp moves partially-downloaded segments left by an older version
+// into the place this version looks for them.
+//
+// The temp directory's name is derived from the finished file's name, so every
+// change to the naming orphans downloads in flight: adding episode titles to
+// file names moved "S01E01.mkv.ts.hls-tmp" to "S01E01 - Вулкан.mkv.ts.hls-tmp",
+// and mirroring the output layout inside the work folder moved it again. A user
+// who updated mid-download would silently re-fetch gigabytes already on disk.
+//
+// Only a directory that is not already where it belongs is moved, and a failure
+// is not an error: the worst case is the re-download that would have happened
+// anyway.
+func adoptLegacyTemp(cfg domain.RunConfig, series domain.Series, ep domain.Episode, tsPath string, log domain.Logger) {
+	want := tsPath + ".hls-tmp"
+	if _, err := os.Stat(want); err == nil {
+		return // current version's segments are already there
+	}
+
+	ext := ".mkv"
+	if cfg.Container == domain.ContainerMP4 {
+		ext = ".mp4"
+	}
+	// The layout before episode titles were part of the name.
+	legacyOut := filepath.Join(
+		cfg.OutputPath,
+		fsutil.SanitizeComponent(series.Title, "series"),
+		fmt.Sprintf("Season %02d", ep.Key.Season),
+		fmt.Sprintf("S%02dE%02d%s", ep.Key.Season, ep.Key.Episode, ext),
+	)
+
+	candidates := []string{
+		// Work folder, mirrored layout, old file name.
+		domain.WorkPathFor(cfg.WorkPath, cfg.OutputPath, legacyOut) + ".ts.hls-tmp",
+		// Work folder, flat (how the first version of the work folder laid it out).
+		filepath.Join(cfg.WorkPath, filepath.Base(legacyOut)) + ".ts.hls-tmp",
+		filepath.Join(cfg.WorkPath, filepath.Base(tsPath)) + ".hls-tmp",
+		// No work folder: next to the output, old file name.
+		legacyOut + ".ts.hls-tmp",
+	}
+
+	for _, old := range candidates {
+		if old == "" || old == want {
+			continue
+		}
+		if info, err := os.Stat(old); err != nil || !info.IsDir() {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
+			return
+		}
+		if err := os.Rename(old, want); err != nil {
+			log.Warn("не удалось подобрать недокачанные сегменты прошлой версии",
+				domain.F("from", old),
+				domain.F("to", want),
+				domain.F("error", err.Error()),
+			)
+			return
+		}
+		log.Info("подобраны недокачанные сегменты прошлой версии",
+			domain.F("from", old),
+			domain.F("to", want),
+		)
+		return
+	}
 }
 
 // hlsAudioNames lists the voiceover labels of the downloaded audio tracks, for
