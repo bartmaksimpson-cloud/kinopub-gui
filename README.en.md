@@ -22,16 +22,19 @@ You sign in once, with a short device code. Nothing heavy under it — a single 
 
 ## Highlights
 
-- 🎬 **Catalog browser** — search, tops, collections (подборки), genre/country filters, year and IMDb/Kinopoisk rating ranges, your watch history and "continue watching", and per-title detail with plot, cast, ratings and the full season/episode tree.
-- ▶️ **Built-in player** — preview any title right in the app before you download it. The stream goes through the app itself, so there's nothing to set up in the browser.
-- 🎬 **Full-fidelity downloads** — every audio track, every subtitle, whole multi-season series — picked from the catalog or pasted as a direct link.
-- ⚡ **Live progress** — per-episode and per-track percentages, speed, and ETA — all updating in real time.
-- ⏯️ **Control on the fly** — pause, cancel and retry each episode on its own; the queue is persisted to disk and survives a restart — downloads resume right where they stopped.
-- 🔊 **Pick your dubs** — choose which voiceovers to keep right on the title page (remembered for next time) or in a timed picker when downloading from a link; your choice is generalized across episodes.
-- 📚 **Library** — live downloads and everything already on disk on one page: sizes, resolutions and missing-file detection; open a finished file or reveal its folder.
-- 🔐 **Sign in once** — a short device-code login; tokens are stored encrypted and machine-bound. Local features (Library, Settings) work without signing in.
-- 🌍 **Bilingual** — English & Russian, switchable in one click (remembered between sessions).
-- 📦 **Single binary** — the UI is embedded; self-updates from GitHub releases.
+- 🎬 **Browse the catalog** — search, tops, collections, genre and country filters, year and IMDb/Kinopoisk rating ranges, your watch history and "continue watching", plus a title page with plot, cast, ratings and the full season/episode tree.
+- ▶️ **Built-in player** — preview any title inside the app before downloading. The stream goes through the app itself, so nothing needs setting up in the browser.
+- 🗂️ **Pick a file, not a "quality"** — the list shows what the service actually offers: "2160p · HEVC", "2160p · H.264", "1080p · H.264", with per-episode coverage ("· 200/338"), because seasons are not always encoded alike.
+- 📺 **Automatic fit for the player** — a frame taller than 2160 is scaled down, and 4K H.264 above 30 fps is halved (48 → 24). TV decoders refuse such files and fall back to stuttering software playback; anything that already plays is copied untouched.
+- 🔊 **Audio picked properly** — the track list comes from the playlist rather than a summary, and each choice matches one exact track, so picking "MTV" no longer drags in the Ukrainian dub as well.
+- 💬 **Subtitles are a choice** — the section is collapsed and nothing is selected by default: the service offers dozens of languages per episode. Forced tracks are labelled.
+- ⚡ **Live state** — the card shows not just percentages but what is happening: downloading, muxing, re-encoding (with the resulting frame, codec, encoder and CPU threads in use), or moving to the output folder.
+- ⏯️ **Live control** — pause, cancel and retry per episode; a pause actually stops downloading instead of swapping in the next episode. The queue survives a restart and resumes where it stopped.
+- 📁 **Names and folders that make sense** — a film is saved as one file named after it, a serial as a folder with seasons and episode titles. Work files can live on another disk: on a hard drive that is most of the speed.
+- 📚 **Library** — active downloads and everything already on disk on one page: sizes, resolutions, missing-file detection; open a finished file or reveal its folder.
+- 🔐 **Sign in once** — device-code login; tokens are encrypted and bound to the machine. Local features (Library, Settings) work signed out.
+- 🌍 **Two languages** — English and Russian, one click to switch (remembered between sessions).
+- 📦 **One binary** — the UI is embedded; self-updates from GitHub releases.
 
 ## Screenshots
 
@@ -63,7 +66,7 @@ You sign in once, with a short device code. Nothing heavy under it — a single 
 
 ## Install & run
 
-**Prebuilt clients for every major platform** — grab one from the [releases page](https://github.com/ZioSHik/kinopub-gui/releases):
+**Prebuilt clients for every major platform** — grab one from the [releases page](https://github.com/bartmaksimpson-cloud/kinopub-gui/releases):
 
 - 🍎 **macOS** — `.dmg` menu-bar app + standalone binaries, Apple Silicon (`arm64`) and Intel (`amd64`)
 - 🪟 **Windows** — `x64` (`amd64`) executable, no console window and an embedded icon
@@ -74,7 +77,7 @@ Same single binary everywhere — the React UI is embedded, so there is nothing 
 
 ### Option A — download a release binary
 
-Grab `kinopub-gui-*` for your platform from the [releases page](https://github.com/ZioSHik/kinopub-gui/releases), then run it:
+Grab `kinopub-gui-*` for your platform from the [releases page](https://github.com/bartmaksimpson-cloud/kinopub-gui/releases), then run it:
 
 ```bash
 chmod +x kinopub-gui-darwin-arm64
@@ -106,7 +109,7 @@ On **Windows**, download `kinopub-gui-windows-amd64.exe` and run it (double-clic
 You need Go 1.26+ and Node 20+ (only to build the UI; not at runtime).
 
 ```bash
-git clone https://github.com/ZioSHik/kinopub-gui
+git clone https://github.com/bartmaksimpson-cloud/kinopub-gui
 cd kinopub-gui
 make run          # builds the web UI, builds the GUI binary, and launches it
 ```
@@ -119,7 +122,9 @@ make gui          # build the ./kinopub-gui binary
 ./kinopub-gui
 ```
 
-> **Distribution:** grab the prebuilt release binaries above, use `make`, or install from source with `go install github.com/ZioSHik/kinopub-gui/cmd/kinopub-gui@latest` — the module path matches this repo and the embedded `web/dist` is committed, so the install produces a complete, runnable binary. A plain `go build ./cmd/kinopub-gui` also works; `web/dist` is committed, and `make web` regenerates it.
+> **Distribution:** grab the prebuilt binaries from the [releases page](https://github.com/bartmaksimpson-cloud/kinopub-gui/releases), or build with `make`. `web/dist` is committed, so a plain `go build ./cmd/kinopub-gui` also produces a runnable binary, and `make web` regenerates the UI.
+>
+> `go install` is not the way here: the Go module path is inherited from the original project (`github.com/ZioSHik/kinopub-gui`), so installing by it would fetch that code, not this.
 
 ### Flags
 
@@ -179,7 +184,9 @@ You pick dubs/voiceovers right where you start the download:
 - **From a title's page** in the catalog — under **Voiceover**, tick the tracks you want to keep (with *Select all* / *Deselect all*). Your choice is remembered and pre-applied on the next titles; if your last voiceover isn't available here, the app prompts you to pick another.
 - **When downloading from a direct link** (the Download page), the picker pops up as a timed modal the moment the download starts: tick the tracks, *Only this* to keep one, or *Keep all* to take everything (also what the timer does on expiry).
 
-Your choice is generalized across episodes and matched by language: if a chosen dub is missing from some episode, the engine falls back to another track in the same language. By default every track is kept.
+The track list comes from the playlist itself rather than the title summary, and each tick matches exactly one track. The choice is matched by name and language rather than position, because track numbering differs between episodes. When the picked dub is missing from an episode, the engine takes another one in the same language and flags that episode as "voiceover substituted".
+
+**Subtitles** sit next to it in their own section. It is collapsed and nothing is selected by default: the service offers dozens of languages per episode. Forced tracks — signs and foreign lines only — are labelled.
 
 ### 5. Library
 
@@ -187,7 +194,16 @@ The **Library** scans your output folders and shows everything you've downloaded
 
 ### 6. Settings
 
-Defaults for new downloads (output folder, quality, container, proxy) plus extra folders to scan in the Library, the kino.watch sign-in, the ffmpeg installer and the software updater. Stored at `~/.config/kinopub/gui.json`.
+Defaults for new downloads, kino.watch sign-in, the ffmpeg installer and app updates. Stored in `~/.config/kinopub/gui.json`.
+
+**Two folders, and they are for different things:**
+
+- **Where finished files go** — the finished film or episode lands here; this is the folder your player or NAS points at.
+- **Where work files are kept while downloading** — segments, joined tracks and the file ffmpeg is writing. All of it is deleted once the episode is done. Empty means they sit next to the finished file. On a hard drive, putting them on **another** disk is most of the speed: otherwise one head reads and writes at the same time. Needs roughly three times the size of an episode.
+
+A path can be typed in — that is how a network folder is reached (`\\192.168.1.174\Video`, `/Volumes/NAS`) — and the folder is checked for write access before it is saved, so a read-only share shows up immediately rather than after gigabytes.
+
+**Player limits** (on by default): maximum frame height 2160 and maximum 30 fps for 4K. A file that fits is copied without re-encoding — real 4K stays untouched. Re-encoding takes every core between 00:00 and 09:00 and leaves one free the rest of the day, so the machine stays usable.
 
 There is no speed to tune — the app works it out itself. The structure is fixed: one title at a time (the rest wait in a queue you can reorder) and two episodes in parallel inside it. More doesn't go faster — the link is already busy — it just splits it and multiplies connections to the CDN.
 
@@ -249,8 +265,11 @@ make dev            # → http://localhost:5173
 
 ## Credits
 
+This repository is a fork of **[ZioSHik/kinopub-gui](https://github.com/ZioSHik/kinopub-gui)**; releases and self-updates come from here, [bartmaksimpson-cloud/kinopub-gui](https://github.com/bartmaksimpson-cloud/kinopub-gui).
+
 - The download engine and the hard parts it grew from (HLS, retries, encrypted creds): **[niazlv/kinopub-downloader](https://github.com/niazlv/kinopub-downloader)**.
-- The web interface, the catalog/player integration, and the packaging (`cmd/kinopub-gui`, `internal/gui`, `internal/services/kinopubapi`, `web/`): this project.
+- The web interface, the catalog/player integration, and the packaging (`cmd/kinopub-gui`, `internal/gui`, `internal/services/kinopubapi`, `web/`): the upstream project.
+- Codec choice and player fitting, subtitle selection, the work folder, file naming and the live download state: this fork.
 
 ## License
 
