@@ -95,8 +95,18 @@ type EpisodeView struct {
 	// while watching a fan spin up.
 	StageEncoder string `json:"stageEncoder,omitempty"`
 	StageThreads int    `json:"stageThreads,omitempty"`
-	Attempts     int    `json:"attempts"`
-	Error        string `json:"error,omitempty"`
+	// StagePercent и StageETASeconds — ход текущей стадии и остаток по ней.
+	// Скорость и остаток скачивания к сборке, склейке и переносу отношения не
+	// имеют: на них они замирали на последнем значении и обещали «2 секунды»
+	// в начале двадцатиминутной работы.
+	StagePercent    int `json:"stagePercent,omitempty"`
+	StageETASeconds int `json:"stageEtaSeconds,omitempty"`
+
+	// внутреннее состояние оценки стадии (не сериализуется)
+	stageStart time.Time
+	stageFirst int64
+	Attempts   int    `json:"attempts"`
+	Error      string `json:"error,omitempty"`
 
 	// internal speed-sampling state (not serialized)
 	lastBytes int64

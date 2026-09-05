@@ -603,7 +603,12 @@ func (d *Downloader) downloadEpisodeInternal(
 			if t > 0 {
 				format = fmt.Sprintf("%s из %s", formatHLSBytes(done), formatHLSBytes(t))
 			}
-			stager.EpisodeStage(key, domain.EpisodeStage{Phase: "assemble", Format: format})
+			stager.EpisodeStage(key, domain.EpisodeStage{
+				Phase:  "assemble",
+				Format: format,
+				Done:   done,
+				Total:  t,
+			})
 		}
 	}
 

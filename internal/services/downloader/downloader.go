@@ -348,16 +348,21 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		stager.EpisodeStage(job.Episode.Key, stage)
 	}
 
-	// Progress is only wired for the re-encoding case: a stream copy finishes
-	// before the first report would arrive.
+	// Ход склейки сообщается ВСЕГДА, а не только при перекодировании: копия
+	// эпизода в 4K — это десять с лишним минут, и всё это время карточка иначе
+	// показывала бы остаток от давно кончившегося скачивания.
 	var (
-		stdout io.Writer
-		parser *progressParser
+		stdout   io.Writer
+		muxStage *muxProgress
 	)
-	if len(fit) > 0 && sink != nil {
+	if stager, ok := sink.(domain.EpisodeStageSink); ok {
 		if dur := muxDuration(job); dur > 0 {
-			parser = newProgressParser(sink, job.Episode.Key, domain.TrackRef{Kind: domain.TrackVideo, Index: 0}, dur)
-			stdout = parser
+			phase, format := "mux", ""
+			if len(fit) > 0 {
+				phase, format = "encode", describeFit(fit, hls)
+			}
+			muxStage = newMuxProgress(stager, job.Episode.Key, phase, format, dur)
+			stdout = muxStage
 		}
 	}
 
@@ -402,7 +407,7 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		}
 
 		args := a.fit
-		if a.pipe && parser != nil {
+		if a.pipe && muxStage != nil {
 			args = append(append([]string{}, args...), "-progress", "pipe:1")
 		}
 		full := withDecodeThreads(BuildHLSMuxArgs(job, a.hls, tempPath, args...), threads)
@@ -429,8 +434,8 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 			domain.F("error", runErr.Error()),
 		)
 	}
-	if parser != nil {
-		_ = parser.Close()
+	if muxStage != nil {
+		_ = muxStage.Close()
 	}
 	if runErr != nil {
 		os.Remove(tempPath)

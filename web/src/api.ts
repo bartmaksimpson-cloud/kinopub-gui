@@ -34,6 +34,10 @@ export interface EpisodeView {
   tracks?: TrackView[];
   stage?: string;
   stageFormat?: string;
+  stageEncoder?: string;
+  stageThreads?: number;
+  stagePercent?: number;
+  stageEtaSeconds?: number;
   attempts: number;
   error?: string;
 }

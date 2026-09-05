@@ -269,6 +269,14 @@ function EpisodeMeta({
                   ? t("moving to the output folder")
                   : t("re-encoding")}
             {ep.stageFormat && <span className="text-slate-400">· {ep.stageFormat}</span>}
+            {ep.stageEncoder && <span className="text-slate-400">· {ep.stageEncoder}</span>}
+            {ep.stageThreads ? (
+              <span className="text-slate-400">· {t("{n} threads", { n: ep.stageThreads })}</span>
+            ) : null}
+            {ep.stagePercent ? <span className="tabular-nums text-slate-400">· {ep.stagePercent}%</span> : null}
+            {ep.stageEtaSeconds ? (
+              <span className="text-slate-400">· {t("ETA")} {eta(ep.stageEtaSeconds, t)}</span>
+            ) : null}
           </span>
         )}
         {ep.segTotal > 0 && <span>{ep.segDone}/{ep.segTotal} seg</span>}
@@ -277,8 +285,15 @@ function EpisodeMeta({
             {bytes(ep.bytes)} / {ep.totalApprox ? "~" : ""}{bytes(ep.total)}
           </span>
         )}
-        {active && ep.speedBps > 0 && <span className="text-gold-400/90">{speed(ep.speedBps)}</span>}
-        {active && ep.etaSeconds > 0 && <span>{t("ETA")} {eta(ep.etaSeconds, t)}</span>}
+        {active && ep.speedBps > 0 && (!ep.stage || ep.stage === "download") && (
+          <span className="text-gold-400/90">{speed(ep.speedBps)}</span>
+        )}
+        {/* Остаток и скорость относятся к скачиванию: на сборке и склейке они
+            замирали на последнем значении и обещали «2 секунды» в начале
+            двадцатиминутной работы. */}
+        {active && ep.etaSeconds > 0 && (!ep.stage || ep.stage === "download") && (
+          <span>{t("ETA")} {eta(ep.etaSeconds, t)}</span>
+        )}
         {ep.state === "deferred" && (
           <span className="text-sky-400">{t("retrying (attempt {n})", { n: ep.attempts })}</span>
         )}

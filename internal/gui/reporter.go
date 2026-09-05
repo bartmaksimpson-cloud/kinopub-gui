@@ -144,6 +144,7 @@ func (r *eventReporter) EpisodeCompleted(key domain.EpisodeKey) {
 	// остаётся с надписью «перекодирование».
 	if ev, ok := r.job.episodes[epKey(key)]; ok {
 		ev.Stage, ev.StageFormat, ev.StageEncoder, ev.StageThreads = "", "", "", 0
+		ev.StagePercent, ev.StageETASeconds = 0, 0
 	}
 	// Success beat a simultaneous per-episode cancel: the file landed on disk,
 	// so the row cancelEpisode deleted comes back (via ensureEpisode below) —
@@ -283,10 +284,35 @@ func (r *eventReporter) HLSProgress(key domain.EpisodeKey, tracks []domain.Track
 func (r *eventReporter) EpisodeStage(key domain.EpisodeKey, stage domain.EpisodeStage) {
 	r.job.mu.Lock()
 	ev := r.job.ensureEpisode(key)
+	if ev.Stage != stage.Phase {
+		// Новая стадия — новая точка отсчёта, иначе остаток считался бы по
+		// скорости предыдущей.
+		ev.stageStart = time.Now()
+		ev.stageFirst = stage.Done
+		ev.StagePercent, ev.StageETASeconds = 0, 0
+		// Скорость и остаток скачивания относятся только к скачиванию.
+		if stage.Phase != "download" {
+			ev.SpeedBps, ev.ETASeconds = 0, 0
+		}
+	}
 	ev.Stage = stage.Phase
 	ev.StageFormat = stage.Format
 	ev.StageEncoder = stage.Encoder
 	ev.StageThreads = stage.Threads
+	if stage.Total > 0 && stage.Done >= 0 {
+		ev.StagePercent = clampPct(int(stage.Done * 100 / stage.Total))
+		// Остаток по фактической скорости ЭТОЙ стадии, от момента её начала.
+		if elapsed := time.Since(ev.stageStart).Seconds(); elapsed > 2 {
+			if progressed := stage.Done - ev.stageFirst; progressed > 0 {
+				rate := float64(progressed) / elapsed
+				if left := float64(stage.Total - stage.Done); left > 0 && rate > 0 {
+					ev.StageETASeconds = int(left / rate)
+				} else {
+					ev.StageETASeconds = 0
+				}
+			}
+		}
+	}
 	r.job.mu.Unlock()
 	r.mgr.publish(r.job)
 }

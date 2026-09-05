@@ -208,6 +208,12 @@ type EpisodeStage struct {
 	// because a re-encode that eats every core makes the machine unusable, and
 	// the card is where you look to find out why.
 	Threads int
+	// Done and Total measure the stage itself — bytes for assembling and moving,
+	// seconds of media for muxing. Without them the card kept showing the
+	// download's own "2 seconds left" through a twenty-minute mux, because that
+	// estimate stopped being about anything the moment the download ended.
+	Done  int64
+	Total int64
 }
 
 // EpisodeStageSink is a ProgressSink that also accepts stage reports. Optional,
