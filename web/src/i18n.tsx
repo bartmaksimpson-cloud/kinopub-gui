@@ -247,6 +247,20 @@ const RU: Record<string, string> = {
   "Update available": "Доступно обновление",
   "Defaults applied to every new download.": "Значения по умолчанию для новых загрузок.",
   "Default output folder": "Папка загрузки по умолчанию",
+  "Working folder": "Рабочая папка",
+  "Where partial segments, the raw file and the muxer's temp file are kept. Empty keeps them next to the finished file. Pointing it at another drive stops the remux from reading and writing the same disk at once — on a hard drive that is most of the wait.":
+    "Где лежат недокачанные сегменты, сырой файл и временный файл ffmpeg. Пусто — рядом с готовым файлом. Если указать другой диск, ремукс перестанет одновременно читать и писать один и тот же — на жёстком диске это почти всё время ожидания.",
+  "Next to the finished file": "Рядом с готовым файлом",
+  "Maximum frame height": "Максимальная высота кадра",
+  "Files taller than this are scaled down on download, keeping the aspect ratio and the source bitrate; anything at or below it is copied untouched. Hardware decoders top out around 2160 and fall back to stuttering software playback above it — a 3840x2880 open-matte release is one such case.":
+    "Файлы выше уменьшаются при скачивании — пропорции и битрейт сохраняются; всё, что не выше, копируется без изменений. Аппаратные декодеры заканчиваются примерно на 2160, а выше уходят в софтверное воспроизведение с рывками — например, раздачи «открытым кадром» 3840x2880.",
+  "Automatic — no taller than 2160": "Автоматически — не выше 2160",
+  "No limit (keep the source frame)": "Без ограничения (как в источнике)",
+  "Maximum frame rate for 4K": "Максимальная частота кадров для 4K",
+  "A 4K stream above this is halved (48→24, 60→30), which keeps the film's own cadence. TV decoders accept 4K at 48 fps and then drop most of the frames, and a 60 Hz panel cannot show 48 evenly either. Smaller frames are never touched.":
+    "Поток 4K выше этого значения делится пополам (48→24, 60→30) — так сохраняется исходная каденция фильма. Телевизионные декодеры берут 4K на 48 к/с и затем выбрасывают большую часть кадров, да и панель 60 Гц ровно 48 не покажет. Кадры меньше 4K не трогаются.",
+  "Automatic — no more than 30 fps at 4K": "Автоматически — не больше 30 к/с на 4K",
+  "No limit (keep the source rate)": "Без ограничения (как в источнике)",
   "Default quality": "Качество по умолчанию",
   "Extra library folders": "Доп. папки библиотеки",
   "Scanned in addition to the output folder.": "Сканируются вдобавок к папке загрузки.",

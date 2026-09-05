@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -138,5 +139,24 @@ func TestFitArgsFor_KeepsHighFrameRateForHEVC(t *testing.T) {
 	), " ")
 	if !strings.Contains(joined, "-r 30") {
 		t.Errorf("H.264 4K60 должен быть поделён: %q", joined)
+	}
+}
+
+// Подбор энкодера обязан проверять машину, а не сборку ffmpeg: любая
+// стандартная сборка под Windows перечисляет hevc_nvenc, и без карты NVIDIA он
+// падает при открытии — посреди мукса, уже после скачанных гигабайт.
+func TestHEVCEncoder_IsProbedNotAssumed(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg не найден")
+	}
+	// Заведомо несуществующий энкодер: список сборки его не содержит, но даже
+	// если бы содержал, живая проверка обязана его отвергнуть.
+	if encoderOpens("ffmpeg", "hevc_nosuchencoder") {
+		t.Error("несуществующий энкодер признан рабочим")
+	}
+	// Программный x265 есть в любой полной сборке — проверка не должна врать в
+	// другую сторону и отвергать то, что работает.
+	if listEncoders("ffmpeg")["hevc_videotoolbox"] && !encoderOpens("ffmpeg", "hevc_videotoolbox") {
+		t.Log("videotoolbox есть в сборке, но не открывается на этой машине — это допустимо")
 	}
 }

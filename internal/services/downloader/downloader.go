@@ -321,28 +321,79 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		if dur := muxDuration(job); dur > 0 {
 			parser = newProgressParser(sink, job.Episode.Key, domain.TrackRef{Kind: domain.TrackVideo, Index: 0}, dur)
 			stdout = parser
-			fit = append(fit, "-progress", "pipe:1")
 		}
 	}
 
-	args := BuildHLSMuxArgs(job, hls, tempPath, fit...)
-
-	runErr := d.run(ctx, d.ffmpegPath, args, nil, stdout)
-	if parser != nil {
-		_ = parser.Close()
+	// Attempts from best to merely acceptable. Each drops the one thing that can
+	// make ffmpeg refuse the job, and each is still a usable file:
+	// a subtitle track it will not read, or the scaling pass — whose encoder may
+	// be missing, broken or refused by the driver on this machine (nvenc has
+	// been seen failing to open at all). Losing the fit means the file plays
+	// badly on a TV; losing the DOWNLOAD means gigabytes fetched again.
+	type attempt struct {
+		why  string
+		hls  *domain.HLSDownloadResult
+		fit  []string
+		pipe bool
 	}
-	if runErr != nil && len(hls.Subtitles) > 0 && ctx.Err() == nil {
-		// A subtitle file ffmpeg refuses must not cost a finished multi-gigabyte
-		// download: the segments are deleted right after this call either way, so
-		// drop the subtitles and mux once more before giving up.
-		d.logger.Warn("mux failed with subtitles, retrying without them",
-			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+	withoutSubs := *hls
+	withoutSubs.Subtitles = nil
+
+	attempts := []attempt{{why: "", hls: hls, fit: fit, pipe: true}}
+	if len(hls.Subtitles) > 0 {
+		attempts = append(attempts, attempt{why: "без субтитров", hls: &withoutSubs, fit: fit, pipe: true})
+	}
+	if len(fit) > 0 {
+		attempts = append(attempts, attempt{why: "без подгонки под плеер", hls: hls, fit: nil})
+		if len(hls.Subtitles) > 0 {
+			attempts = append(attempts, attempt{why: "без подгонки и без субтитров", hls: &withoutSubs, fit: nil})
+		}
+	}
+
+	var runErr error
+	for i, a := range attempts {
+		if i > 0 {
+			if ctx.Err() != nil {
+				break
+			}
+			d.logger.Warn("mux failed, retrying with less",
+				domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+				domain.F("retry", a.why),
+				domain.F("error", runErr.Error()),
+			)
+			os.Remove(tempPath)
+		}
+
+		args := a.fit
+		if a.pipe && parser != nil {
+			args = append(append([]string{}, args...), "-progress", "pipe:1")
+		}
+		full := BuildHLSMuxArgs(job, a.hls, tempPath, args...)
+
+		var out io.Writer
+		if a.pipe {
+			out = stdout
+		}
+		runErr = d.run(ctx, d.ffmpegPath, full, nil, out)
+		if runErr == nil {
+			if i > 0 {
+				d.logger.Warn("episode muxed with a fallback",
+					domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+					domain.F("gave_up", a.why),
+				)
+			}
+			break
+		}
+		// The arguments are the first thing anyone needs when ffmpeg refuses a
+		// job on someone else's machine, and they carry no secrets here: every
+		// input is a local file.
+		d.logger.Debug("ffmpeg mux failed",
+			domain.F("args", strings.Join(full, " ")),
 			domain.F("error", runErr.Error()),
 		)
-		os.Remove(tempPath)
-		withoutSubs := *hls
-		withoutSubs.Subtitles = nil
-		runErr = d.run(ctx, d.ffmpegPath, BuildHLSMuxArgs(job, &withoutSubs, tempPath, fit...), nil, nil)
+	}
+	if parser != nil {
+		_ = parser.Close()
 	}
 	if runErr != nil {
 		os.Remove(tempPath)

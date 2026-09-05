@@ -1,11 +1,13 @@
 package downloader
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // hevcSourceCodecs marks a source that already carries HEVC video, so asking for
@@ -46,15 +48,40 @@ func hevcEncoderArgs(ffmpegPath string) []string {
 	encoderOnce.Do(func() {
 		available := listEncoders(ffmpegPath)
 		for _, e := range hardwareHEVCEncoders {
-			if available[e.name] {
-				encoderArgs = append([]string{"-c:v", e.name}, e.args...)
-				encoderArgs = append(encoderArgs, "-tag:v", "hvc1")
-				return
+			if !available[e.name] || !encoderOpens(ffmpegPath, e.name) {
+				continue
 			}
+			encoderArgs = append([]string{"-c:v", e.name}, e.args...)
+			encoderArgs = append(encoderArgs, "-tag:v", "hvc1")
+			return
 		}
 		encoderArgs = []string{"-c:v", "libx265", "-crf", "22", "-preset", "medium", "-tag:v", "hvc1"}
 	})
 	return encoderArgs
+}
+
+// encoderOpens encodes a fraction of a second of black and looks at the exit
+// code.
+//
+// Being listed by "-encoders" only proves the BUILD has the encoder: every
+// stock Windows ffmpeg lists hevc_nvenc whether or not the machine has an
+// NVIDIA card in it, and on a machine without one it fails to open at the first
+// frame — which happens after the download, in the middle of the mux, and takes
+// the whole episode with it. One second of black here is the cheapest possible
+// answer to "does this actually run on THIS computer".
+func encoderOpens(ffmpegPath, name string) bool {
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+	// A hardware encoder that has not answered in twenty seconds is not one we
+	// want in the middle of a mux either.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, ffmpegPath, "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "color=c=black:s=256x256:r=25:d=0.2",
+		"-c:v", name, "-f", "null", "-")
+	return cmd.Run() == nil
 }
 
 // scaleToHeightArgs returns the ffmpeg arguments that shrink a frame taller than
