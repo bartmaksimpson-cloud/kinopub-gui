@@ -100,6 +100,10 @@ type RunConfig struct {
 	// taking the HEVC files that exist is free, converting the rest is not.
 	TranscodeToHEVC bool
 
+	// SubtitlePref selects which subtitle tracks to download. The zero value
+	// keeps none.
+	SubtitlePref SubtitlePreference
+
 	// MaxHeight caps the frame height of the finished file, scaling anything
 	// taller down to it (aspect ratio kept). 0 leaves the frame alone.
 	//

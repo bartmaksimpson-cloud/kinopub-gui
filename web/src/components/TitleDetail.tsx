@@ -3,6 +3,7 @@ import clsx from "clsx";
 import {
   CalendarDays,
   Check,
+  Captions,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -24,6 +25,7 @@ import {
   type DiscoverDetail,
   type DiscoverItem,
   type DownloadedEpisode,
+  type SubtitleTrack,
   imgURL,
 } from "../api";
 import { useApp } from "../store";
@@ -118,6 +120,13 @@ export function TitleDetail({
 
   // Selected озвучка labels. Empty set → keep every track.
   const [audioSel, setAudioSel] = useState<Set<string>>(new Set());
+  // Субтитры: раздел свёрнут, список подгружается при первом раскрытии (он
+  // стоит запроса мастер-плейлиста), и ни одна дорожка не выбрана по умолчанию.
+  const [subsOpen, setSubsOpen] = useState(false);
+  const [subs, setSubs] = useState<SubtitleTrack[] | null>(null);
+  const [subsBusy, setSubsBusy] = useState(false);
+  const [subsErr, setSubsErr] = useState("");
+  const [subSel, setSubSel] = useState<Set<string>>(new Set());
   // True when a remembered voiceover existed but isn't available here, so the
   // user is prompted to pick another.
   const [audioPrefMissing, setAudioPrefMissing] = useState(false);
@@ -148,6 +157,10 @@ export function TitleDetail({
     setSeeded(false);
     setAudioSel(new Set());
     setAudioPrefMissing(false);
+    setSubsOpen(false);
+    setSubs(null);
+    setSubsErr("");
+    setSubSel(new Set());
     setDownloaded(new Map());
     setDownloadedReady(false);
     setPlotOpen(false);
@@ -269,6 +282,38 @@ export function TitleDetail({
     setAudioSel(new Set());
     setAudioPrefMissing(onDisk.length > 0 || (remembered.scoped && remembered.prefs.length > 0));
   }, [detail, downloadedReady, seeded, allEpKeys, downloaded, queuedKeys, id]);
+
+  // Ключ дорожки для выбора: язык + признак форсированной. Не индекс и не имя —
+  // имена содержат порядковый номер ("RUS #13"), который в другом эпизоде другой.
+  const subKey = (t: SubtitleTrack) => `${(t.Language || t.Name).toLowerCase()}|${t.Forced ? "f" : ""}`;
+
+  const openSubs = async () => {
+    const next = !subsOpen;
+    setSubsOpen(next);
+    if (!next || subs || subsBusy || !detail) return;
+    setSubsBusy(true);
+    setSubsErr("");
+    try {
+      // Список берётся у первого выбранного эпизода — у него та же раскладка
+      // дорожек, что и у остальных; без выбора сервер возьмёт первый играбельный.
+      const first = epSel && epSel.size > 0 ? [...epSel][0] : "";
+      const m = /^S(\d+)E(\d+)$/.exec(first);
+      const r = await api.subtitles(id, m ? Number(m[1]) : undefined, m ? Number(m[2]) : undefined);
+      setSubs(r.subtitles || []);
+    } catch (e: any) {
+      setSubsErr(e.message || t("Could not load subtitles"));
+    } finally {
+      setSubsBusy(false);
+    }
+  };
+
+  const toggleSub = (t: SubtitleTrack) =>
+    setSubSel((cur) => {
+      const next = new Set(cur);
+      const k = subKey(t);
+      next.has(k) ? next.delete(k) : next.add(k);
+      return next;
+    });
 
   const toggleAudio = (label: string) =>
     setAudioSel((cur) => {
@@ -398,6 +443,12 @@ export function TitleDetail({
         audio: "",
         audioSpecs,
         audioMenu: false,
+        // Пусто = без субтитров. Выбор хранится как язык + признак
+        // форсированной, чтобы он пережил переход к следующему эпизоду.
+        subtitles: [...subSel].map((k) => {
+          const [lang, f] = k.split("|");
+          return { lang, forced: f === "f" };
+        }),
         force: false,
         dryRun: false,
         ffmpegArgs: "",
@@ -612,6 +663,58 @@ export function TitleDetail({
                         >
                           {on && <Check className="h-3 w-3 shrink-0" strokeWidth={3} />}
                           {a.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </Section>
+
+              {/* Субтитры: свёрнуты, грузятся по раскрытию, по умолчанию ничего не выбрано */}
+              <Section
+                icon={<Captions className="h-4 w-4" />}
+                title={t("Subtitles")}
+                hint={subSel.size === 0 ? t("(none)") : t("({n} selected)", { n: subSel.size })}
+                collapsible
+                open={subsOpen}
+                onToggle={openSubs}
+                action={
+                  subsOpen && subSel.size > 0 ? (
+                    <button
+                      onClick={() => setSubSel(new Set())}
+                      className="text-gold-300 transition hover:text-gold-200"
+                    >
+                      {t("Deselect all")}
+                    </button>
+                  ) : undefined
+                }
+              >
+                {subsBusy ? (
+                  <p className="text-xs text-slate-500">{t("Loading subtitle list…")}</p>
+                ) : subsErr ? (
+                  <p className="text-xs text-ember-400">{subsErr}</p>
+                ) : subs && subs.length === 0 ? (
+                  <p className="text-xs text-slate-500">{t("This title has no subtitles.")}</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {(subs || []).map((sub) => {
+                      const on = subSel.has(subKey(sub));
+                      return (
+                        <button
+                          key={`${sub.Index}-${sub.Name}`}
+                          onClick={() => toggleSub(sub)}
+                          className={clsx(
+                            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                            on
+                              ? "border-gold-500/50 bg-gold-500/[0.14] text-gold-200"
+                              : "border-white/[0.08] bg-white/[0.02] text-slate-400 hover:border-white/20 hover:text-slate-200",
+                          )}
+                        >
+                          {on && <Check className="h-3 w-3 shrink-0" strokeWidth={3} />}
+                          {sub.Name || sub.Language}
+                          {sub.Forced && (
+                            <span className="text-[10px] uppercase text-gold-300/80">{t("forced")}</span>
+                          )}
                         </button>
                       );
                     })}
@@ -995,22 +1098,50 @@ function Section({
   hint,
   action,
   children,
+  // Сворачиваемый раздел: заголовок становится кнопкой. Нужен там, где список
+  // длинный и по умолчанию не нужен — у kino.watch это сорок с лишним
+  // субтитровых дорожек, которые иначе занимают весь экран.
+  collapsible,
+  open,
+  onToggle,
 }: {
   icon: React.ReactNode;
   title: string;
   hint?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
+  collapsible?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
 }) {
+  const head = (
+    <>
+      <span className="text-gold-400">{icon}</span>
+      <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
+      {hint && <span className="text-xs font-normal text-slate-500">{hint}</span>}
+    </>
+  );
   return (
     <section>
       <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-gold-400">{icon}</span>
-        <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
-        {hint && <span className="text-xs font-normal text-slate-500">{hint}</span>}
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={!!open}
+            className="flex flex-1 items-center gap-2 text-left transition hover:opacity-80"
+          >
+            {head}
+            <ChevronDown
+              className={clsx("h-4 w-4 shrink-0 text-slate-500 transition-transform", open && "rotate-180")}
+            />
+          </button>
+        ) : (
+          head
+        )}
         {action && <div className="ml-auto flex items-center gap-3 text-xs">{action}</div>}
       </div>
-      {children}
+      {(!collapsible || open) && children}
     </section>
   );
 }

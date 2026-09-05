@@ -42,6 +42,7 @@ type Downloader struct {
 
 	mu        sync.RWMutex
 	audioPref domain.AudioPreference
+	subPref   domain.SubtitlePreference
 
 	// limMu guards lazy creation of lim, the throughput controller shared by every
 	// episode this Downloader fetches. It is deliberately NOT per-episode: the
@@ -146,6 +147,45 @@ func (d *Downloader) SetAudioPreference(pref domain.AudioPreference) {
 	d.mu.Lock()
 	d.audioPref = pref
 	d.mu.Unlock()
+}
+
+// SetSubtitlePreference sets which subtitle tracks subsequent DownloadEpisode
+// calls keep. The zero preference keeps NONE: a source offers dozens of
+// languages and nobody wants forty tracks by default.
+func (d *Downloader) SetSubtitlePreference(pref domain.SubtitlePreference) {
+	d.mu.Lock()
+	d.subPref = pref
+	d.mu.Unlock()
+}
+
+// subtitlePreference returns the current subtitle preference under a read lock.
+func (d *Downloader) subtitlePreference() domain.SubtitlePreference {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.subPref
+}
+
+// ListSubtitleTracks fetches the master playlist and reports the subtitle
+// tracks offered for the selected quality, without downloading anything — the
+// list a picker shows is then exactly the list a download would fetch.
+func (d *Downloader) ListSubtitleTracks(ctx context.Context, manifestURL string, quality domain.Quality) ([]domain.SubtitleTrackInfo, error) {
+	master, err := FetchMasterPlaylist(ctx, d.client, manifestURL, d.auth, d.logger)
+	if err != nil {
+		return nil, fmt.Errorf("master playlist: %w", err)
+	}
+	if len(master.Variants) == 0 {
+		return nil, fmt.Errorf("no variants found in master playlist")
+	}
+	selected, err := SelectVariant(master.Variants, quality)
+	if err != nil {
+		return nil, fmt.Errorf("quality selection: %w", err)
+	}
+	renditions := subtitleRenditionsFor(master, selected)
+	infos := make([]domain.SubtitleTrackInfo, len(renditions))
+	for i, sr := range renditions {
+		infos[i] = domain.SubtitleTrackInfo{Index: i, Name: sr.Name, Language: sr.Language, Forced: sr.Forced}
+	}
+	return infos, nil
 }
 
 // audioPreference returns the current audio preference under a read lock.
@@ -359,8 +399,30 @@ func (d *Downloader) downloadEpisodeInternal(
 		playlist  *MediaPlaylist
 		outFile   string
 	}
+	// Only the tracks the user asked for: the master offers dozens.
+	wanted := subtitleRenditionsFor(master, selected)
+	if pref := d.subtitlePreference(); true {
+		infos := make([]domain.SubtitleTrackInfo, len(wanted))
+		for i, sr := range wanted {
+			infos[i] = domain.SubtitleTrackInfo{Index: i, Name: sr.Name, Language: sr.Language, Forced: sr.Forced}
+		}
+		keep := domain.SelectSubtitles(infos, pref)
+		filtered := make([]SubtitleRendition, 0, len(keep))
+		for _, idx := range keep {
+			filtered = append(filtered, wanted[idx])
+		}
+		if len(wanted) > 0 {
+			d.logger.Info("subtitle tracks selected",
+				domain.F("episode", epLabel),
+				domain.F("available", len(wanted)),
+				domain.F("kept", len(filtered)),
+			)
+		}
+		wanted = filtered
+	}
+
 	var subJobs []subtitleJob
-	for i, sr := range subtitleRenditionsFor(master, selected) {
+	for i, sr := range wanted {
 		sp, err := FetchMediaPlaylist(ctx, d.client, sr.URI, d.auth)
 		if err != nil {
 			d.logger.Warn("subtitle playlist fetch failed, skipping track",

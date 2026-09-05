@@ -13,16 +13,22 @@ import (
 // trackHLS is an HLSDownloader that returns a fixed track list from
 // ListAudioTracks and records the preference pushed via SetAudioPreference.
 type trackHLS struct {
-	tracks   []domain.AudioTrackInfo
-	listErr  error
-	gotPref  domain.AudioPreference
-	prefSet  bool
-	listCall int
+	tracks     []domain.AudioTrackInfo
+	listErr    error
+	gotPref    domain.AudioPreference
+	gotSubPref domain.SubtitlePreference
+	prefSet    bool
+	listCall   int
 }
 
 func (h *trackHLS) DownloadEpisode(context.Context, string, domain.Quality, string, domain.EpisodeKey, domain.ProgressSink) (*domain.HLSDownloadResult, error) {
 	return &domain.HLSDownloadResult{Resolution: "1280x720", BitrateKbps: 2000, Codec: "h264", VideoPath: "/tmp/v.ts"}, nil
 }
+func (h *trackHLS) ListSubtitleTracks(context.Context, string, domain.Quality) ([]domain.SubtitleTrackInfo, error) {
+	return nil, nil
+}
+func (h *trackHLS) SetSubtitlePreference(pref domain.SubtitlePreference) { h.gotSubPref = pref }
+
 func (h *trackHLS) ListAudioTracks(context.Context, string, domain.Quality) ([]domain.AudioTrackInfo, error) {
 	h.listCall++
 	if h.listErr != nil {

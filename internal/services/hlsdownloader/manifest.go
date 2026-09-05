@@ -36,6 +36,10 @@ type SubtitleRendition struct {
 	Name     string
 	Language string
 	URI      string // media playlist URL for this subtitle track
+	// Forced marks a track meant to be shown even when subtitles are off — the
+	// signs and foreign-language lines. Worth telling apart in a picker: it is
+	// usually the one track a viewer wants out of forty.
+	Forced bool
 }
 
 // MasterPlaylist holds parsed data from an HLS master playlist.
@@ -173,6 +177,7 @@ func parseMasterPlaylist(r io.Reader, baseURL string) (*MasterPlaylist, error) {
 						Name:     attrs["NAME"],
 						Language: attrs["LANGUAGE"],
 						URI:      resolveURL(baseURL, uri),
+						Forced:   strings.EqualFold(attrs["FORCED"], "YES"),
 					})
 				}
 			}

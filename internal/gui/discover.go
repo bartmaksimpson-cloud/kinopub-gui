@@ -8,6 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/httpx"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/logx"
+	"github.com/ZioSHik/kinopub-gui/internal/services/hlsdownloader"
 	"github.com/ZioSHik/kinopub-gui/internal/services/kinopubapi"
 )
 
@@ -774,22 +778,14 @@ func (s *Server) handleDiscoverStream(w http.ResponseWriter, r *http.Request) {
 	season := queryInt(r, "season", 0)
 	episode := queryInt(r, "episode", 0)
 
-	manifest := ""
 	title := item.Title
 	for _, ep := range pl.Episodes {
-		if ep.Season == season && ep.Episode == episode {
-			manifest = ep.ManifestURL
-			if ep.EpisodeTitle != "" {
-				title = ep.EpisodeTitle
-			}
+		if ep.Season == season && ep.Episode == episode && ep.EpisodeTitle != "" {
+			title = ep.EpisodeTitle
 			break
 		}
 	}
-	// No exact match (e.g. a movie, or season/episode omitted): fall back to the
-	// first playable episode.
-	if manifest == "" && len(pl.Episodes) > 0 {
-		manifest = pl.Episodes[0].ManifestURL
-	}
+	manifest := manifestFor(pl, season, episode)
 	if manifest == "" {
 		writeErr(w, http.StatusNotFound, "no playable stream for this item")
 		return
@@ -802,6 +798,69 @@ func (s *Server) handleDiscoverStream(w http.ResponseWriter, r *http.Request) {
 		"resumeTime":  resumeTime, // seconds; 0 when there's nothing to resume
 		"duration":    duration,   // seconds; 0 when unknown
 	})
+}
+
+// handleDiscoverSubtitles lists the subtitle tracks the source offers for one
+// episode. It is a separate request rather than part of the item details on
+// purpose: the list costs a master-playlist fetch, and it is only worth paying
+// for when the user opens the subtitles section — which starts collapsed,
+// because kino.watch offers forty-odd languages per episode.
+func (s *Server) handleDiscoverSubtitles(w http.ResponseWriter, r *http.Request) {
+	client, ok := s.kpClientOrErr(w)
+	if !ok {
+		return
+	}
+	s.ensureUHD(r.Context(), client)
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	item, err := client.Item(r.Context(), id)
+	if err != nil {
+		s.kpFail(w, err)
+		return
+	}
+	pl, err := kinopubapi.BuildPagePlaylist(item)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	manifest := manifestFor(pl, queryInt(r, "season", 0), queryInt(r, "episode", 0))
+	if manifest == "" {
+		writeErr(w, http.StatusNotFound, "no playable stream for this item")
+		return
+	}
+
+	// Same auth the downloader uses: hls4 URLs are token-signed, the CDN only
+	// wants a User-Agent and a Referer.
+	auth := domain.RequestAuth{
+		UserAgent: defaultUserAgent,
+		Headers:   map[string]string{"Referer": "https://kino.watch/"},
+	}
+	// A logger with no handlers: this is a read-only listing, its noise belongs
+	// to nobody's job log.
+	dl := hlsdownloader.New(httpx.WithAuth(http.DefaultClient, auth), auth, logx.New(nil))
+	tracks, err := dl.ListSubtitleTracks(r.Context(), manifest, domain.Quality(s.settings.get().Quality))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"subtitles": tracks})
+}
+
+// manifestFor picks the manifest of one episode, falling back to the first
+// playable one (a movie, or a request without season/episode).
+func manifestFor(pl *domain.PagePlaylist, season, episode int) string {
+	for _, ep := range pl.Episodes {
+		if ep.Season == season && ep.Episode == episode {
+			return ep.ManifestURL
+		}
+	}
+	if len(pl.Episodes) > 0 {
+		return pl.Episodes[0].ManifestURL
+	}
+	return ""
 }
 
 // watchProgress returns the saved resume position and duration (both seconds)

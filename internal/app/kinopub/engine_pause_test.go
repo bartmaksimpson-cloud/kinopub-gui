@@ -56,6 +56,10 @@ func (g *gatedHLS) ListAudioTracks(context.Context, string, domain.Quality) ([]d
 	return nil, nil
 }
 func (g *gatedHLS) SetAudioPreference(domain.AudioPreference) {}
+func (g *gatedHLS) ListSubtitleTracks(context.Context, string, domain.Quality) ([]domain.SubtitleTrackInfo, error) {
+	return nil, nil
+}
+func (g *gatedHLS) SetSubtitlePreference(domain.SubtitlePreference) {}
 
 // A paused episode is held aside (not downloaded) while its siblings proceed,
 // keeps the run alive, and downloads after it is resumed.

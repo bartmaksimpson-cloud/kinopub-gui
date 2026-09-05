@@ -216,6 +216,9 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// interactive prompt isn't clobbered by progress redraws.
 	pref := e.resolveAudioPreference(ctx, cfg, selected, manifestMap)
 	e.deps.HLSDownloader.SetAudioPreference(pref)
+	// Subtitles need no probing or fallback: the user either named tracks or
+	// gets none, and the tokens match by name across episodes.
+	e.deps.HLSDownloader.SetSubtitlePreference(cfg.SubtitlePref)
 
 	// 8. Start progress reporting.
 	planned := make([]domain.PlannedEpisode, 0, len(selected))

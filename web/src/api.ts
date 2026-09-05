@@ -132,6 +132,18 @@ export interface UpdateStatus {
   note?: string;
 }
 
+export interface SubtitleTrack {
+  Index: number;
+  Name: string;
+  Language: string;
+  Forced: boolean;
+}
+
+export interface SubtitleSpec {
+  lang: string;
+  forced: boolean;
+}
+
 export interface Settings {
   outputPath: string;
   workPath: string;
@@ -305,6 +317,7 @@ export interface RunRequest {
   audio: string;
   audioSpecs?: AudioSpec[];
   audioMenu: boolean;
+  subtitles?: SubtitleSpec[];
   force: boolean;
   dryRun: boolean;
   ffmpegArgs: string;
@@ -619,6 +632,14 @@ export const api = {
     }),
   jobLeftovers: (id: string) => req<Leftovers>("GET", `/api/jobs/${id}/leftovers`),
   clearJobs: () => req<{ removed: number }>("POST", "/api/jobs/clear"),
+  subtitles: (id: string, season?: number, episode?: number) =>
+    req<{ subtitles: SubtitleTrack[] | null }>(
+      "GET",
+      `/api/discover/subtitles?id=${encodeURIComponent(id)}` +
+        (season ? `&season=${season}` : "") +
+        (episode ? `&episode=${episode}` : ""),
+    ),
+
   answerAudio: (id: string, indices: number[]) =>
     req<{ ok: boolean }>("POST", `/api/jobs/${id}/audio`, { indices }),
   // The doctor runs on the request context with a 5-minute server budget; a

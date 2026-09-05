@@ -248,6 +248,10 @@ const RU: Record<string, string> = {
   "Defaults applied to every new download.": "Значения по умолчанию для новых загрузок.",
   "Default output folder": "Папка загрузки по умолчанию",
   "Working folder": "Рабочая папка",
+  "Loading subtitle list…": "Загружаю список субтитров…",
+  "Could not load subtitles": "Не удалось загрузить субтитры",
+  "This title has no subtitles.": "У этого тайтла нет субтитров.",
+  forced: "форс.",
   "Where partial segments, the raw file and the muxer's temp file are kept. Empty keeps them next to the finished file. Pointing it at another drive stops the remux from reading and writing the same disk at once — on a hard drive that is most of the wait.":
     "Где лежат недокачанные сегменты, сырой файл и временный файл ffmpeg. Пусто — рядом с готовым файлом. Если указать другой диск, ремукс перестанет одновременно читать и писать один и тот же — на жёстком диске это почти всё время ожидания.",
   "Next to the finished file": "Рядом с готовым файлом",

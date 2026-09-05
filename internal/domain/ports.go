@@ -165,6 +165,14 @@ type HLSDownloader interface {
 	// SetAudioPreference sets the audio-track filter applied to subsequent
 	// DownloadEpisode calls. The zero AudioPreference keeps every track.
 	SetAudioPreference(pref AudioPreference)
+
+	// ListSubtitleTracks reports the subtitle tracks available for the selected
+	// quality, without downloading anything.
+	ListSubtitleTracks(ctx context.Context, manifestURL string, quality Quality) ([]SubtitleTrackInfo, error)
+
+	// SetSubtitlePreference sets which subtitle tracks subsequent downloads
+	// keep. The zero SubtitlePreference keeps NONE — subtitles are opt-in.
+	SetSubtitlePreference(pref SubtitlePreference)
 }
 
 // AudioChooser presents the available audio tracks to the user and returns the

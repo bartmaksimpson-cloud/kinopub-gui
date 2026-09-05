@@ -67,7 +67,7 @@ const (
 
 // Settings holds user-configurable GUI defaults persisted between sessions.
 type Settings struct {
-	OutputPath  string   `json:"outputPath"`
+	OutputPath string `json:"outputPath"`
 	// WorkPath is where the intermediate files go (partial segments, the raw
 	// file, the muxer's .tmp). Empty keeps them next to the finished file.
 	// Pointing it at a different drive is what makes the remux stop fighting
@@ -251,9 +251,13 @@ type RunRequest struct {
 	// variants of one voiceover (plain stereo vs. its AC3 5.1 sibling).
 	AudioSpecs []AudioSpecDTO `json:"audioSpecs"`
 	AudioMenu  bool           `json:"audioMenu"`
-	Force      bool           `json:"force"`
-	DryRun     bool           `json:"dryRun"`
-	FFmpegArgs string         `json:"ffmpegArgs"`
+	// Subtitles are the tracks to keep, picked in the UI as language + forced
+	// flag. Empty means none: a source offers dozens of languages, and taking
+	// them all because nobody said otherwise would be absurd.
+	Subtitles  []domain.SubtitleSpec `json:"subtitles"`
+	Force      bool                  `json:"force"`
+	DryRun     bool                  `json:"dryRun"`
+	FFmpegArgs string                `json:"ffmpegArgs"`
 	// TranscodeHEVC turns the checkbox into encoder arguments server-side, so the
 	// UI never has to know which encoder this platform actually has.
 	TranscodeHEVC bool `json:"transcodeHevc"`
@@ -342,6 +346,7 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		TranscodeToHEVC:  req.TranscodeHEVC && req.ConvertMissing,
 		AudioPref:        audioPref,
 		AudioMenu:        req.AudioMenu,
+		SubtitlePref:     domain.SubtitlePreference{Keep: req.Subtitles},
 		UseAPI:           true,
 	}
 
