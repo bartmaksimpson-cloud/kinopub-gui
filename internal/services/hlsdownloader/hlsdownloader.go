@@ -612,7 +612,11 @@ func (d *Downloader) downloadEpisodeInternal(
 		}
 	}
 
-	downloadTrack := func(ctx context.Context, trackIdx int, initURI string, segments []Segment, segDir, outPath string, onConcat func(int64)) error {
+	// join=false оставляет сегменты как есть: их отдадут муксеру потоком, а не
+	// склеенным файлом. Промежуточный файл на 4K-эпизод — это лишние
+	// восемнадцать гигабайт записи и столько же чтения ради данных, которые
+	// нужны ровно один раз.
+	downloadTrack := func(ctx context.Context, trackIdx int, initURI string, segments []Segment, segDir, outPath string, onConcat func(int64), join bool) error {
 		if err := fsutil.EnsureDir(segDir); err != nil {
 			return fmt.Errorf("create segment dir: %w", err)
 		}
@@ -695,6 +699,9 @@ func (d *Downloader) downloadEpisodeInternal(
 			}
 		}
 
+		if !join {
+			return nil
+		}
 		return d.concatenateSegmentsDir(initPath, segments, segDir, outPath, onConcat)
 	}
 
@@ -761,7 +768,7 @@ func (d *Downloader) downloadEpisodeInternal(
 			defer progMu.Unlock()
 			return trackInfos[0].DownloadedBytes
 		}
-		if err := downloadTrack(ctx, 0, videoPlaylist.InitURI, videoPlaylist.Segments, videoDir, videoPath, assembleProgress(videoBytes)); err != nil {
+		if err := downloadTrack(ctx, 0, videoPlaylist.InitURI, videoPlaylist.Segments, videoDir, videoPath, assembleProgress(videoBytes), false); err != nil {
 			recordErr(fmt.Errorf("video track: %w", err))
 		}
 	}()
@@ -772,7 +779,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		go func(ai int, aj audioJob) {
 			defer trackWG.Done()
 			audioDir := filepath.Join(tmpDir, fmt.Sprintf("audio_%d", ai))
-			if err := downloadTrack(ctx, 1+ai, aj.playlist.InitURI, aj.playlist.Segments, audioDir, aj.outFile, nil); err != nil {
+			if err := downloadTrack(ctx, 1+ai, aj.playlist.InitURI, aj.playlist.Segments, audioDir, aj.outFile, nil, true); err != nil {
 				recordErr(fmt.Errorf("audio track %d: %w", ai, err))
 				return
 			}
@@ -791,7 +798,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		go func(si int, sj subtitleJob) {
 			defer trackWG.Done()
 			subDir := filepath.Join(tmpDir, fmt.Sprintf("sub_%d", si))
-			if err := downloadTrack(ctx, 1+len(audioJobs)+si, sj.playlist.InitURI, sj.playlist.Segments, subDir, sj.outFile, nil); err != nil {
+			if err := downloadTrack(ctx, 1+len(audioJobs)+si, sj.playlist.InitURI, sj.playlist.Segments, subDir, sj.outFile, nil, true); err != nil {
 				d.logger.Warn("subtitle track failed, continuing without it",
 					domain.F("episode", epLabel),
 					domain.F("subtitle", sj.rendition.Name),
@@ -852,6 +859,18 @@ func (d *Downloader) downloadEpisodeInternal(
 		}
 	}
 
+	// Части видео в порядке воспроизведения: init-сегмент (для fMP4) впереди.
+	// Именно эту последовательность муксер и прочитает как один поток.
+	var videoParts []string
+	if initPath := filepath.Join(videoDir, "init.mp4"); videoPlaylist.InitURI != "" {
+		if info, err := os.Stat(initPath); err == nil && info.Size() > 0 {
+			videoParts = append(videoParts, initPath)
+		}
+	}
+	for _, seg := range videoPlaylist.Segments {
+		videoParts = append(videoParts, filepath.Join(videoDir, fmt.Sprintf("seg_%05d.ts", seg.Index)))
+	}
+
 	return &domain.HLSDownloadResult{
 		Resolution:    selected.Resolution,
 		BitrateKbps:   selected.BitrateKbps(),
@@ -859,6 +878,7 @@ func (d *Downloader) downloadEpisodeInternal(
 		FrameRate:     selected.FrameRate,
 		TotalBytes:    totalBytes,
 		VideoPath:     videoPath,
+		VideoParts:    videoParts,
 		AudioTracks:   resultAudio,
 		Subtitles:     subs,
 		AudioFallback: audioFellBack,

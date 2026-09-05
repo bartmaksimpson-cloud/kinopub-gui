@@ -239,8 +239,18 @@ type HLSDownloadResult struct {
 	FrameRate  float64
 	TotalBytes int64
 
-	// VideoPath is the local path to the concatenated video .ts file.
+	// VideoPath is the local path to the concatenated video .ts file. Empty when
+	// the video is handed to the muxer as VideoParts instead.
 	VideoPath string
+	// VideoParts are the downloaded video pieces in order (the fMP4 init segment
+	// first, when there is one), to be streamed into the muxer rather than
+	// concatenated into a file first.
+	//
+	// Joining them on disk means writing the whole episode again and reading it
+	// straight back — twenty minutes and 18 GB for a 4K episode, for a file that
+	// exists only to be fed to ffmpeg once. The bytes are identical either way:
+	// the muxer reads the same concatenation, just through a pipe.
+	VideoParts []string
 	// AudioTracks are the local audio files downloaded separately (demuxed HLS).
 	// Empty when audio is muxed into the video stream.
 	AudioTracks []HLSAudioTrack

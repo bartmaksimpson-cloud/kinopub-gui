@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -34,7 +35,7 @@ func TestFitPipeline_RealFFmpeg(t *testing.T) {
 		t.Fatalf("не удалось собрать источник: %v\n%s", err, out)
 	}
 
-	d := New(func(ctx context.Context, name string, args, env []string, stdout io.Writer) error {
+	d := New(func(ctx context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		cmd := exec.CommandContext(ctx, name, args...)
 		if stdout != nil {
 			cmd.Stdout = stdout
@@ -72,5 +73,84 @@ func TestFitPipeline_RealFFmpeg(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "hevc") {
 		t.Errorf("не HEVC: %s", got)
+	}
+}
+
+// Живая проверка потока: видео отдаётся ffmpeg частями через stdin, без
+// промежуточного файла. Проверять сборкой строки аргументов бессмысленно —
+// вопрос ровно в том, примет ли ffmpeg непрокручиваемый вход и получится ли
+// на выходе то же самое.
+func TestPipedVideo_RealFFmpeg(t *testing.T) {
+	for _, bin := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s не найден", bin)
+		}
+	}
+	dir := t.TempDir()
+
+	// Три «сегмента» одного потока: режем короткий клип на части по времени.
+	src := filepath.Join(dir, "src.ts")
+	mk := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-t", "3",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-y", src)
+	if out, err := mk.CombinedOutput(); err != nil {
+		t.Fatalf("источник: %v\n%s", err, out)
+	}
+	var parts []string
+	body, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := len(body) / 3
+	for i := 0; i < 3; i++ {
+		end := (i + 1) * chunk
+		if i == 2 {
+			end = len(body)
+		}
+		p := filepath.Join(dir, fmt.Sprintf("seg_%05d.ts", i))
+		if err := os.WriteFile(p, body[i*chunk:end], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		parts = append(parts, p)
+	}
+
+	d := New(func(ctx context.Context, name string, args, env []string, stdout io.Writer, stdin io.Reader) error {
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Stdin = stdin
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Logf("ffmpeg: %v\n%s", err, out)
+		}
+		return err
+	}, &testProxy{}, testLogger{}, WithFFmpegPath("ffmpeg"))
+
+	outPath := filepath.Join(dir, "out.mkv")
+	job := domain.Job{
+		Episode: domain.Episode{Key: domain.EpisodeKey{Series: "s", Season: 1, Episode: 1}, Duration: 3 * time.Second},
+		OutPath: outPath,
+	}
+	hls := &domain.HLSDownloadResult{
+		VideoPath:  filepath.Join(dir, "video.ts"),
+		VideoParts: parts,
+		Resolution: "320x240",
+		TotalBytes: int64(len(body)),
+	}
+
+	if err := d.MuxHLS(context.Background(), job, hls); err != nil {
+		t.Fatalf("мукс потоком: %v", err)
+	}
+
+	// Промежуточного файла быть не должно: ради его отсутствия всё и делалось.
+	if _, err := os.Stat(hls.VideoPath); err == nil {
+		t.Errorf("собранный файл всё же создан: %s", hls.VideoPath)
+	}
+
+	probe, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=codec_name,width,height", "-of", "csv=p=0", outPath).Output()
+	if err != nil {
+		t.Fatalf("ffprobe: %v", err)
+	}
+	if got := strings.TrimSpace(string(probe)); got != "h264,320,240" {
+		t.Errorf("на выходе %q, ожидалось h264,320,240", got)
 	}
 }

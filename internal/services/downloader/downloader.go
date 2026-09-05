@@ -29,7 +29,7 @@ var (
 // RunFunc is a function that runs a command, streaming stdout to the provided
 // writer. It blocks until the command completes. The writer receives the
 // command's stdout (used for -progress pipe:1 output).
-type RunFunc func(ctx context.Context, name string, args, env []string, stdout io.Writer) error
+type RunFunc func(ctx context.Context, name string, args, env []string, stdout io.Writer, stdin io.Reader) error
 
 // DownloadMode indicates which download strategy was used.
 type DownloadMode string
@@ -416,7 +416,22 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		if a.pipe {
 			out = stdout
 		}
-		runErr = d.run(ctx, d.ffmpegPath, full, nil, out)
+		// Видео идёт в ffmpeg потоком, когда собранного файла нет: сегменты
+		// склеиваются на лету прямо в его stdin.
+		var in io.Reader
+		var feed *segmentFeed
+		if len(a.hls.VideoParts) > 0 {
+			feed = newSegmentFeed(a.hls.VideoParts)
+			in = feed
+		}
+		runErr = d.run(ctx, d.ffmpegPath, full, nil, out, in)
+		if feed != nil {
+			// Ошибка чтения сегментов объясняет отказ ffmpeg лучше, чемсам ffmpeg.
+			if err := feed.Err(); err != nil && runErr != nil {
+				runErr = fmt.Errorf("%v (чтение сегментов: %w)", runErr, err)
+			}
+			feed.Close()
+		}
 		if runErr == nil {
 			if i > 0 {
 				d.logger.Warn("episode muxed with a fallback",
@@ -434,6 +449,26 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 			domain.F("error", runErr.Error()),
 		)
 	}
+	// Запасной путь: если ffmpeg не принял видео потоком, собрать его в файл и
+	// попробовать ещё раз. Поток не умеет перематывать, и теоретически бывают
+	// контейнеры, которым это нужно; платить за такую возможность лишним
+	// проходом по диску ЗАРАНЕЕ незачем — заплатим, только если понадобится.
+	if runErr != nil && len(hls.VideoParts) > 0 && ctx.Err() == nil {
+		d.logger.Warn("склейка потоком не удалась, собираю видео в файл и повторяю",
+			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+			domain.F("error", runErr.Error()),
+		)
+		if err := joinParts(hls.VideoParts, hls.VideoPath); err != nil {
+			d.logger.Error("не удалось собрать видео в файл", domain.F("error", err.Error()))
+		} else {
+			onDisk := *hls
+			onDisk.VideoParts = nil
+			os.Remove(tempPath)
+			runErr = d.run(ctx, d.ffmpegPath,
+				withDecodeThreads(BuildHLSMuxArgs(job, &onDisk, tempPath, fit...), threads), nil, nil, nil)
+		}
+	}
+
 	if muxStage != nil {
 		_ = muxStage.Close()
 	}
@@ -506,7 +541,7 @@ func (d *Downloader) RemuxLocal(ctx context.Context, job domain.Job, localPath s
 	args := BuildRemuxArgs(job, localPath, tempPath)
 
 	// Run ffmpeg (no proxy env, no auth — local file).
-	runErr := d.run(ctx, d.ffmpegPath, args, nil, nil)
+	runErr := d.run(ctx, d.ffmpegPath, args, nil, nil, nil)
 	if runErr != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("%w: %v", domain.ErrFFmpegFailed, runErr)
@@ -570,7 +605,7 @@ func (d *Downloader) downloadDirect(ctx context.Context, job domain.Job, sink do
 		domain.F("proxy_env_count", len(proxyEnv)),
 	)
 
-	runErr := d.run(ctx, d.ffmpegPath, args, proxyEnv, stdout)
+	runErr := d.run(ctx, d.ffmpegPath, args, proxyEnv, stdout, nil)
 
 	// Close the progress parser to flush remaining data.
 	if parser != nil {

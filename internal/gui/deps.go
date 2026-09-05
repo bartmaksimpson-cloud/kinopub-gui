@@ -140,13 +140,18 @@ func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) 
 // error on failure — otherwise a remux failure surfaces as a bare, unactionable
 // "exit status N" with no clue why.
 func makeRunFunc() downloader.RunFunc {
-	return func(ctx context.Context, name string, args, env []string, stdout io.Writer) error {
+	return func(ctx context.Context, name string, args, env []string, stdout io.Writer, stdin io.Reader) error {
 		cmd := exec.CommandContext(ctx, name, args...)
 		hideConsole(cmd) // ffmpeg/ffprobe must not pop a console over the UI
 		if len(env) > 0 {
 			cmd.Env = append(os.Environ(), env...)
 		}
 		cmd.Stdout = stdout
+		// The video may arrive as a stream instead of a file: the segments are
+		// joined on the fly straight into ffmpeg.
+		if stdin != nil {
+			cmd.Stdin = stdin
+		}
 		tail := &tailWriter{max: 8192}
 		cmd.Stderr = tail
 		err := cmd.Run()

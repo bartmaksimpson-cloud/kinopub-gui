@@ -406,8 +406,13 @@ func BuildHLSMuxArgs(job domain.Job, hls *domain.HLSDownloadResult, tempPath str
 
 	args = append(args, "-y")
 
-	// Input 0: video.
-	args = append(args, "-i", hls.VideoPath)
+	// Input 0: video — a file, or the muxer's own stdin when the pieces are
+	// streamed instead of being joined on disk first.
+	if len(hls.VideoParts) > 0 {
+		args = append(args, "-i", "pipe:0")
+	} else {
+		args = append(args, "-i", hls.VideoPath)
+	}
 
 	// Inputs 1..N: audio tracks.
 	for _, a := range hls.AudioTracks {

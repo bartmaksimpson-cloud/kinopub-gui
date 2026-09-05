@@ -24,7 +24,7 @@ type recordingRun struct {
 	err      error
 }
 
-func (r *recordingRun) fn(_ context.Context, _ string, args, _ []string, _ io.Writer) error {
+func (r *recordingRun) fn(_ context.Context, _ string, args, _ []string, _ io.Writer, _ io.Reader) error {
 	r.calls++
 	r.lastArgs = args
 	if r.write != "" {
@@ -83,7 +83,7 @@ func TestDownloader_RemuxLocal_EmptyOutput(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "S01E01.mkv")
 	// write empty content via run that creates an empty file.
-	run := func(_ context.Context, _ string, args, _ []string, _ io.Writer) error {
+	run := func(_ context.Context, _ string, args, _ []string, _ io.Writer, _ io.Reader) error {
 		f, _ := os.Create(args[len(args)-1])
 		return f.Close()
 	}
@@ -275,7 +275,7 @@ func TestDownloader_Download_TruncationDetected(t *testing.T) {
 	// downloader must treat it as truncated and fail.
 	dir := t.TempDir()
 	out := filepath.Join(dir, "S01E01.mkv")
-	run := func(_ context.Context, _ string, args, _ []string, stdout io.Writer) error {
+	run := func(_ context.Context, _ string, args, _ []string, stdout io.Writer, _ io.Reader) error {
 		_ = os.WriteFile(args[len(args)-1], []byte("short content"), 0644)
 		if stdout != nil {
 			// 1 minute out of 4 minutes = 25%.

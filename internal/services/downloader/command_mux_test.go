@@ -386,7 +386,7 @@ func TestMuxHLS_RejectsTruncatedCopy(t *testing.T) {
 	out := filepath.Join(dir, "S01E01.mkv")
 
 	// RunFunc «ffmpeg», который пишет крошечный файл и рапортует успех.
-	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer) error {
+	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer, _ io.Reader) error {
 		return os.WriteFile(args[len(args)-1], make([]byte, 1<<20), 0o644) // 1 МБ
 	}
 	d := New(run, &testProxy{}, testLogger{}, WithFFmpegPath("ffmpeg"))
@@ -414,7 +414,7 @@ func TestMuxHLS_RejectsTruncatedCopy(t *testing.T) {
 func TestMuxHLS_AllowsSmallerAfterReencode(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "S01E01.mkv")
-	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer) error {
+	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer, _ io.Reader) error {
 		return os.WriteFile(args[len(args)-1], make([]byte, 1<<20), 0o644)
 	}
 	// Предел по высоте включён, источник выше — значит идёт перекодирование.

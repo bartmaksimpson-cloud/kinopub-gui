@@ -89,7 +89,7 @@ func TestMuxTempSitsNextToOutput(t *testing.T) {
 	}
 
 	var seenTemp string
-	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer) error {
+	run := func(_ context.Context, _ string, args []string, _ []string, _ io.Writer, _ io.Reader) error {
 		seenTemp = args[len(args)-1]
 		return os.WriteFile(seenTemp, make([]byte, 4096), 0o644)
 	}

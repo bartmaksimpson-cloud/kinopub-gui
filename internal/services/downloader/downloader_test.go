@@ -54,7 +54,7 @@ func TestDownloader_Download_Success(t *testing.T) {
 	outPath := filepath.Join(tmpDir, "S01E01.mkv")
 
 	// RunFunc that writes content to the temp file (simulating ffmpeg).
-	run := func(_ context.Context, name string, args, env []string, stdout io.Writer) error {
+	run := func(_ context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		// Find the temp path (last arg).
 		tempPath := args[len(args)-1]
 		// Write some content to simulate ffmpeg output.
@@ -130,7 +130,7 @@ func TestDownloader_Download_FFmpegFails(t *testing.T) {
 	outPath := filepath.Join(tmpDir, "S01E01.mkv")
 
 	// RunFunc that creates a temp file but returns an error.
-	run := func(_ context.Context, name string, args, env []string, stdout io.Writer) error {
+	run := func(_ context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		tempPath := args[len(args)-1]
 		// Write partial content.
 		_ = os.WriteFile(tempPath, []byte("partial"), 0644)
@@ -181,7 +181,7 @@ func TestDownloader_Download_EmptyOutput(t *testing.T) {
 	outPath := filepath.Join(tmpDir, "S01E01.mkv")
 
 	// RunFunc that creates an empty temp file (simulating ffmpeg success but no output).
-	run := func(_ context.Context, name string, args, env []string, stdout io.Writer) error {
+	run := func(_ context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		tempPath := args[len(args)-1]
 		// Create empty file.
 		f, err := os.Create(tempPath)
@@ -230,7 +230,7 @@ func TestDownloader_Download_MissingTempFile(t *testing.T) {
 	outPath := filepath.Join(tmpDir, "S01E01.mkv")
 
 	// RunFunc that doesn't create any file (simulating ffmpeg success but no file).
-	run := func(_ context.Context, name string, args, env []string, stdout io.Writer) error {
+	run := func(_ context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		return nil
 	}
 
@@ -266,7 +266,7 @@ func TestDownloader_Download_ProxyError(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, "S01E01.mkv")
 
-	run := func(_ context.Context, name string, args, env []string, stdout io.Writer) error {
+	run := func(_ context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		t.Fatal("run should not be called when proxy fails")
 		return nil
 	}
@@ -303,7 +303,7 @@ func TestDownloader_Execute_DelegatesToDownload(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, "S01E01.mkv")
 
-	run := func(_ context.Context, name string, args, env []string, stdout io.Writer) error {
+	run := func(_ context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		tempPath := args[len(args)-1]
 		return os.WriteFile(tempPath, []byte("content"), 0644)
 	}
@@ -340,7 +340,7 @@ func TestDownloader_Execute_DelegatesToDownload(t *testing.T) {
 
 func TestDownloader_WithFFmpegPath(t *testing.T) {
 	var capturedName string
-	run := func(_ context.Context, name string, args, env []string, stdout io.Writer) error {
+	run := func(_ context.Context, name string, args, env []string, stdout io.Writer, _ io.Reader) error {
 		capturedName = name
 		tempPath := args[len(args)-1]
 		return os.WriteFile(tempPath, []byte("content"), 0644)

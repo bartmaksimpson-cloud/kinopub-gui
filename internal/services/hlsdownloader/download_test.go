@@ -283,8 +283,9 @@ func TestDownloadEpisode_VideoOnly_TS(t *testing.T) {
 		t.Errorf("TotalBytes = %d, want 12", res.TotalBytes)
 	}
 
-	// Concatenated video file should be AAAABBBBCCCC in order.
-	got, err := os.ReadFile(res.VideoPath)
+	// Видео больше не собирается в файл: муксер читает части потоком. Проверяем
+	// ту же последовательность байтов — AAAABBBBCCCC по порядку.
+	got, err := readParts(res.VideoParts)
 	if err != nil {
 		t.Fatalf("read video: %v", err)
 	}
@@ -398,7 +399,7 @@ func TestDownloadEpisode_InitSegmentPrependedFMP4(t *testing.T) {
 	if res.Codec != "h265" {
 		t.Errorf("Codec = %q, want h265", res.Codec)
 	}
-	got, err := os.ReadFile(res.VideoPath)
+	got, err := readParts(res.VideoParts)
 	if err != nil {
 		t.Fatalf("read video: %v", err)
 	}
@@ -459,7 +460,7 @@ func TestDownloadEpisode_ResumeSkipsExistingSegments(t *testing.T) {
 	if hits != 0 {
 		t.Errorf("seg_0 was fetched %d times, want 0 (resume should skip it)", hits)
 	}
-	got, _ := os.ReadFile(res.VideoPath)
+	got, _ := readParts(res.VideoParts)
 	if string(got) != "RESUMED!SEG1" {
 		t.Errorf("video content = %q, want RESUMED!SEG1", string(got))
 	}
@@ -628,4 +629,18 @@ func TestWithConcurrency(t *testing.T) {
 	if d2.concurrency != defaultConcurrency {
 		t.Errorf("concurrency = %d, want default %d", d2.concurrency, defaultConcurrency)
 	}
+}
+
+// readParts склеивает части видео так же, как это делает муксер, читая их
+// потоком: тест проверяет именно порядок и содержимое, а не наличие файла.
+func readParts(parts []string) ([]byte, error) {
+	var out []byte
+	for _, p := range parts {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b...)
+	}
+	return out, nil
 }
