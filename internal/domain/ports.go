@@ -191,6 +191,24 @@ type HLSMuxer interface {
 	MuxHLS(ctx context.Context, job Job, hls *HLSDownloadResult) error
 }
 
+// EpisodeStage is what is happening to one episode right now, and to what.
+// A download shows its own progress; the steps after it — the mux, and the
+// re-encode that fits a frame to the player — have none, and without a word
+// from them a job sits at 100% for half an hour looking hung.
+type EpisodeStage struct {
+	// Phase is the step: "download", "mux" or "encode".
+	Phase string
+	// Format is what comes out of it, in the user's terms: "2880x2160 · HEVC ·
+	// 12000 kbps". Empty when there is nothing to add.
+	Format string
+}
+
+// EpisodeStageSink is a ProgressSink that also accepts stage reports. Optional,
+// like the other progress refinements: a sink that does not care keeps working.
+type EpisodeStageSink interface {
+	EpisodeStage(key EpisodeKey, stage EpisodeStage)
+}
+
 // HLSMuxerProgress is an HLSMuxer that reports how far along it is. Optional
 // because a plain mux is a stream copy that takes seconds; it becomes worth
 // reporting when the frame has to be scaled, which is a full re-encode and

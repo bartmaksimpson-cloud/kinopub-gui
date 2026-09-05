@@ -140,6 +140,11 @@ func (r *eventReporter) TrackProgress(key domain.EpisodeKey, track domain.TrackR
 
 func (r *eventReporter) EpisodeCompleted(key domain.EpisodeKey) {
 	r.job.mu.Lock()
+	// Стадия относится к работе, которой больше нет: иначе готовый эпизод
+	// остаётся с надписью «перекодирование».
+	if ev, ok := r.job.episodes[epKey(key)]; ok {
+		ev.Stage, ev.StageFormat = "", ""
+	}
 	// Success beat a simultaneous per-episode cancel: the file landed on disk,
 	// so the row cancelEpisode deleted comes back (via ensureEpisode below) —
 	// and the plan counts the cancel subtracted come back with it, keeping
@@ -270,6 +275,16 @@ func (r *eventReporter) HLSProgress(key domain.EpisodeKey, tracks []domain.Track
 		})
 	}
 	ev.Tracks = views
+	r.job.mu.Unlock()
+	r.mgr.publish(r.job)
+}
+
+// EpisodeStage records what the engine is doing to this episode right now.
+func (r *eventReporter) EpisodeStage(key domain.EpisodeKey, stage domain.EpisodeStage) {
+	r.job.mu.Lock()
+	ev := r.job.ensureEpisode(key)
+	ev.Stage = stage.Phase
+	ev.StageFormat = stage.Format
 	r.job.mu.Unlock()
 	r.mgr.publish(r.job)
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -311,6 +312,17 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 			domain.F("bitrate_kbps", hls.BitrateKbps),
 		)
 	}
+	// Say what is happening now: a copy takes seconds, a fit re-encodes the whole
+	// episode, and the two look identical from outside without this.
+	if stager, ok := sink.(domain.EpisodeStageSink); ok {
+		stage := domain.EpisodeStage{Phase: "mux"}
+		if len(fit) > 0 {
+			stage.Phase = "encode"
+			stage.Format = describeFit(fit, hls)
+		}
+		stager.EpisodeStage(job.Episode.Key, stage)
+	}
+
 	// Progress is only wired for the re-encoding case: a stream copy finishes
 	// before the first report would arrive.
 	var (
@@ -564,6 +576,54 @@ func (d *Downloader) Execute(ctx context.Context, job domain.Job) error {
 func estimateDuration(job domain.Job) time.Duration {
 	return job.Media.Duration
 }
+
+// describeFit renders what the re-encode produces: the frame it scales to, the
+// codec it encodes with, the frame rate when it changes one, and the bitrate it
+// carries over. Read off the arguments themselves so the label cannot drift
+// from what ffmpeg is actually told to do.
+func describeFit(fit []string, hls *domain.HLSDownloadResult) string {
+	var parts []string
+	height := ""
+	for i := 0; i < len(fit)-1; i++ {
+		switch fit[i] {
+		case "-vf":
+			if _, h, ok := strings.Cut(fit[i+1], ":"); ok {
+				height = h
+			}
+		case "-c:v":
+			name := fit[i+1]
+			switch {
+			case strings.HasPrefix(name, "hevc"), name == "libx265":
+				parts = append(parts, "HEVC")
+			case strings.HasPrefix(name, "h264"), name == "libx264":
+				parts = append(parts, "H.264")
+			default:
+				parts = append(parts, name)
+			}
+		case "-r":
+			parts = append(parts, fit[i+1]+" fps")
+		case "-b:v":
+			parts = append(parts, strings.TrimSuffix(fit[i+1], "k")+" kbps")
+		}
+	}
+	if height != "" {
+		if w, _ := sizeOf(hls.Resolution); w > 0 {
+			if _, srcH := sizeOf(hls.Resolution); srcH > 0 {
+				if h, err := strconv.Atoi(height); err == nil {
+					// Ширина считается по тем же пропорциям, что и в фильтре.
+					parts = append([]string{fmt.Sprintf("%dx%s", roundTo16(w*h/srcH), height)}, parts...)
+					return strings.Join(parts, " · ")
+				}
+			}
+		}
+		parts = append([]string{"↓" + height}, parts...)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// roundTo16 rounds a computed width to the nearest multiple of 16, matching the
+// "-16" the scale filter is given.
+func roundTo16(w int) int { return (w + 8) / 16 * 16 }
 
 // muxDuration is how long the episode runs, for percentages during a re-encode.
 // The mux job is built from the episode alone (there is no resolved media by

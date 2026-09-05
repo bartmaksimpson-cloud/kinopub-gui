@@ -345,6 +345,14 @@ func (d *Downloader) downloadEpisodeInternal(
 		)
 	}
 
+	// Tell the UI what is being fetched, in the terms the user chose it by.
+	if stager, ok := sink.(domain.EpisodeStageSink); ok {
+		stager.EpisodeStage(key, domain.EpisodeStage{
+			Phase:  "download",
+			Format: describeVariant(selected),
+		})
+	}
+
 	d.logger.Info("selected quality",
 		domain.F("episode", epLabel),
 		domain.F("quality", selected.Label()),
@@ -815,6 +823,24 @@ func (d *Downloader) downloadEpisodeInternal(
 		AudioFallback: audioFellBack,
 		TempDir:       tmpDir,
 	}, nil
+}
+
+// describeVariant renders a variant the way the picker showed it: frame, codec,
+// bitrate, and the frame rate when the manifest declared one.
+func describeVariant(v Variant) string {
+	parts := []string{v.Resolution}
+	if v.IsH265() {
+		parts = append(parts, "HEVC")
+	} else if v.IsH264() {
+		parts = append(parts, "H.264")
+	}
+	if kbps := v.BitrateKbps(); kbps > 0 {
+		parts = append(parts, fmt.Sprintf("%d kbps", kbps))
+	}
+	if v.FrameRate > 0 {
+		parts = append(parts, fmt.Sprintf("%.3g fps", v.FrameRate))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // statusError is a non-200 response from the CDN. It carries the parsed

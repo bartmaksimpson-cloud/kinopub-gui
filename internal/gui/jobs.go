@@ -84,8 +84,14 @@ type EpisodeView struct {
 	SegDone     int         `json:"segDone"`
 	SegTotal    int         `json:"segTotal"`
 	Tracks      []TrackView `json:"tracks,omitempty"`
-	Attempts    int         `json:"attempts"`
-	Error       string      `json:"error,omitempty"`
+	// Stage is what is happening right now — "download", "mux" or "encode" —
+	// and StageFormat what comes out of it ("2880x2160 · HEVC · 12000 kbps").
+	// Without these a job sits at 100% through a half-hour re-encode with
+	// nothing on the card to say why.
+	Stage       string `json:"stage,omitempty"`
+	StageFormat string `json:"stageFormat,omitempty"`
+	Attempts    int    `json:"attempts"`
+	Error       string `json:"error,omitempty"`
 
 	// internal speed-sampling state (not serialized)
 	lastBytes int64

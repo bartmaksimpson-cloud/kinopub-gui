@@ -32,6 +32,8 @@ export interface EpisodeView {
   segDone: number;
   segTotal: number;
   tracks?: TrackView[];
+  stage?: string;
+  stageFormat?: string;
   attempts: number;
   error?: string;
 }

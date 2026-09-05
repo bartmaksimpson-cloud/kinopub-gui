@@ -248,6 +248,21 @@ function EpisodeMeta({
   return (
     <>
       <div className={clsx("mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500", className)}>
+        {/* Что происходит прямо сейчас. Скачивание видно по полосе, а склейка и
+            перекодирование иначе выглядят как зависшие 100%. */}
+        {active && ep.stage && (
+          <span
+            className={clsx(
+              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium",
+              ep.stage === "encode"
+                ? "bg-gold-500/[0.14] text-gold-300"
+                : "bg-white/[0.06] text-slate-300",
+            )}
+          >
+            {ep.stage === "download" ? t("downloading") : ep.stage === "mux" ? t("muxing") : t("re-encoding")}
+            {ep.stageFormat && <span className="text-slate-400">· {ep.stageFormat}</span>}
+          </span>
+        )}
         {ep.segTotal > 0 && <span>{ep.segDone}/{ep.segTotal} seg</span>}
         {ep.total > 0 && (
           <span title={ep.totalApprox ? t("Estimated size — refines as it downloads (HLS has no fixed total)") : undefined}>
