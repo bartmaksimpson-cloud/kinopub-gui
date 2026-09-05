@@ -730,17 +730,23 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	retryReq := e.deps.RetryRequests
 	stopCtrl := make(chan struct{})
 	ctrlDone := make(chan struct{})
+	pausePoll := time.NewTicker(50 * time.Millisecond)
 	go func() {
 		defer close(ctrlDone)
+		defer pausePoll.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-stopCtrl:
 				return
-			case key := <-pauseReq:
+			case <-pausePoll.C:
+				// Pauses are drained under mu — never received here directly — so a
+				// key can't sit "in the air" in this goroutine while a freed worker
+				// dispatches that very episode. Полсекунды нет: 50 мс достаточно,
+				// чтобы пауза посреди скачивания ощущалась мгновенной.
 				mu.Lock()
-				applyPauseLocked(key)
+				drainPause()
 				mu.Unlock()
 			case key := <-cancelReq:
 				mu.Lock()

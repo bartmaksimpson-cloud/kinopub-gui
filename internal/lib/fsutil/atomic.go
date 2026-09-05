@@ -124,3 +124,19 @@ func EnsureDir(path string) error {
 		return err
 	}
 }
+
+// existingParent walks up from path until it finds something that exists, so a
+// free-space check works for a folder that has not been created yet.
+func existingParent(path string) string {
+	p := filepath.Clean(path)
+	for {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return p
+		}
+		p = parent
+	}
+}

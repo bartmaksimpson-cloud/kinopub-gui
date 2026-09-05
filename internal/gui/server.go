@@ -1072,11 +1072,15 @@ func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {
 // path is saved, so a read-only share is caught while choosing rather than after
 // a download.
 func (s *Server) handleFSCheck(w http.ResponseWriter, r *http.Request) {
-	if err := checkDirWritable(r.URL.Query().Get("path")); err != nil {
+	path := r.URL.Query().Get("path")
+	if err := checkDirWritable(path); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	// Свободное место — половина ответа на вопрос «годится ли эта папка»:
+	// доступная на запись, но заполненная шара выглядит исправной ровно до
+	// середины первой серии.
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "freeBytes": dirSpace(path)})
 }
 
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {

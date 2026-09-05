@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 	"github.com/ZioSHik/kinopub-gui/internal/lib/httpx"
 )
 
@@ -70,6 +71,10 @@ type FSListing struct {
 	// wherever network shares appear on this OS. Without them a NAS is reachable
 	// only by climbing to the filesystem root one "up" at a time.
 	Places []FSEntry `json:"places,omitempty"`
+	// FreeBytes is free space on the filesystem holding Path, 0 when unknown.
+	// Shown while choosing so a nearly-full share is obvious before the download
+	// rather than at the 14th gigabyte.
+	FreeBytes uint64 `json:"freeBytes,omitempty"`
 }
 
 // drivesSentinel is a pseudo-path that means "list the available drives"
@@ -129,6 +134,7 @@ func listDir(path string) (FSListing, error) {
 		}
 		listing.Dirs = append(listing.Dirs, FSEntry{Name: e.Name(), Path: filepath.Join(abs, e.Name())})
 	}
+	listing.FreeBytes = dirSpace(abs)
 	sort.Slice(listing.Dirs, func(a, b int) bool {
 		return strings.ToLower(listing.Dirs[a].Name) < strings.ToLower(listing.Dirs[b].Name)
 	})
@@ -161,6 +167,18 @@ func fsPlaces() []FSEntry {
 		}
 	}
 	return out
+}
+
+// dirSpace reports free bytes on the filesystem holding path, 0 when it cannot
+// be determined (a share that does not answer, an exotic filesystem). Zero is
+// treated as "unknown", never as "full": refusing a download because a NAS was
+// shy about its numbers would be worse than the disk actually filling up.
+func dirSpace(path string) uint64 {
+	free, err := fsutil.FreeSpace(path)
+	if err != nil {
+		return 0
+	}
+	return free
 }
 
 // checkDirWritable reports whether the app can actually put finished files in

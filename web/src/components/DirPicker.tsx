@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowUp, Check, CornerDownLeft, Folder, FolderOpen, HardDrive } from "lucide-react";
 import { api, isNavigationAbort, type FSListing } from "../api";
 import { useI18n } from "../i18n";
+import { bytes } from "../lib/format";
 import { Modal, Spinner } from "./ui";
 
 export function DirPicker({
@@ -117,6 +118,7 @@ export function DirPicker({
           <span className="text-xs text-slate-500">
             <FolderOpen className="mr-1 inline h-3.5 w-3.5" />
             {t("Files download into this folder.")}
+            {listing?.freeBytes ? ` · ${t("free")} ${bytes(listing.freeBytes)}` : ""}
           </span>
           <button
             className="btn-primary"
