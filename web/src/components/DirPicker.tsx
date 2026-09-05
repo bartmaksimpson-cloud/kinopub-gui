@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUp, Check, Folder, FolderOpen } from "lucide-react";
+import { ArrowUp, Check, CornerDownLeft, Folder, FolderOpen, HardDrive } from "lucide-react";
 import { api, isNavigationAbort, type FSListing } from "../api";
 import { useI18n } from "../i18n";
 import { Modal, Spinner } from "./ui";
@@ -19,13 +19,18 @@ export function DirPicker({
   const [listing, setListing] = useState<FSListing | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [typed, setTyped] = useState("");
+  const [checking, setChecking] = useState(false);
 
   const load = (path: string) => {
     setLoading(true);
     setError("");
     api
       .fs(path)
-      .then(setListing)
+      .then((l) => {
+        setListing(l);
+        setTyped(l.path);
+      })
       .catch((e) => !isNavigationAbort(e) && setError(String(e.message || e)))
       .finally(() => setLoading(false));
   };
@@ -47,10 +52,43 @@ export function DirPicker({
           >
             <ArrowUp className="h-4 w-4" />
           </button>
-          <div className="flex-1 truncate rounded-xl border border-white/[0.08] bg-ink-900/70 px-3 py-2 font-mono text-xs text-slate-300">
-            {listing?.path || "…"}
-          </div>
+          {/* Путь можно вписать руками: так открывается сетевая папка, которую
+              не пройти кликами — например \\192.168.1.174\Video на Windows или
+              /Volumes/NAS на macOS. */}
+          <input
+            className="input flex-1 font-mono text-xs"
+            value={typed}
+            placeholder={listing?.path || "…"}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && typed.trim()) load(typed.trim());
+            }}
+            spellCheck={false}
+          />
+          <button
+            className="btn-ghost px-3 py-2"
+            disabled={!typed.trim() || loading}
+            onClick={() => load(typed.trim())}
+            title={t("Open this path")}
+          >
+            <CornerDownLeft className="h-4 w-4" />
+          </button>
         </div>
+
+        {listing?.places && listing.places.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {listing.places.map((p) => (
+              <button
+                key={p.path}
+                onClick={() => load(p.path)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.02] px-3 py-1.5 text-xs text-slate-400 transition hover:border-white/20 hover:text-slate-200"
+              >
+                <HardDrive className="h-3.5 w-3.5 shrink-0 text-gold-400/80" />
+                {p.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="h-64 overflow-y-auto rounded-xl border border-white/[0.06] bg-ink-900/40 p-1.5">
           {loading ? (
@@ -82,15 +120,28 @@ export function DirPicker({
           </span>
           <button
             className="btn-primary"
-            disabled={!listing}
-            onClick={() => {
-              if (listing) {
+            disabled={!listing || checking}
+            onClick={async () => {
+              if (!listing) return;
+              // Сетевая папка часто прекрасно открывается и не принимает запись.
+              // Лучше сказать об этом сейчас, чем после скачанного фильма.
+              setChecking(true);
+              try {
+                const r = await api.checkDir(listing.path);
+                if (!r.ok) {
+                  setError(r.error || t("This folder cannot be written to."));
+                  return;
+                }
                 onSelect(listing.path);
                 onClose();
+              } catch (e: any) {
+                setError(String(e.message || e));
+              } finally {
+                setChecking(false);
               }
             }}
           >
-            <Check className="h-4 w-4" />
+            {checking ? <Spinner className="h-4 w-4" /> : <Check className="h-4 w-4" />}
             {t("Use this folder")}
           </button>
         </div>

@@ -66,6 +66,10 @@ type FSListing struct {
 	Path   string    `json:"path"`
 	Parent string    `json:"parent"`
 	Dirs   []FSEntry `json:"dirs"`
+	// Places are the jumping-off points a person actually thinks in: home, and
+	// wherever network shares appear on this OS. Without them a NAS is reachable
+	// only by climbing to the filesystem root one "up" at a time.
+	Places []FSEntry `json:"places,omitempty"`
 }
 
 // drivesSentinel is a pseudo-path that means "list the available drives"
@@ -109,8 +113,12 @@ func listDir(path string) (FSListing, error) {
 	// Dirs is initialised (not nil) so an empty folder marshals as [] rather
 	// than null — the picker reads listing.dirs.length directly, and null
 	// there took the whole UI down with a TypeError.
-	listing := FSListing{Path: abs, Parent: filepath.Dir(abs), Dirs: []FSEntry{}}
-	if runtime.GOOS == "windows" && filepath.Dir(abs) == abs {
+	listing := FSListing{Path: abs, Parent: filepath.Dir(abs), Dirs: []FSEntry{}, Places: fsPlaces()}
+	if runtime.GOOS == "windows" && strings.HasPrefix(abs, `\\`) && strings.Count(strings.Trim(abs, `\\`), `\\`) < 1 {
+		// A UNC share root (\\server\share): there is nothing above it, and
+		// filepath.Dir would walk into "\\server", which is not a directory.
+		listing.Parent = drivesSentinel
+	} else if runtime.GOOS == "windows" && filepath.Dir(abs) == abs {
 		// abs is already a drive root (e.g. "C:\") — filepath.Dir can't go
 		// any higher on the same drive, so point "up" at the drive list.
 		listing.Parent = drivesSentinel
@@ -125,6 +133,51 @@ func listDir(path string) (FSListing, error) {
 		return strings.ToLower(listing.Dirs[a].Name) < strings.ToLower(listing.Dirs[b].Name)
 	})
 	return listing, nil
+}
+
+// fsPlaces lists the shortcuts the picker offers: the home folder, and the
+// place this OS mounts network shares into. A share still has to be connected in
+// the system (Finder → «Подключение к серверу», Explorer → «Подключить сетевой
+// диск»); after that it is an ordinary path, which is the whole point — the app
+// then writes to a NAS with no protocol of its own.
+func fsPlaces() []FSEntry {
+	var out []FSEntry
+	if home, err := os.UserHomeDir(); err == nil {
+		out = append(out, FSEntry{Name: "Домашняя папка", Path: home})
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		// Mounted shares (and external disks) live here.
+		if _, err := os.Stat("/Volumes"); err == nil {
+			out = append(out, FSEntry{Name: "Сетевые и внешние диски", Path: "/Volumes"})
+		}
+	case "windows":
+		out = append(out, FSEntry{Name: "Диски и сетевые диски", Path: drivesSentinel})
+	default:
+		for _, p := range []string{"/mnt", "/media"} {
+			if _, err := os.Stat(p); err == nil {
+				out = append(out, FSEntry{Name: p, Path: p})
+			}
+		}
+	}
+	return out
+}
+
+// checkDirWritable reports whether the app can actually put finished files in
+// this folder. A network share often lists fine and refuses writes — better to
+// say so while the user is choosing than to fail after a download.
+func checkDirWritable(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("путь не указан")
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("не удалось создать папку: %w", err)
+	}
+	probe := filepath.Join(path, ".kinopub-write-test")
+	if err := os.WriteFile(probe, []byte("ok"), 0o644); err != nil {
+		return fmt.Errorf("папка доступна только для чтения: %w", err)
+	}
+	return os.Remove(probe)
 }
 
 // openInOS opens a file or folder with the OS default handler. When reveal is

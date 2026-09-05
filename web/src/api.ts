@@ -471,6 +471,7 @@ export interface FSListing {
   path: string;
   parent: string;
   dirs: FSEntry[];
+  places?: FSEntry[];
 }
 
 // A request that never settles is worse than one that fails: the browser allows
@@ -621,6 +622,8 @@ export const api = {
   getSettings: () => req<Settings>("GET", "/api/settings"),
   saveSettings: (s: Settings) => req<Settings>("PUT", "/api/settings", s),
   preview: (r: Partial<RunRequest>) => req<PreviewResponse>("POST", "/api/preview", r),
+  checkDir: (path: string) =>
+    req<{ ok: boolean; error?: string }>("GET", `/api/fs/check?path=${encodeURIComponent(path)}`),
   jobs: () => req<JobView[]>("GET", "/api/jobs"),
   startJob: (r: Partial<StartRequest>) => req<JobView>("POST", "/api/jobs", r),
   cancelJob: (id: string) => req<{ canceling: boolean }>("POST", `/api/jobs/${id}/cancel`),

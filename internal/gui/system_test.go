@@ -3,6 +3,8 @@ package gui
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -59,5 +61,56 @@ func TestListDirEmptyDirMarshalsAsList(t *testing.T) {
 	}
 	if !bytes.Contains(encoded, []byte(`"dirs":[]`)) {
 		t.Fatalf("empty folder must encode dirs as [], got %s", encoded)
+	}
+}
+
+// Папка может прекрасно открываться и не принимать запись — типичная сетевая
+// шара, смонтированная только для чтения. Проверять надо записью, а не наличием.
+func TestCheckDirWritable(t *testing.T) {
+	dir := t.TempDir()
+	if err := checkDirWritable(dir); err != nil {
+		t.Errorf("обычная папка признана недоступной: %v", err)
+	}
+
+	// Несуществующую создаём — пользователь вправе указать путь заранее.
+	fresh := filepath.Join(dir, "новая", "вложенная")
+	if err := checkDirWritable(fresh); err != nil {
+		t.Errorf("не удалось создать папку: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("папка не создана: %v", err)
+	}
+
+	// Пустой путь — не «текущий каталог», а ошибка: иначе файлы уехали бы
+	// неизвестно куда.
+	if err := checkDirWritable("   "); err == nil {
+		t.Error("пустой путь принят")
+	}
+
+	// После проверки не должно оставаться следов.
+	entries, _ := os.ReadDir(fresh)
+	if len(entries) != 0 {
+		t.Errorf("проверка оставила мусор: %v", entries)
+	}
+}
+
+// Ярлыки нужны, чтобы до сетевой папки не пришлось идти кликами от корня.
+func TestFSPlaces_HasHome(t *testing.T) {
+	places := fsPlaces()
+	if len(places) == 0 {
+		t.Fatal("ярлыков нет вообще")
+	}
+	home, _ := os.UserHomeDir()
+	found := false
+	for _, p := range places {
+		if p.Path == home {
+			found = true
+		}
+		if p.Name == "" || p.Path == "" {
+			t.Errorf("пустой ярлык: %+v", p)
+		}
+	}
+	if home != "" && !found {
+		t.Error("домашней папки нет среди ярлыков")
 	}
 }

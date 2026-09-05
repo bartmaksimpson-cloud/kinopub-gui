@@ -110,7 +110,10 @@ export function SettingsPage() {
       <InterfaceCard />
 
       <div className="card space-y-4 p-5">
-        <Field label={t("Default output folder")}>
+        <Field
+          label={t("Where finished files go")}
+          hint={t("The finished film or episode lands here — this is the folder you point your player or NAS at. A film is saved as one file named after it; a serial gets a folder with seasons inside.")}
+        >
           <button className="input flex items-center gap-2 text-left" onClick={() => setPickOutput(true)} type="button">
             <FolderOpen className="h-4 w-4 shrink-0 text-gold-400" />
             <span className="truncate font-mono text-xs">{form.outputPath || t("Choose…")}</span>
@@ -118,8 +121,8 @@ export function SettingsPage() {
         </Field>
 
         <Field
-          label={t("Working folder")}
-          hint={t("Where partial segments, the raw file and the muxer's temp file are kept. Empty keeps them next to the finished file. Pointing it at another drive stops the remux from reading and writing the same disk at once — on a hard drive that is most of the wait.")}
+          label={t("Where work files are kept while downloading")}
+          hint={t("Segments as they arrive, the joined tracks and the file ffmpeg is writing — nothing you keep. They are deleted when the episode is done. Empty means they sit next to the finished file. On a hard drive, putting them on ANOTHER disk is most of the speed: otherwise one head reads and writes at the same time. Needs roughly three times the size of an episode.")}
         >
           <div className="flex gap-2">
             <button className="input flex flex-1 items-center gap-2 text-left" onClick={() => setPickWork(true)} type="button">

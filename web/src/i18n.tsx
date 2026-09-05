@@ -247,7 +247,14 @@ const RU: Record<string, string> = {
   "Update available": "Доступно обновление",
   "Defaults applied to every new download.": "Значения по умолчанию для новых загрузок.",
   "Default output folder": "Папка загрузки по умолчанию",
-  "Working folder": "Рабочая папка",
+  "Where finished files go": "Куда сохранять готовые файлы",
+  "The finished film or episode lands here — this is the folder you point your player or NAS at. A film is saved as one file named after it; a serial gets a folder with seasons inside.":
+    "Сюда приезжает готовый фильм или серия — эту папку и открывает плеер или NAS. Фильм сохраняется одним файлом со своим названием, сериал — папкой с сезонами внутри.",
+  "Where work files are kept while downloading": "Где держать рабочие файлы во время скачивания",
+  "Segments as they arrive, the joined tracks and the file ffmpeg is writing — nothing you keep. They are deleted when the episode is done. Empty means they sit next to the finished file. On a hard drive, putting them on ANOTHER disk is most of the speed: otherwise one head reads and writes at the same time. Needs roughly three times the size of an episode.":
+    "Сегменты по мере скачивания, склеенные дорожки и файл, который пишет ffmpeg, — ничего из этого не хранится, всё удаляется по готовности эпизода. Пусто — лежат рядом с готовым файлом. На жёстком диске вынести их на ДРУГОЙ диск — это почти вся скорость: иначе одна головка одновременно читает и пишет. Нужно примерно три размера эпизода.",
+  "Open this path": "Открыть этот путь",
+  "This folder cannot be written to.": "В эту папку нельзя писать.",
   downloading: "скачивание",
   muxing: "склейка",
   "re-encoding": "перекодирование",

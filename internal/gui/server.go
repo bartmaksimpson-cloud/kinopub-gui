@@ -257,6 +257,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/library/delete-episode", s.handleDeleteLibraryEpisode)
 	mux.HandleFunc("POST /api/open", s.handleOpenPath)
 	mux.HandleFunc("GET /api/fs", s.handleFS)
+	mux.HandleFunc("GET /api/fs/check", s.handleFSCheck)
 	mux.HandleFunc("POST /api/crash-report", s.handleCrashReportSend)
 	mux.HandleFunc("GET /api/img", s.handleImage)
 
@@ -1065,6 +1066,17 @@ func (s *Server) handleFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, listing)
+}
+
+// handleFSCheck answers whether a folder can be written to — asked before a
+// path is saved, so a read-only share is caught while choosing rather than after
+// a download.
+func (s *Server) handleFSCheck(w http.ResponseWriter, r *http.Request) {
+	if err := checkDirWritable(r.URL.Query().Get("path")); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
