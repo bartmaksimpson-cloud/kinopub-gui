@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// pinFitEncoder фиксирует выбранный кодировщик на время теста. Без этого тесты
+// зависят от машины: на маке зонд открывает videotoolbox и подгонка идёт по
+// битрейту, а на runner'е CI не открывается ничего — остаётся libx265 с -crf,
+// и те же самые проверки падают. Зонд запускается один раз на процесс, поэтому
+// его достаточно «съесть» пустым Do.
+func pinFitEncoder(t *testing.T, name string) {
+	t.Helper()
+	fitOnce.Do(func() {})
+	prev := fitEncoderName
+	fitEncoderName = name
+	t.Cleanup(func() { fitEncoderName = prev })
+}
+
 func TestHeightOf(t *testing.T) {
 	cases := map[string]int{
 		"1920x1080":   1080,
@@ -28,6 +41,7 @@ func TestHeightOf(t *testing.T) {
 // decoder and far over its height limit, so it must be scaled; a standard 4K
 // frame must be left alone, or every download would be re-encoded for nothing.
 func TestScaleToHeightArgs(t *testing.T) {
+	pinFitEncoder(t, "h264_nvenc")
 	tall := scaleToHeightArgs(2880, 2160, 0, "ffmpeg")
 	if len(tall) == 0 {
 		t.Fatal("кадр 2880 выше предела 2160, а аргументов нет")
@@ -65,6 +79,7 @@ func TestScaleToHeightArgs(t *testing.T) {
 // Дюна: 3840x1600 при 47,952 к/с. Кадр в предел железа влезает, а поток — нет:
 // декодер принимает файл, запускается и выбрасывает две трети кадров.
 func TestFitArgsFor_HalvesHighFrameRateAt4K(t *testing.T) {
+	pinFitEncoder(t, "h264_nvenc")
 	got := fitArgsFor(
 		fitSource{Width: 3840, Height: 1600, FPS: 47.952, Kbps: 9000},
 		fitLimits{Height: 2160, FPS: 30},
