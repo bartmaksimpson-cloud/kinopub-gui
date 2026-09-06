@@ -319,13 +319,13 @@ type PageEpisode struct {
 	// ManifestURLHEVC (0 when unknown). The automatic pick needs both: HEVC is
 	// the better codec for a TV, but not when the service ships it only at half
 	// the resolution — там real 4K в H.264 честно лучше.
-	Height     int
-	HeightHEVC int
-	MediaID    int
-	EpisodeTitle    string
-	Duration        int // seconds
-	Season          int
-	Episode         int
+	Height       int
+	HeightHEVC   int
+	MediaID      int
+	EpisodeTitle string
+	Duration     int // seconds
+	Season       int
+	Episode      int
 }
 
 // PageSeason is season metadata from the page.
