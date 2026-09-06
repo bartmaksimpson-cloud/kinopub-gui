@@ -143,7 +143,8 @@ func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) 
 func makeRunFunc() downloader.RunFunc {
 	return func(ctx context.Context, name string, args, env []string, stdout io.Writer, stdin io.Reader) error {
 		cmd := exec.CommandContext(ctx, name, args...)
-		hideConsole(cmd) // ffmpeg/ffprobe must not pop a console over the UI
+		hideConsole(cmd)   // ffmpeg/ffprobe must not pop a console over the UI
+		lowerPriority(cmd) // и не должны отбирать машину у того, кто за ней сидит
 		if len(env) > 0 {
 			cmd.Env = append(os.Environ(), env...)
 		}
@@ -155,7 +156,13 @@ func makeRunFunc() downloader.RunFunc {
 		}
 		tail := &tailWriter{max: 8192}
 		cmd.Stderr = tail
-		err := cmd.Run()
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		// На unix приоритет понижается уже у живого процесса — в атрибутах
+		// запуска для этого места нет.
+		applyLowPriority(cmd.Process.Pid)
+		err := cmd.Wait()
 		if err != nil {
 			if msg := tail.lastLines(8); msg != "" {
 				return fmt.Errorf("%w: %s", err, msg)

@@ -264,7 +264,12 @@ function EpisodeMeta({
         {active && ep.stage && (
           <span
             className={clsx(
-              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium",
+              // flex-wrap + max-w-full: строка стадии длинная («2880x2160 ·
+              // H.264 · 27567 kbps · процессор · потоков: 3 · 2% · осталось
+              // 1 ч 46 м»), и без переноса она вылезала из плашки и наезжала
+              // на соседние подписи. Переносится между кусками, а не внутри —
+              // каждый кусок nowrap.
+              "inline-flex max-w-full flex-wrap items-center gap-1 rounded-full px-2 py-0.5 font-medium",
               ep.stage === "encode"
                 ? "bg-gold-500/[0.14] text-gold-300"
                 : "bg-white/[0.06] text-slate-300",
@@ -279,14 +284,14 @@ function EpisodeMeta({
                 : ep.stage === "move"
                   ? t("moving to the output folder")
                   : t("re-encoding")}
-            {ep.stageFormat && <span className="text-slate-400">· {ep.stageFormat}</span>}
-            {ep.stageEncoder && <span className="text-slate-400">· {ep.stageEncoder}</span>}
+            {ep.stageFormat && <span className="whitespace-nowrap text-slate-400">· {ep.stageFormat}</span>}
+            {ep.stageEncoder && <span className="whitespace-nowrap text-slate-400">· {ep.stageEncoder}</span>}
             {ep.stageThreads ? (
-              <span className="text-slate-400">· {t("{n} threads", { n: ep.stageThreads })}</span>
+              <span className="whitespace-nowrap text-slate-400">· {t("{n} threads", { n: ep.stageThreads })}</span>
             ) : null}
-            {ep.stagePercent ? <span className="tabular-nums text-slate-400">· {ep.stagePercent}%</span> : null}
+            {ep.stagePercent ? <span className="whitespace-nowrap tabular-nums text-slate-400">· {ep.stagePercent}%</span> : null}
             {ep.stageEtaSeconds ? (
-              <span className="text-slate-400">· {t("ETA")} {eta(ep.stageEtaSeconds, t)}</span>
+              <span className="whitespace-nowrap text-slate-400">· {t("ETA")} {eta(ep.stageEtaSeconds, t)}</span>
             ) : null}
           </span>
         )}

@@ -348,6 +348,7 @@ const RU: Record<string, string> = {
   "Choose a folder": "Выбор папки",
   "Parent folder": "Родительская папка",
   "Files download into this folder.": "Файлы скачиваются в эту папку.",
+  "{n} threads": "потоков: {n}",
   "(several files — take as many as you need)": "(несколько файлов — можно взять сколько нужно)",
   "Maximum frame width": "Максимальная ширина кадра",
   "Automatic — no wider than 4096": "Автоматически — не шире 4096",
