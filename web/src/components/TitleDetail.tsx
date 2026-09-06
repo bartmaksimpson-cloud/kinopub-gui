@@ -112,7 +112,11 @@ export function TitleDetail({
   // стоит запроса мастер-плейлиста), и ни одна дорожка не выбрана по умолчанию.
   // Версия фильма: kino.watch публикует «Дюну» как два файла (24 и 48 fps), и
   // без выбора качались оба. Пусто = первая версия.
-  const [version, setVersion] = useState<number | null>(null);
+  // Версии фильма выбираются набором: сервис публикует «фильм», «концерт» и
+  // «версию режиссёра» одним тайтлом, и брать их можно вместе. null — ещё не
+  // трогали, тогда по умолчанию первая (и только она: скачать все три молча —
+  // это те самые «две Дюны», из-за которых выбор вообще появился).
+  const [versionSel, setVersionSel] = useState<Set<number> | null>(null);
   // Озвучки из мастер-плейлиста: список из API неполон и назван так, что выбор
   // по нему ловит лишние дорожки («MTV» — русскую и украинскую, «rus» — все).
   const [mfAudios, setMfAudios] = useState<AudioTrack[] | null>(null);
@@ -151,7 +155,7 @@ export function TitleDetail({
     setSeeded(false);
     setAudioSel(new Set());
     setAudioPrefMissing(false);
-    setVersion(null);
+    setVersionSel(null);
     setMfAudios(null);
     setSubsOpen(false);
     setSubs(null);
@@ -281,7 +285,7 @@ export function TitleDetail({
   // Какая версия фильма поедет. По умолчанию первая: у «Дюны» это 24 fps —
   // родная каденция, которую берёт любое железо.
   const versions = detail?.versions || [];
-  const chosenVersion = version ?? versions[0]?.episode ?? 0;
+  const chosenVersions = versionSel ?? new Set(versions[0] ? [versions[0].episode] : []);
 
   // Список озвучек, каким его отдаёт сам плейлист. Грузится в фоне: до ответа
   // показывается список из API, поэтому карточка не ждёт сеть.
@@ -404,9 +408,15 @@ export function TitleDetail({
   // "Download" armed over already-downloaded files would start a job that
   // finishes instantly having done nothing. The button stops offering to start
   // anything and points at the page holding the answer to "where is it then?".
+  // Фильм с несколькими файлами судится по ВЫБРАННЫМ версиям: одна скачанная
+  // версия не повод отказываться качать вторую — раньше кнопка после первой же
+  // превращалась в «Уже скачано», и добраться до концерта было нельзя.
   const nothingLeft = isSerial
     ? nothingLeftToQueue(allEpKeys, downloaded, queuedKeys)
-    : coverage.whole || coverage.refs.size > 0 || downloaded.size > 0;
+    : versions.length > 1
+      ? chosenVersions.size > 0 &&
+        [...chosenVersions].every((n) => downloaded.has(epKey(1, n)) || queuedKeys.has(epKey(1, n)))
+      : coverage.whole || coverage.refs.size > 0 || downloaded.size > 0;
   // Which of the two it is, so the button can say the true one.
   const queuedSomething = isSerial ? queuedCount > 0 : coverage.whole || coverage.refs.size > 0;
 
@@ -490,7 +500,7 @@ export function TitleDetail({
           : // Фильм: kino.watch иногда публикует его несколькими файлами
             // (24 fps / 48 fps). Без явного ключа движок берёт их все.
             versions.length > 1
-            ? [`S1E${chosenVersion}`]
+            ? [...chosenVersions].map((n) => epKey(1, n))
             : undefined,
         audio: "",
         audioSpecs,
@@ -725,15 +735,31 @@ export function TitleDetail({
                 <Section
                   icon={<Film className="h-4 w-4" />}
                   title={t("Version")}
-                  hint={t("(the service publishes this film as several files)")}
+                  hint={
+                    chosenVersions.size > 1
+                      ? t("({n} selected)", { n: chosenVersions.size })
+                      : t("(several files — take as many as you need)")
+                  }
                 >
                   <div className="flex flex-wrap gap-2">
                     {versions.map((v) => {
-                      const on = v.episode === chosenVersion;
+                      const on = chosenVersions.has(v.episode);
                       return (
                         <button
                           key={v.episode}
-                          onClick={() => setVersion(v.episode)}
+                          onClick={() =>
+                            setVersionSel(() => {
+                              const next = new Set(chosenVersions);
+                              // Снять последнюю галочку нельзя: качать нечего,
+                              // и кнопка «Скачать» превратилась бы в ловушку.
+                              if (next.has(v.episode)) {
+                                if (next.size > 1) next.delete(v.episode);
+                              } else {
+                                next.add(v.episode);
+                              }
+                              return next;
+                            })
+                          }
                           className={clsx(
                             "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition",
                             on
