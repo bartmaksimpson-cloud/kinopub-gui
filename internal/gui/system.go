@@ -361,3 +361,43 @@ func isPublicIP(ip net.IP) bool {
 	}
 	return true
 }
+
+// lanURLs are the addresses this app can be opened at from another machine on
+// the same network. Браузер собственного сетевого адреса не знает, а показать
+// человеку «открой вот это на маке» надо целиком, вместе с ключом.
+//
+// port берётся из запроса: приложение слушает тот порт, по которому к нему
+// только что пришли, и угадывать его незачем.
+func lanURLs(port string) []string {
+	if port == "" {
+		port = "8765"
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP.To4()
+			// Только IPv4 и только частные адреса: публичный адрес в такой
+			// подсказке — приглашение открыть приложение всему интернету.
+			if ip == nil || !ip.IsPrivate() {
+				continue
+			}
+			out = append(out, "http://"+net.JoinHostPort(ip.String(), port))
+		}
+	}
+	return out
+}

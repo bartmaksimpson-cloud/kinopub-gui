@@ -31,6 +31,13 @@ export function SettingsPage() {
   const [pickOutput, setPickOutput] = useState(false);
   const [pickWork, setPickWork] = useState(false);
   const [pickLib, setPickLib] = useState(false);
+  // Адреса, по которым эту машину видно из сети. Браузер их не знает — их
+  // называет сам сервер, глядя на свои интерфейсы.
+  const [lanUrls, setLanUrls] = useState<string[]>([]);
+  useEffect(() => {
+    if (!form.remoteAccess) return;
+    api.net().then((r) => setLanUrls(r.urls || [])).catch(() => setLanUrls([]));
+  }, [form.remoteAccess]);
 
   // Settings persist automatically on every edit (debounced) — no Save button.
   // dirty gates the resync effect so an SSE echo can't clobber in-progress edits;
@@ -197,6 +204,53 @@ export function SettingsPage() {
             <option value="3840">3840</option>
           </select>
         </Field>
+        <Toggle
+          label={t("Remote access")}
+          hint={t("Lets you open this app from another computer on the same network — the queue, the library, starting downloads. Off by default: this server holds access to the kino.watch account, so the address alone must not be enough, and every request from the network has to carry the key below.")}
+          checked={!!form.remoteAccess}
+          onChange={(v) => set("remoteAccess", v)}
+        />
+        {form.remoteAccess && (
+          <Field
+            label={t("Address to open")}
+            hint={t("Open it once on the other computer: the key is remembered by that browser and does not stay in the address bar. Anyone who gets this link gets the app — treat it like a password. Requires an app restart to start listening on the network.")}
+          >
+            <div className="space-y-2">
+              {(lanUrls.length ? lanUrls : ["http://<адрес этой машины>:8765"]).map((u) => {
+                const full = `${u}/?t=${form.remoteToken ?? ""}`;
+                return (
+                  <div key={u} className="flex items-center gap-2">
+                    <input className="input flex-1" readOnly value={full} onFocus={(e) => e.currentTarget.select()} />
+                    <button
+                      className="btn-ghost shrink-0"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(full);
+                        toast(t("Copied"), "success");
+                      }}
+                    >
+                      {t("Copy")}
+                    </button>
+                  </div>
+                );
+              })}
+              <button
+                className="btn-ghost"
+                onClick={async () => {
+                  try {
+                    const saved = await api.newRemoteKey();
+                    setSettingsLocal(saved);
+                    setForm(saved);
+                    toast(t("New key issued — the old address stops working"), "success");
+                  } catch (e: any) {
+                    toast(e.message || "Error", "error");
+                  }
+                }}
+              >
+                {t("Issue a new key")}
+              </button>
+            </div>
+          </Field>
+        )}
         <Field
           label={t("Maximum frame rate for 4K")}
           hint={t("A 4K stream above this is halved (48→24, 60→30), which keeps the film's own cadence. TV decoders accept 4K at 48 fps and then drop most of the frames, and a 60 Hz panel cannot show 48 evenly either. Smaller frames are never touched.")}

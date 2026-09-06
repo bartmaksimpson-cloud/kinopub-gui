@@ -348,6 +348,16 @@ const RU: Record<string, string> = {
   "Choose a folder": "Выбор папки",
   "Parent folder": "Родительская папка",
   "Files download into this folder.": "Файлы скачиваются в эту папку.",
+  "Remote access": "Доступ по сети",
+  "Lets you open this app from another computer on the same network — the queue, the library, starting downloads. Off by default: this server holds access to the kino.watch account, so the address alone must not be enough, and every request from the network has to carry the key below.":
+    "Позволяет открыть приложение с другого компьютера в той же сети — очередь, библиотеку, запуск закачек. По умолчанию выключено: сервер держит доступ к аккаунту kino.watch, поэтому одного адреса быть недостаточно, и каждый запрос из сети обязан нести ключ ниже.",
+  "Address to open": "Адрес для открытия",
+  "Open it once on the other computer: the key is remembered by that browser and does not stay in the address bar. Anyone who gets this link gets the app — treat it like a password. Requires an app restart to start listening on the network.":
+    "Откройте его один раз на другом компьютере: ключ запомнится браузером и в адресной строке не останется. Кто получил ссылку — получил приложение, обращайтесь с ней как с паролем. Чтобы приложение начало слушать сеть, его нужно перезапустить.",
+  Copy: "Копировать",
+  Copied: "Скопировано",
+  "Issue a new key": "Перевыпустить ключ",
+  "New key issued — the old address stops working": "Ключ перевыпущен — старый адрес больше не работает",
   "{n} threads": "потоков: {n}",
   "(several files — take as many as you need)": "(несколько файлов — можно взять сколько нужно)",
   "Maximum frame width": "Максимальная ширина кадра",

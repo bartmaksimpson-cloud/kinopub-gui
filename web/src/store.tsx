@@ -67,6 +67,7 @@ const emptySettings: Settings = {
   theme: "cinematic",
   libraryDirs: null,
   transcodeHevc: false,
+  remoteAccess: false,
   maxHeight: 2160,
   maxWidth: 4096,
   maxFps: 30,

@@ -1,6 +1,8 @@
 package gui
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -100,6 +102,29 @@ type Settings struct {
 	// frames in three, and a 60/30 Hz panel could not show 48 evenly anyway.
 	// The rate is halved (48→24), so the film's own cadence is what remains.
 	MaxFPS float64 `json:"maxFps"`
+
+	// RemoteAccess opens the app to the local network. Off by default, and off
+	// is the only safe default: этот сервер держит доступ к аккаунту kino.watch
+	// и отдаёт ссылки на потоки с токеном внутри.
+	RemoteAccess bool `json:"remoteAccess"`
+	// RemoteToken is the key those network requests must carry. Генерируется
+	// приложением при включении доступа: пароль, который человек придумает
+	// сам, здесь был бы слабее любого сгенерированного.
+	RemoteToken string `json:"remoteToken,omitempty"`
+}
+
+// newRemoteToken makes the key that network requests must carry: 32 hex
+// characters from crypto/rand. Не выводится ни в логи, ни в отчёты об ошибках —
+// он равносилен доступу к аккаунту kino.watch.
+func newRemoteToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Источник случайности отказал — это не тот случай, когда можно
+		// подставить что-то предсказуемое: лучше без ключа, тогда доступ по
+		// сети просто не включится.
+		return ""
+	}
+	return hex.EncodeToString(b)
 }
 
 func defaultSettings() Settings {
@@ -217,6 +242,17 @@ func (s *settingsStore) save(in Settings) (Settings, error) {
 	}
 	if in.MaxFPS < 0 || in.MaxFPS > 240 {
 		in.MaxFPS = 0
+	}
+	// Ключ заводится ровно один раз — при первом включении доступа — и дальше
+	// живёт, пока его не перевыпустят: иначе каждое сохранение настроек
+	// разлогинивало бы уже открытую вкладку на другом компьютере. Пустая
+	// строка от клиента означает «оставь как было», а не «сотри»: ключ
+	// приходит обратно в настройках, и обнулять его случайным PUT нельзя.
+	if in.RemoteToken == "" {
+		in.RemoteToken = s.cur.RemoteToken
+	}
+	if in.RemoteAccess && in.RemoteToken == "" {
+		in.RemoteToken = newRemoteToken()
 	}
 	s.cur = in
 	if s.path == "" {

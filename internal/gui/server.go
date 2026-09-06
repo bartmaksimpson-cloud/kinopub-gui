@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -132,13 +133,109 @@ func (s *Server) SetRestart(fn func()) { s.restart = fn }
 // localhost server from web pages: it rejects requests whose Host is not a
 // loopback address (defeating DNS-rebinding) and cross-origin requests carrying
 // a foreign Origin (defeating a malicious site's direct fetch to 127.0.0.1).
-func (s *Server) Handler() http.Handler { return guardLocalOnly(s.mux) }
+func (s *Server) Handler() http.Handler { return s.guard(guardLocalOnly(s.mux)) }
+
+// ListenAddr is where the app should bind, given the -addr flag.
+//
+// Флаг остаётся главным: если человек указал адрес явно, слушаем ровно его.
+// Но когда в настройках включён доступ по сети, а флага нет, привязка к
+// 127.0.0.1 сделала бы настройку бессмысленной — до приложения всё равно никто
+// не достучится. Тогда слушаем все интерфейсы; пускать или нет, решает ключ.
+func (s *Server) ListenAddr(flagAddr, defaultAddr string) string {
+	if flagAddr != defaultAddr {
+		return flagAddr
+	}
+	if !s.settings.get().RemoteAccess {
+		return flagAddr
+	}
+	_, port, err := net.SplitHostPort(defaultAddr)
+	if err != nil {
+		return flagAddr
+	}
+	return net.JoinHostPort("0.0.0.0", port)
+}
+
+// remoteTokenCookie carries the key once the address with ?t=… has been opened,
+// so дальше обычные запросы страницы ходят сами: класть ключ в каждый URL
+// значит оставлять его в истории браузера и в заголовке Referer.
+const remoteTokenCookie = "kinopub_remote"
+
+// guard decides whether a request from OUTSIDE this machine is allowed at all.
+//
+// Раньше такой проверки не было вовсе: guardLocalOnly смотрит на заголовок
+// Host, а он приходит от клиента и подделывается одной строкой в curl. Пока
+// сервер слушал только себя, этого хватало — от сети защищала сама привязка к
+// 127.0.0.1. Но с ключом -addr 0.0.0.0 привязки нет, и заголовок оставался
+// единственной преградой: любой в локальной сети открывал настройки и ссылки
+// на потоки с токеном kino.watch внутри.
+//
+// Теперь решает АДРЕС СОЕДИНЕНИЯ, который клиент подделать не может. Свои
+// запросы (с этой же машины) идут как шли. Чужие требуют включённого доступа
+// по сети и верного ключа.
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isLoopbackAddr(r.RemoteAddr) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		cfg := s.settings.get()
+		if !cfg.RemoteAccess || cfg.RemoteToken == "" {
+			writeErr(w, http.StatusForbidden, "forbidden: remote access is off (turn it on in Settings)")
+			return
+		}
+		if tok := r.URL.Query().Get("t"); tok != "" && tokenMatches(cfg.RemoteToken, tok) {
+			http.SetCookie(w, &http.Cookie{
+				Name:     remoteTokenCookie,
+				Value:    tok,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				MaxAge:   int((30 * 24 * time.Hour).Seconds()),
+			})
+			next.ServeHTTP(w, r)
+			return
+		}
+		if tokenMatches(cfg.RemoteToken, r.Header.Get("X-Kinopub-Token")) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if c, err := r.Cookie(remoteTokenCookie); err == nil && tokenMatches(cfg.RemoteToken, c.Value) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeErr(w, http.StatusUnauthorized, "unauthorized: open the address with the key from Settings")
+	})
+}
+
+// tokenMatches compares in constant time: обычное сравнение строк выдаёт длину
+// общего префикса временем ответа, и ключ подбирается по одному символу.
+func tokenMatches(want, got string) bool {
+	if want == "" || got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
+}
+
+// isLoopbackAddr reports whether a connection came from this machine. The
+// address here is the TCP peer, not a header — подделать его нельзя.
+func isLoopbackAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 // guardLocalOnly wraps the mux with anti-rebinding / anti-CSRF checks suitable
 // for a loopback-only control server.
 func guardLocalOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopbackHost(r.Host) {
+		// Проверка Host защищает от DNS-rebinding — атаки, в которой чужая
+		// страница заставляет БРАУЗЕР пользователя ходить на 127.0.0.1. Она
+		// имеет смысл только для запросов с этой машины; для пришедших по сети
+		// её уже сделал s.guard, потребовав ключ.
+		if isLoopbackAddr(r.RemoteAddr) && !isLoopbackHost(r.Host) {
 			writeErr(w, http.StatusForbidden, "forbidden: this server only accepts loopback requests")
 			return
 		}
@@ -222,6 +319,7 @@ func (s *Server) routes() {
 
 	mux.HandleFunc("GET /api/ffmpeg", s.handleFFmpeg)
 	mux.HandleFunc("GET /api/encoders", s.handleEncoders)
+	mux.HandleFunc("GET /api/net", s.handleNet)
 
 	mux.HandleFunc("GET /api/deps", s.handleDeps)
 	mux.HandleFunc("POST /api/deps/install", s.handleDepsInstall)
@@ -231,6 +329,7 @@ func (s *Server) routes() {
 
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+	mux.HandleFunc("POST /api/settings/remote-key", s.handleNewRemoteKey)
 
 	mux.HandleFunc("POST /api/preview", s.handlePreview)
 
@@ -371,6 +470,36 @@ func (s *Server) handleEncoders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"encoders": downloader.ProbeEncoders(ffmpegStatus().FFmpegPath),
 	})
+}
+
+// handleNet tells the UI at which addresses this machine can be reached from
+// the network, so «открой у себя вот это» — готовая строка, а не задача со
+// звёздочкой.
+// handleNewRemoteKey issues a fresh remote-access key. Нужен отдельной кнопкой,
+// а не полем в настройках: пустой ключ в обычном сохранении означает «оставь
+// как было» (иначе любое сохранение настроек выкидывало бы открытую вкладку на
+// другой машине), поэтому перевыпуск должен быть отдельным намерением.
+func (s *Server) handleNewRemoteKey(w http.ResponseWriter, r *http.Request) {
+	cur := s.settings.get()
+	cur.RemoteToken = newRemoteToken()
+	if cur.RemoteToken == "" {
+		writeErr(w, http.StatusInternalServerError, "не удалось выпустить ключ")
+		return
+	}
+	saved, err := s.settings.save(cur)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
+func (s *Server) handleNet(w http.ResponseWriter, r *http.Request) {
+	_, port, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		port = ""
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"urls": lanURLs(port)})
 }
 
 func (s *Server) handleDeps(w http.ResponseWriter, r *http.Request) {

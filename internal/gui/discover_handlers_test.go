@@ -142,6 +142,10 @@ func TestGuardLocalOnly_RejectsNonLoopbackHost(t *testing.T) {
 	guard := guardLocalOnly(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	req := httptest.NewRequest("GET", "/api/health", nil)
 	req.Host = "evil.example.com"
+	// Запрос СВОЕЙ машины с подделанным Host — это и есть DNS-rebinding, от
+	// которого защищает этот слой. Чужие адреса теперь отсекает s.guard, и
+	// заголовок Host там уже ничего не решает.
+	req.RemoteAddr = "127.0.0.1:52000"
 	w := httptest.NewRecorder()
 	guard.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden || called {
@@ -161,5 +165,107 @@ func TestGuardLocalOnly_AllowsLoopback(t *testing.T) {
 	guard.ServeHTTP(w, req)
 	if w.Code != http.StatusOK || !called {
 		t.Errorf("loopback should pass: status=%d called=%v", w.Code, called)
+	}
+}
+
+// Запрос ПО СЕТИ без ключа не должен доходить до приложения, даже с
+// подделанным Host: именно так весь этот сервер и открывался наружу, пока
+// проверка смотрела на заголовок вместо адреса соединения.
+func TestGuard_NetworkRequestNeedsToken(t *testing.T) {
+	srv := NewServer("test", nil)
+	// Хранилище без пути: NewServer читает и ПИШЕТ настоящий файл настроек, и
+	// тест, включивший доступ по сети, включил бы его человеку по-настоящему.
+	srv.settings = &settingsStore{cur: defaultSettings()}
+	called := false
+	guard := srv.guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	netReq := func() *http.Request {
+		r := httptest.NewRequest("GET", "/api/settings", nil)
+		r.Host = "127.0.0.1:8765" // подделанный «свой» Host — больше не пропуск
+		r.RemoteAddr = "192.168.1.77:41000"
+		return r
+	}
+
+	// Доступ выключен — отказ.
+	w := httptest.NewRecorder()
+	guard.ServeHTTP(w, netReq())
+	if w.Code != http.StatusForbidden || called {
+		t.Errorf("доступ выключен: status=%d called=%v, ожидалось 403 без вызова", w.Code, called)
+	}
+
+	saved, err := srv.settings.save(Settings{Container: "mkv", RemoteAccess: true})
+	if err != nil {
+		t.Fatalf("сохранение настроек: %v", err)
+	}
+	if len(saved.RemoteToken) != 32 {
+		t.Fatalf("ключ = %q, ожидались 32 шестнадцатеричных знака", saved.RemoteToken)
+	}
+
+	// Доступ включён, ключа нет — отказ.
+	w = httptest.NewRecorder()
+	guard.ServeHTTP(w, netReq())
+	if w.Code != http.StatusUnauthorized || called {
+		t.Errorf("без ключа: status=%d called=%v, ожидалось 401 без вызова", w.Code, called)
+	}
+
+	// Неверный ключ — отказ.
+	w = httptest.NewRecorder()
+	bad := netReq()
+	bad.Header.Set("X-Kinopub-Token", "00000000000000000000000000000000")
+	guard.ServeHTTP(w, bad)
+	if w.Code != http.StatusUnauthorized || called {
+		t.Errorf("неверный ключ: status=%d called=%v, ожидалось 401 без вызова", w.Code, called)
+	}
+
+	// Верный ключ в заголовке — пропуск.
+	w = httptest.NewRecorder()
+	ok := netReq()
+	ok.Header.Set("X-Kinopub-Token", saved.RemoteToken)
+	guard.ServeHTTP(w, ok)
+	if w.Code != http.StatusOK || !called {
+		t.Errorf("верный ключ: status=%d called=%v, ожидалось 200 с вызовом", w.Code, called)
+	}
+
+	// Ключ в адресе — пропуск и печенье, чтобы дальше он не болтался в URL.
+	called = false
+	w = httptest.NewRecorder()
+	viaURL := httptest.NewRequest("GET", "/?t="+saved.RemoteToken, nil)
+	viaURL.RemoteAddr = "192.168.1.77:41001"
+	guard.ServeHTTP(w, viaURL)
+	if w.Code != http.StatusOK || !called {
+		t.Fatalf("ключ в адресе: status=%d called=%v", w.Code, called)
+	}
+	var found bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == remoteTokenCookie && c.Value == saved.RemoteToken {
+			found = true
+			if !c.HttpOnly {
+				t.Error("печенье с ключом должно быть HttpOnly — иначе его читает любой скрипт страницы")
+			}
+		}
+	}
+	if !found {
+		t.Error("ключ из адреса не сохранён в печенье")
+	}
+}
+
+// Свои запросы ходят без ключа: доступ по сети — это про чужие адреса.
+func TestGuard_LoopbackNeedsNoToken(t *testing.T) {
+	srv := NewServer("test", nil)
+	srv.settings = &settingsStore{cur: defaultSettings()}
+	called := false
+	guard := srv.guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	req.RemoteAddr = "127.0.0.1:53000"
+	w := httptest.NewRecorder()
+	guard.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !called {
+		t.Errorf("свой запрос: status=%d called=%v, ожидалось 200 с вызовом", w.Code, called)
 	}
 }

@@ -172,6 +172,8 @@ export interface Settings {
   theme: string;
   libraryDirs: string[] | null;
   transcodeHevc: boolean;
+  remoteAccess: boolean;
+  remoteToken?: string;
   maxHeight: number;
   maxWidth: number;
   maxFps: number;
@@ -561,6 +563,30 @@ interface ReqOpts {
   timeoutMs?: number;
 }
 
+// Ключ удалённого доступа. Приходит один раз в адресе (?t=…), дальше живёт в
+// браузере: держать его в URL значит оставлять в истории и в заголовке Referer
+// каждой картинки. Сервер ставит ещё и печенье, но заголовок надёжнее — печенье
+// может быть отключено, а без ключа сетевой запрос получит 401.
+const TOKEN_KEY = "kinopub.remoteToken";
+
+function readToken(): string {
+  try {
+    const url = new URL(window.location.href);
+    const fromUrl = url.searchParams.get("t");
+    if (fromUrl) {
+      localStorage.setItem(TOKEN_KEY, fromUrl);
+      url.searchParams.delete("t");
+      window.history.replaceState(null, "", url.toString());
+      return fromUrl;
+    }
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+const remoteToken = typeof window === "undefined" ? "" : readToken();
+
 async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpts = {}): Promise<T> {
   const ctrl = new AbortController();
   const pending: PendingRequest = { ctrl, cause: "" };
@@ -583,7 +609,10 @@ async function req<T>(method: string, path: string, body?: unknown, opts: ReqOpt
   try {
     res = await fetch(path, {
       method,
-      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(remoteToken ? { "X-Kinopub-Token": remoteToken } : {}),
+      },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
@@ -707,6 +736,8 @@ export const api = {
   sendCrashReport: (detail?: string) =>
     req<{ open: string }>("POST", "/api/crash-report", { detail: detail ?? "" }),
   fs: (path: string) => req<FSListing>("GET", `/api/fs?path=${encodeURIComponent(path)}`),
+  net: () => req<{ urls: string[] }>("GET", "/api/net"),
+  newRemoteKey: () => req<Settings>("POST", "/api/settings/remote-key"),
 
   // Official kino.watch API auth (device-code).
   kpStatus: () => req<KPStatus>("GET", "/api/kp/status"),

@@ -33,7 +33,8 @@ func run() int {
 		noOpen      bool
 		showVersion bool
 	)
-	flag.StringVar(&addr, "addr", "127.0.0.1:8765", "address to listen on (host:port)")
+	const defaultAddr = "127.0.0.1:8765"
+	flag.StringVar(&addr, "addr", defaultAddr, "address to listen on (host:port)")
 	flag.BoolVar(&noOpen, "no-open", false, "do not open the browser automatically")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Usage = func() {
@@ -52,6 +53,9 @@ func run() int {
 
 	// Bind the listener up front so we know the final address (and can fall
 	// back to an ephemeral port if the preferred one is taken).
+	// Доступ по сети включается настройкой, а не ключом командной строки:
+	// подруге на другом конце города терминал открывать незачем.
+	addr = srv.ListenAddr(addr, defaultAddr)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		host, _, _ := net.SplitHostPort(addr)
