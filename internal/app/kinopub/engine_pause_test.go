@@ -2,6 +2,8 @@ package kinopub
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -371,5 +373,92 @@ func TestRunHLS_PausedQueuedEpisodeHoldsNoSlot(t *testing.T) {
 	case <-g.started[k2]:
 		t.Fatal("поставленная на паузу серия всё равно началась")
 	case <-time.After(700 * time.Millisecond):
+	}
+}
+
+// gatedMuxer блокирует склейку, пока её не отпустят: так отмену можно послать
+// ровно в тот момент, когда скачивание уже кончилось.
+type gatedMuxer struct {
+	mockDownloader
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *gatedMuxer) MuxHLS(ctx context.Context, _ domain.Job, _ *domain.HLSDownloadResult) error {
+	select {
+	case m.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-m.release:
+	case <-ctx.Done():
+	}
+	return ctx.Err()
+}
+
+// Отмена на СКЛЕЙКЕ не должна стирать скачанные сегменты: скачаны они все, это
+// часы работы, и повтор обязан начаться со склейки, а не с нуля. Отмена во
+// время скачивания по-прежнему уносит недокачанное с собой.
+func TestRunHLS_CancelDuringMuxKeepsSegments(t *testing.T) {
+	root := t.TempDir()
+	out := filepath.Join(root, "Сериал", "Season 01", "S01E01.mkv")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	segDir := domain.WorkPathFor(root, root, out) + ".ts.hls-tmp"
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	k1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	g := newGatedHLS(k1)
+	mux := &gatedMuxer{started: make(chan struct{}, 1), release: make(chan struct{})}
+	rec := &recordingReporter{}
+	cancel := make(chan domain.EpisodeKey, 4)
+	e := &engine{
+		deps: Dependencies{
+			Logger:           &mockLogger{},
+			Scheduler:        &mockScheduler{},
+			Downloader:       mux,
+			ProxyProvider:    &mockProxyProvider{},
+			ProgressReporter: rec,
+			StateStore:       &mockStateStore{},
+			OutputLayout:     &mockOutputLayout{path: out},
+			HLSDownloader:    g,
+			PageScraper:      &fakePageScraper{playlist: makePlaylist(1)},
+			CancelRequests:   cancel,
+		},
+		retryBackoff: func(int) time.Duration { return 0 },
+	}
+
+	cfg := retryTestConfig()
+	cfg.OutputPath = root
+	cfg.WorkPath = root
+	cfg.MaxConcurrency = 1
+	done := make(chan struct{})
+	go func() { _, _ = e.runHLS(context.Background(), cfg); close(done) }()
+
+	select {
+	case <-g.started[k1]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("скачивание не началось")
+	}
+	close(g.release[k1]) // скачивание закончено — дальше склейка
+	select {
+	case <-mux.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("склейка не началась")
+	}
+
+	cancel <- k1
+	close(mux.release)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("запуск не завершился")
+	}
+
+	if _, err := os.Stat(segDir); err != nil {
+		t.Errorf("сегменты стёрты отменой на склейке: %v", err)
 	}
 }

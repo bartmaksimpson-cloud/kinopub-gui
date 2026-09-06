@@ -272,7 +272,22 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// cancel removes the episode from the run for good — its row leaves the card
 	// too — so keeping the .hls-tmp would strand gigabytes with nothing left
 	// pointing at them. (A PAUSE is the opposite: there the data is the point.)
+	// muxing отмечает серии, у которых скачивание уже ЗАКОНЧИЛОСЬ и идёт
+	// склейка. Отмена на этой стадии не должна стирать сегменты: скачаны все,
+	// это часы работы, а отменяют обычно саму склейку — и человек справедливо
+	// ждёт, что повтор начнётся с неё, а не с нуля.
+	muxing := map[string]bool{}
 	dropCanceledTemp := func(ep domain.Episode) {
+		ks := episodeKeyStr(ep.Key)
+		mu.Lock()
+		keep := muxing[ks]
+		mu.Unlock()
+		if keep {
+			log.Info("отмена на склейке: скачанное оставляю на диске",
+				domain.F("episode", fmt.Sprintf("S%02dE%02d", ep.Key.Season, ep.Key.Episode)),
+			)
+			return
+		}
 		if outPath, err := e.deps.OutputLayout.EpisodePath(cfg.OutputPath, series, ep); err == nil {
 			os.RemoveAll(domain.WorkPathFor(cfg.WorkPath, cfg.OutputPath, outPath) + ".ts.hls-tmp")
 		}
@@ -344,7 +359,16 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		epCancels[ks] = epCancel
 		mu.Unlock()
 
-		res, err := e.attemptHLSEpisode(epCtx, cfg, series, pe.ep, pe.manifest, posterPath)
+		markMuxing := func(on bool) {
+			mu.Lock()
+			if on {
+				muxing[episodeKeyStr(pe.ep.Key)] = true
+			} else {
+				delete(muxing, episodeKeyStr(pe.ep.Key))
+			}
+			mu.Unlock()
+		}
+		res, err := e.attemptHLSEpisode(epCtx, cfg, series, pe.ep, pe.manifest, posterPath, markMuxing)
 
 		mu.Lock()
 		delete(epCancels, ks)
@@ -1008,6 +1032,9 @@ func (e *engine) attemptHLSEpisode(
 	ep domain.Episode,
 	manifestURL string,
 	posterPath string,
+	// markMuxing сообщает наружу, что скачивание кончилось и пошла склейка:
+	// отмена на этой стадии не должна стирать скачанные сегменты.
+	markMuxing func(bool),
 ) (episodeOutcome, error) {
 	log := e.deps.Logger.Component("engine-hls")
 	epLabel := fmt.Sprintf("S%02dE%02d", ep.Key.Season, ep.Key.Episode)
@@ -1042,6 +1069,10 @@ func (e *engine) attemptHLSEpisode(
 	}
 
 	// Mux downloaded video + audio streams into the final container.
+	if markMuxing != nil {
+		markMuxing(true)
+		defer markMuxing(false)
+	}
 	log.Info("muxing",
 		domain.F("episode", epLabel),
 		domain.F("quality", fmt.Sprintf("%s @ %d kbps", hlsResult.Resolution, hlsResult.BitrateKbps)),
