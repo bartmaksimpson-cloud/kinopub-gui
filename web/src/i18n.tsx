@@ -347,6 +347,7 @@ const RU: Record<string, string> = {
   "Choose a folder": "Выбор папки",
   "Parent folder": "Родительская папка",
   "Files download into this folder.": "Файлы скачиваются в эту папку.",
+  "highest available": "максимум доступного",
   free: "свободно",
   "Use this folder": "Выбрать эту папку",
   "No sub-folders here.": "Здесь нет подпапок.",

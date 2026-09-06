@@ -112,6 +112,12 @@ export function TitleDetail({
   // "" means auto — the first variant, since they arrive highest-first with HEVC
   // ahead of H.264 at the same height.
   const chosen = variants.find((v) => `${v.quality}|${v.codec}` === variantKey);
+  // Что спросить у сервиса. Меню показывает variantKey, а не quality: пока его
+  // не трогали, quality хранит качество ИЗ НАСТРОЕК, и «Авто (максимум)» на
+  // экране молча качало 1080p. Спрашиваем ровно то, что видно на экране.
+  // Пустая строка движку означает «оптимальное» (те же 1080p), поэтому автовыбор
+  // передаётся как "max" — максимум из того, что есть у КАЖДОЙ серии.
+  const requestedQuality = variants.length ? (chosen ? chosen.quality : "max") : quality || "max";
   // On auto the menu made no codec choice, so the global preference decides.
   const wantHEVC = chosen ? chosen.codec === "hevc" : settings.transcodeHevc;
   // A season is not always encoded uniformly: the chosen variant may cover only
@@ -306,7 +312,7 @@ export function TitleDetail({
     let alive = true;
     const first = detail.seasons?.[0]?.episodes?.[0];
     api
-      .audios(id, first?.season, first?.episode, quality)
+      .audios(id, first?.season, first?.episode, requestedQuality)
       .then((r) => {
         if (alive && r.audios && r.audios.length) setMfAudios(r.audios);
       })
@@ -316,7 +322,7 @@ export function TitleDetail({
     return () => {
       alive = false;
     };
-  }, [detail, id, quality]);
+  }, [detail, id, requestedQuality]);
 
   // Одна форма для обоих источников, чтобы ниже ничего не раздваивать. Имя
   // дорожки очищается от ведущего номера («01. MTV (RUS)» → «MTV (RUS)»): в
@@ -491,7 +497,7 @@ export function TitleDetail({
       await api.startJob({
         url: detail.itemUrl,
         outputPath: settings.outputPath,
-        quality,
+        quality: requestedQuality,
         container: settings.container,
         proxy: settings.proxy,
         seasons: "",

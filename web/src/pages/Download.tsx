@@ -156,6 +156,9 @@ export function DownloadPage({ onSignIn }: { onSignIn: () => void }) {
       await api.startJob({
         ...form,
         dryRun: false,
+        // «Авто (максимум)» — это максимум, а не «оптимальное»: пустая строка
+        // движку означает 1080p-компромисс, и подпись в меню врала.
+        quality: form.quality || "max",
         // Guard the flag the same way the checkbox is gated, so lowering the
         // quality after ticking it cannot start a pointless re-encode.
         transcodeHevc: may4K && form.transcodeHevc,

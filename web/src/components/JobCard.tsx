@@ -528,7 +528,8 @@ export function JobCard({ job }: { job: JobView }) {
   if (job.quality) {
     facts.push(
       <span key="quality" className="inline-flex items-center gap-1.5">
-        <MonitorPlay className="h-3.5 w-3.5 text-slate-500" /> {job.quality}
+        <MonitorPlay className="h-3.5 w-3.5 text-slate-500" />{" "}
+        {job.quality === "max" ? t("highest available") : job.quality}
       </span>,
     );
   }
