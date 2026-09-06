@@ -27,7 +27,11 @@ import { bytes, eta, relTime, speed } from "../lib/format";
 import { hasOtherActiveJob } from "../lib/queue";
 import { PosterImage, ProgressBar } from "./ui";
 
-function StatusBadge({ status }: { status: JobView["status"] }) {
+// failed — сколько серий не скачалось. Задача с провалившимися сериями НЕ
+// «Готово»: движок считает запуск завершённым, пока уцелела хоть одна серия, и
+// зелёная плашка над «13 из 33» читалась как «сериал скачан», хотя двадцати
+// серий не было.
+function StatusBadge({ status, failed = 0 }: { status: JobView["status"]; failed?: number }) {
   const { t } = useI18n();
   const map: Record<JobView["status"], { label: string; cls: string; icon: any; spin?: boolean }> = {
     queued: { label: "Queued", cls: "border-white/10 bg-white/[0.04] text-slate-400", icon: Clock },
@@ -38,7 +42,14 @@ function StatusBadge({ status }: { status: JobView["status"] }) {
     canceled: { label: "Canceled", cls: "border-white/10 bg-white/[0.04] text-slate-400", icon: Ban },
     paused: { label: "Paused", cls: "border-amber-500/30 bg-amber-500/10 text-amber-300", icon: Pause },
   };
-  const it = map[status];
+  const it =
+    status === "completed" && failed > 0
+      ? {
+          label: "Done with errors",
+          cls: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+          icon: AlertTriangle,
+        }
+      : map[status];
   return (
     <span className={clsx("chip", it.cls)}>
       <it.icon className={clsx("h-3.5 w-3.5", it.spin && "animate-spin")} />
@@ -581,7 +592,7 @@ export function JobCard({ job }: { job: JobView }) {
                 <span className="chip shrink-0 border-sky-500/25 bg-sky-500/10 text-sky-300">{t("dry-run")}</span>
               )}
             </div>
-            <StatusBadge status={job.status} />
+            <StatusBadge status={job.status} failed={job.summary?.failed ?? 0} />
           </div>
 
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-400">

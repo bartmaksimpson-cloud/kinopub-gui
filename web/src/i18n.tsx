@@ -140,6 +140,7 @@ const RU: Record<string, string> = {
   Resolving: "Получение",
   Downloading: "Загрузка",
   Completed: "Готово",
+  "Done with errors": "Готово с ошибками",
   Failed: "Ошибка",
   Canceled: "Отменено",
   Paused: "На паузе",
