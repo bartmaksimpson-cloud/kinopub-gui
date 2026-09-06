@@ -70,6 +70,15 @@ func hevcEncoderArgs(ffmpegPath string) []string {
 // the whole episode with it. One second of black here is the cheapest possible
 // answer to "does this actually run on THIS computer".
 func encoderOpens(ffmpegPath, name string) bool {
+	return encoderOpensDepth(ffmpegPath, name, false)
+}
+
+// encoderOpensDepth is the same probe with the pixel format pinned. Спрашивать
+// про 10 бит отдельно приходится потому, что «умеет HEVC» и «умеет HEVC в
+// 10 бит» — разные вещи: блок VCN 1.0 в Vega кодирует только 8 бит, и без
+// такой пробы ffmpeg молча опустил бы 10-битный исходник до восьми. В тёмных
+// сценах это видно сразу — плавные переходы распадаются на ступени.
+func encoderOpensDepth(ffmpegPath, name string, tenBit bool) bool {
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
@@ -78,11 +87,18 @@ func encoderOpens(ffmpegPath, name string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, ffmpegPath, "-hide_banner", "-loglevel", "error",
-		"-f", "lavfi", "-i", "color=c=black:s=256x256:r=25:d=0.2",
-		"-c:v", name, "-f", "null", "-")
-	return cmd.Run() == nil
+	args := []string{"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "color=c=black:s=256x256:r=25:d=0.2"}
+	if tenBit {
+		args = append(args, "-pix_fmt", tenBitPixFmt)
+	}
+	args = append(args, "-c:v", name, "-f", "null", "-")
+	return exec.CommandContext(ctx, ffmpegPath, args...).Run() == nil
 }
+
+// tenBitPixFmt is the depth worth keeping: 10 бит на канал, планарный 4:2:0 —
+// то, в чём выпускают 4K HEVC именно ради плавных градиентов.
+const tenBitPixFmt = "yuv420p10le"
 
 // scaleToHeightArgs returns the ffmpeg arguments that shrink a frame taller than
 // maxHeight down to it. Nil when nothing needs shrinking, so a file that already
@@ -115,6 +131,10 @@ type fitSource struct {
 	// high frame rate is a problem at all: hardware decoders budget AVC and HEVC
 	// separately, and the AVC budget is the small one.
 	Codec string
+	// TenBit marks a source with ten bits per channel. Пересжатие такого
+	// материала в восемь бит рассыпает плавные переходы на ступени — заметнее
+	// всего в тёмных сценах, где уровней и так мало.
+	TenBit bool
 	// Interlaced marks a source made of half-frames from two different moments.
 	// На прогрессивном экране такой кадр показывается «гребёнкой» по краям
 	// движущихся объектов, и починить это можно только собрав кадры заново —
@@ -244,7 +264,7 @@ func fitArgsFor(src fitSource, lim fitLimits, ffmpegPath string) []string {
 	if rate > 0 {
 		args = append(args, "-r", strconv.FormatFloat(rate, 'f', -1, 64))
 	}
-	return append(args, fitEncoderArgs(ffmpegPath, src.Kbps)...)
+	return append(args, fitEncoderArgs(ffmpegPath, src.Kbps, src.TenBit)...)
 }
 
 // fitEncoders, in the order that gets a playable file soonest.
@@ -267,6 +287,9 @@ var fitEncoders = []string{
 var (
 	fitOnce        sync.Once
 	fitEncoderName string
+
+	fitOnce10        sync.Once
+	fitEncoderName10 string
 )
 
 // pickFitEncoder returns the first encoder in fitEncoders that this ffmpeg has
@@ -282,6 +305,22 @@ func pickFitEncoder(ffmpegPath string) string {
 		}
 	})
 	return fitEncoderName
+}
+
+// pickFitEncoder10 is the same choice among encoders that open in 10 bits.
+// Пустая строка означает, что таких на этой машине нет — тогда глубину
+// приходится терять, и об этом говорится вслух, а не молча.
+func pickFitEncoder10(ffmpegPath string) string {
+	fitOnce10.Do(func() {
+		available := listEncoders(ffmpegPath, fitEncoders)
+		for _, name := range fitEncoders {
+			if available[name] && encoderOpensDepth(ffmpegPath, name, true) {
+				fitEncoderName10 = name
+				return
+			}
+		}
+	})
+	return fitEncoderName10
 }
 
 // EncoderStatus is one candidate encoder as this machine sees it: whether this
@@ -318,12 +357,25 @@ func ProbeEncoders(ffmpegPath string) []EncoderStatus {
 // fitEncoderArgs encodes at the source bitrate: the same budget now covers
 // fewer pixels (or fewer frames) in a codec at least as efficient, which is what
 // keeps the picture. kbps 0 falls back to the HEVC quality preset.
-func fitEncoderArgs(ffmpegPath string, kbps int) []string {
+func fitEncoderArgs(ffmpegPath string, kbps int, tenBit bool) []string {
 	name := pickFitEncoder(ffmpegPath)
+	// Десять бит сохраняются, только если есть чем: у 10-битного исходника
+	// сжатие в 8 бит съедает плавные переходы в тенях, и полосы в тёмных
+	// сценах — уже наша работа, а не исходника. Если 10-битного кодировщика на
+	// машине нет, глубина теряется, но об этом хотя бы сказано в подписи.
+	keepDepth := false
+	if tenBit {
+		if n10 := pickFitEncoder10(ffmpegPath); n10 != "" {
+			name, keepDepth = n10, true
+		}
+	}
 	if name == "" || kbps <= 0 {
 		return hevcEncoderArgs(ffmpegPath)
 	}
 	args := []string{"-c:v", name, "-b:v", fmt.Sprintf("%dk", kbps)}
+	if keepDepth {
+		args = append(args, "-pix_fmt", tenBitPixFmt)
+	}
 	if strings.HasPrefix(name, "hevc") {
 		args = append(args, "-tag:v", "hvc1")
 	}

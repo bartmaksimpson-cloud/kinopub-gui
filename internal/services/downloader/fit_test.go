@@ -338,3 +338,58 @@ func TestFirstVideoFile(t *testing.T) {
 		t.Errorf("firstVideoFile(собранный файл) = %q", got)
 	}
 }
+
+// pinFitEncoder10 фиксирует выбор среди кодировщиков, открывающихся в 10 бит.
+func pinFitEncoder10(t *testing.T, name string) {
+	t.Helper()
+	fitOnce10.Do(func() {})
+	prev := fitEncoderName10
+	fitEncoderName10 = name
+	t.Cleanup(func() { fitEncoderName10 = prev })
+}
+
+// Десятибитный исходник не должен молча становиться восьмибитным: именно это
+// рассыпает плавные переходы на ступени в тёмных сценах.
+func TestFitArgsFor_KeepsTenBit(t *testing.T) {
+	pinFitEncoder(t, "hevc_amf")  // железный, но только 8 бит
+	pinFitEncoder10(t, "libx265") // 10 бит умеет только программный
+	hls := &domain.HLSDownloadResult{Resolution: "3840x2880"}
+
+	fit := fitArgsFor(
+		fitSource{Width: 3840, Height: 2880, Kbps: 20000, TenBit: true},
+		fitLimits{Width: 4096, Height: 2160},
+		"ffmpeg",
+	)
+	joined := strings.Join(fit, " ")
+	if !strings.Contains(joined, "-c:v libx265") {
+		t.Errorf("для 10 бит выбран не тот кодировщик: %q", joined)
+	}
+	if !strings.Contains(joined, "-pix_fmt yuv420p10le") {
+		t.Errorf("разрядность не закреплена, ffmpeg опустит её до восьми: %q", joined)
+	}
+	if got := describeFit(fit, hls); !strings.Contains(got, "10 бит") {
+		t.Errorf("подпись = %q, ожидалось упоминание разрядности", got)
+	}
+
+	// Восьмибитный исходник идёт прежним путём — через железо и без флага.
+	eight := strings.Join(fitArgsFor(
+		fitSource{Width: 3840, Height: 2880, Kbps: 20000},
+		fitLimits{Width: 4096, Height: 2160},
+		"ffmpeg",
+	), " ")
+	if !strings.Contains(eight, "-c:v hevc_amf") || strings.Contains(eight, "-pix_fmt") {
+		t.Errorf("8-битный исходник: %q", eight)
+	}
+
+	// 10-битного кодировщика на машине нет — глубина теряется, но выбор
+	// остаётся рабочим, а не пустым.
+	pinFitEncoder10(t, "")
+	fallback := strings.Join(fitArgsFor(
+		fitSource{Width: 3840, Height: 2880, Kbps: 20000, TenBit: true},
+		fitLimits{Width: 4096, Height: 2160},
+		"ffmpeg",
+	), " ")
+	if !strings.Contains(fallback, "-c:v hevc_amf") || strings.Contains(fallback, "-pix_fmt") {
+		t.Errorf("без 10-битного кодировщика ожидался прежний путь: %q", fallback)
+	}
+}

@@ -68,3 +68,30 @@ func firstVideoFile(hls *domain.HLSDownloadResult) string {
 	}
 	return hls.VideoPath
 }
+
+// isTenBitFile reports whether the video in path carries ten bits per channel.
+//
+// Спрашивается у самого файла по той же причине, что и чересстрочность: в
+// плейлисте этого нет, а от ответа зависит, каким кодировщиком его пересжимать.
+// Неудача чтения — «восемь бит»: это возвращает прежнее поведение, а не
+// придумывает новое.
+func isTenBitFile(ffmpegPath, path string) bool {
+	if path == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffprobeNear(ffmpegPath),
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=pix_fmt",
+		"-of", "default=nw=1:nk=1",
+		path,
+	).Output()
+	if err != nil {
+		return false
+	}
+	// yuv420p10le, yuv422p10le, p010le… — всё, что несёт «10» в названии
+	// формата, и есть десятибитное.
+	return strings.Contains(strings.ToLower(strings.TrimSpace(string(out))), "10")
+}

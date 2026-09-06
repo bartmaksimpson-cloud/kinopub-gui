@@ -144,10 +144,10 @@ func WithMaxFPS(f float64) Option {
 // fitArgs are the arguments that bring one source inside what a player can
 // decode, or nil when it already fits. resolution and fps come from the master
 // playlist; srcKbps is the bitrate to carry over, 0 when unknown.
-func (d *Downloader) fitArgs(resolution string, fps float64, srcKbps int, codec string, interlaced bool) []string {
+func (d *Downloader) fitArgs(resolution string, fps float64, srcKbps int, codec string, interlaced, tenBit bool) []string {
 	w, h := sizeOf(resolution)
 	return fitArgsFor(
-		fitSource{Width: w, Height: h, FPS: fps, Kbps: srcKbps, Codec: codec, Interlaced: interlaced},
+		fitSource{Width: w, Height: h, FPS: fps, Kbps: srcKbps, Codec: codec, Interlaced: interlaced, TenBit: tenBit},
 		fitLimits{Width: d.maxWidth, Height: d.maxHeight, FPS: d.maxFPS},
 		d.ffmpegPath,
 	)
@@ -160,7 +160,7 @@ func (d *Downloader) effectiveArgs(job domain.Job) []string {
 	var args []string
 	// Прогрессивный путь без HLS: чересстрочность здесь не проверяется — файла
 	// на диске в этот момент ещё нет, проверять нечего.
-	if fit := d.fitArgs(job.Media.Video.Resolution, 0, job.Media.Video.BitRate, job.Media.Source.Codec, false); len(fit) > 0 {
+	if fit := d.fitArgs(job.Media.Video.Resolution, 0, job.Media.Video.BitRate, job.Media.Source.Codec, false, false); len(fit) > 0 {
 		// Scaling re-encodes anyway, and it encodes to HEVC — adding the HEVC
 		// preset on top would only repeat the same options.
 		args = append(args, fit...)
@@ -335,13 +335,15 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 	// Чересстрочность нигде не объявлена — ни в плейлисте, ни в ярлыке
 	// качества, — поэтому читается из первого уже скачанного сегмента. Проверка
 	// локальная и стоит доли секунды.
-	interlaced := isInterlacedFile(d.ffmpegPath, firstVideoFile(hls))
+	probeFile := firstVideoFile(hls)
+	interlaced := isInterlacedFile(d.ffmpegPath, probeFile)
+	tenBit := isTenBitFile(d.ffmpegPath, probeFile)
 	if interlaced {
 		d.logger.Info("источник чересстрочный, собираю кадры при склейке",
 			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
 		)
 	}
-	fit := d.fitArgs(hls.Resolution, hls.FrameRate, hls.BitrateKbps, hls.Codec, interlaced)
+	fit := d.fitArgs(hls.Resolution, hls.FrameRate, hls.BitrateKbps, hls.Codec, interlaced, tenBit)
 	if len(fit) > 0 {
 		d.logger.Info("source beyond what a player decodes, fitting while muxing",
 			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
@@ -817,6 +819,14 @@ func describeFit(fit []string, hls *domain.HLSDownloadResult) string {
 	// этому нет.
 	if hasFilter(fit, "bwdif") {
 		parts = append(parts, "деинтерлейс")
+	}
+	// Разрядность в подписи потому, что её потеря — это и есть ступени в
+	// тенях: видно на экране, а причина иначе нигде не названа.
+	for i := 0; i < len(fit)-1; i++ {
+		if fit[i] == "-pix_fmt" && strings.Contains(fit[i+1], "10") {
+			parts = append(parts, "10 бит")
+			break
+		}
 	}
 	if height != "" {
 		if res := fitResolution(fit, hls); res != "" {
