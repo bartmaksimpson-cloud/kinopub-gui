@@ -2,8 +2,11 @@ package downloader
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ZioSHik/kinopub-gui/internal/domain"
 )
 
 // pinFitEncoder фиксирует выбранный кодировщик на время теста. Без этого тесты
@@ -246,5 +249,92 @@ func TestFitBox(t *testing.T) {
 			t.Errorf("%s: fitBox(%d,%d,%d,%d) = %dx%d ok=%v, ожидалось %dx%d ok=%v",
 				c.name, c.srcW, c.srcH, c.maxW, c.maxH, w, h, ok, c.wantW, c.wantH, c.wantOK)
 		}
+	}
+}
+
+// Чересстрочный источник: кадр по размеру проходит, а показывать его как есть
+// нельзя — гребёнка на движении. Собираем кадры заново, деинтерлейс идёт до
+// масштабирования, и это уже не копия, а перекодирование.
+func TestFitArgsFor_Interlaced(t *testing.T) {
+	pinFitEncoder(t, "h264_nvenc")
+
+	fits := fitArgsFor(
+		fitSource{Width: 1920, Height: 1080, FPS: 25, Kbps: 8000, Interlaced: true},
+		fitLimits{Width: 4096, Height: 2160, FPS: 30},
+		"ffmpeg",
+	)
+	joined := strings.Join(fits, " ")
+	if !strings.Contains(joined, "-vf bwdif=mode=send_frame") {
+		t.Errorf("нет деинтерлейса: %q", joined)
+	}
+	if !strings.Contains(joined, "-c:v") {
+		t.Errorf("деинтерлейс без кодировщика — копией это уже не будет: %q", joined)
+	}
+	if strings.Contains(joined, "scale=") {
+		t.Errorf("кадр 1080 масштабировать не нужно: %q", joined)
+	}
+
+	// Вместе с масштабированием: деинтерлейс ПЕРВЫМ, иначе гребёнка
+	// размазывается по кадру и собрать её обратно нечем.
+	both := strings.Join(fitArgsFor(
+		fitSource{Width: 3840, Height: 2880, Kbps: 20000, Interlaced: true},
+		fitLimits{Width: 4096, Height: 2160},
+		"ffmpeg",
+	), " ")
+	if !strings.Contains(both, "-vf bwdif=mode=send_frame,scale=2880:2160") {
+		t.Errorf("порядок фильтров неверен: %q", both)
+	}
+
+	// Прогрессивный источник того же размера не трогаем вовсе.
+	if got := fitArgsFor(
+		fitSource{Width: 1920, Height: 1080, FPS: 25, Kbps: 8000},
+		fitLimits{Width: 4096, Height: 2160, FPS: 30},
+		"ffmpeg",
+	); got != nil {
+		t.Errorf("прогрессивный 1080p трогать не надо, получено %v", got)
+	}
+}
+
+// Разбор цепочки фильтров: кадр читается и когда перед scale стоит деинтерлейс.
+func TestFitResolution_WithFilterChain(t *testing.T) {
+	hls := &domain.HLSDownloadResult{Resolution: "3840x2880"}
+	fit := []string{"-vf", "bwdif=mode=send_frame,scale=2880:2160", "-c:v", "libx264"}
+	if got := fitResolution(fit, hls); got != "2880x2160" {
+		t.Errorf("fitResolution = %q, ожидалось 2880x2160", got)
+	}
+	if got := describeFit(fit, hls); !strings.Contains(got, "деинтерлейс") || !strings.Contains(got, "2880x2160") {
+		t.Errorf("подпись = %q, ожидались и кадр, и деинтерлейс", got)
+	}
+	// Одинокий деинтерлейс без масштабирования: кадр не меняется, значит и
+	// записывать в библиотеку нечего.
+	if got := fitResolution([]string{"-vf", "bwdif=mode=send_frame", "-c:v", "libx264"}, hls); got != "" {
+		t.Errorf("без scale кадр не меняется, получено %q", got)
+	}
+}
+
+func TestFFprobeNear(t *testing.T) {
+	cases := map[string]string{
+		"ffmpeg":                  "ffprobe",
+		"":                        "ffprobe",
+		"/opt/bin/ffmpeg":         "/opt/bin/ffprobe",
+		`C:\tools\bin\ffmpeg.exe`: `C:\tools\bin\ffprobe.exe`,
+	}
+	for in, want := range cases {
+		if got := ffprobeNear(in); got != filepath.FromSlash(want) {
+			t.Errorf("ffprobeNear(%q) = %q, ожидалось %q", in, got, want)
+		}
+	}
+}
+
+// Первый сегмент для проверки — с картинкой: init.mp4 кадров не содержит и
+// ответил бы ни о чём.
+func TestFirstVideoFile(t *testing.T) {
+	parts := &domain.HLSDownloadResult{VideoParts: []string{"/tmp/v/init.mp4", "/tmp/v/seg_00001.ts"}}
+	if got := firstVideoFile(parts); got != "/tmp/v/seg_00001.ts" {
+		t.Errorf("firstVideoFile = %q, ожидался первый сегмент с картинкой", got)
+	}
+	joined := &domain.HLSDownloadResult{VideoPath: "/tmp/video.ts"}
+	if got := firstVideoFile(joined); got != "/tmp/video.ts" {
+		t.Errorf("firstVideoFile(собранный файл) = %q", got)
 	}
 }

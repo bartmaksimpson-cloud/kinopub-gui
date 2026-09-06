@@ -115,6 +115,11 @@ type fitSource struct {
 	// high frame rate is a problem at all: hardware decoders budget AVC and HEVC
 	// separately, and the AVC budget is the small one.
 	Codec string
+	// Interlaced marks a source made of half-frames from two different moments.
+	// На прогрессивном экране такой кадр показывается «гребёнкой» по краям
+	// движущихся объектов, и починить это можно только собрав кадры заново —
+	// то есть перекодированием, даже когда размер кадра в порядке.
+	Interlaced bool
 }
 
 // fitLimits is what the player can actually take. Width and Height are the
@@ -195,6 +200,14 @@ const hfrWidth = 1920
 // interpolated.
 func fitArgsFor(src fitSource, lim fitLimits, ffmpegPath string) []string {
 	var filters []string
+	// Деинтерлейс идёт ПЕРВЫМ: масштабировать полукадры — значит размазать
+	// гребёнку по всему кадру, после чего собрать её обратно уже нечем.
+	// send_frame отдаёт один кадр на пару полукадров (50i → 25p): исходная
+	// плавность сохраняется, а частота не удваивается — удвоение как раз и
+	// упирается в то, чего телевизор не тянет на большом кадре.
+	if src.Interlaced {
+		filters = append(filters, "bwdif=mode=send_frame")
+	}
 	if w, h, ok := fitBox(src.Width, src.Height, lim.Width, lim.Height); ok {
 		filters = append(filters, fmt.Sprintf("scale=%d:%d", w, h))
 	} else if lim.Height > 0 && src.Height > lim.Height {

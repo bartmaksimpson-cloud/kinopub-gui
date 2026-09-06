@@ -144,10 +144,10 @@ func WithMaxFPS(f float64) Option {
 // fitArgs are the arguments that bring one source inside what a player can
 // decode, or nil when it already fits. resolution and fps come from the master
 // playlist; srcKbps is the bitrate to carry over, 0 when unknown.
-func (d *Downloader) fitArgs(resolution string, fps float64, srcKbps int, codec string) []string {
+func (d *Downloader) fitArgs(resolution string, fps float64, srcKbps int, codec string, interlaced bool) []string {
 	w, h := sizeOf(resolution)
 	return fitArgsFor(
-		fitSource{Width: w, Height: h, FPS: fps, Kbps: srcKbps, Codec: codec},
+		fitSource{Width: w, Height: h, FPS: fps, Kbps: srcKbps, Codec: codec, Interlaced: interlaced},
 		fitLimits{Width: d.maxWidth, Height: d.maxHeight, FPS: d.maxFPS},
 		d.ffmpegPath,
 	)
@@ -158,7 +158,9 @@ func (d *Downloader) fitArgs(resolution string, fps float64, srcKbps int, codec 
 // they can still override it.
 func (d *Downloader) effectiveArgs(job domain.Job) []string {
 	var args []string
-	if fit := d.fitArgs(job.Media.Video.Resolution, 0, job.Media.Video.BitRate, job.Media.Source.Codec); len(fit) > 0 {
+	// Прогрессивный путь без HLS: чересстрочность здесь не проверяется — файла
+	// на диске в этот момент ещё нет, проверять нечего.
+	if fit := d.fitArgs(job.Media.Video.Resolution, 0, job.Media.Video.BitRate, job.Media.Source.Codec, false); len(fit) > 0 {
 		// Scaling re-encodes anyway, and it encodes to HEVC — adding the HEVC
 		// preset on top would only repeat the same options.
 		args = append(args, fit...)
@@ -330,7 +332,16 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 	tempPath := job.OutPath + ".tmp"
 	// The master playlist already told us the frame size, so a source over the
 	// height cap is scaled here, in the pass that runs anyway.
-	fit := d.fitArgs(hls.Resolution, hls.FrameRate, hls.BitrateKbps, hls.Codec)
+	// Чересстрочность нигде не объявлена — ни в плейлисте, ни в ярлыке
+	// качества, — поэтому читается из первого уже скачанного сегмента. Проверка
+	// локальная и стоит доли секунды.
+	interlaced := isInterlacedFile(d.ffmpegPath, firstVideoFile(hls))
+	if interlaced {
+		d.logger.Info("источник чересстрочный, собираю кадры при склейке",
+			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
+		)
+	}
+	fit := d.fitArgs(hls.Resolution, hls.FrameRate, hls.BitrateKbps, hls.Codec, interlaced)
 	if len(fit) > 0 {
 		d.logger.Info("source beyond what a player decodes, fitting while muxing",
 			domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
@@ -718,11 +729,9 @@ func estimateDuration(job domain.Job) time.Duration {
 // stayed "3840x2314" in the list while the file on disk was 3584x2160 — exactly
 // the number a person checks to know whether the TV will play it.
 func fitResolution(fit []string, hls *domain.HLSDownloadResult) string {
-	for i := 0; i < len(fit)-1; i++ {
-		if fit[i] != "-vf" {
-			continue
-		}
-		width, height, ok := strings.Cut(strings.TrimPrefix(fit[i+1], "scale="), ":")
+	spec, ok := scaleSpec(fit)
+	if ok {
+		width, height, ok := strings.Cut(spec, ":")
 		if !ok {
 			return ""
 		}
@@ -744,15 +753,49 @@ func fitResolution(fit []string, hls *domain.HLSDownloadResult) string {
 	return ""
 }
 
+// scaleSpec pulls the "W:H" out of the -vf chain, which is not always a lone
+// scale: деинтерлейс встаёт перед ним в ту же цепочку, и разбирать её как одну
+// строку «scale=…» перестало быть можно.
+func scaleSpec(fit []string) (string, bool) {
+	for i := 0; i < len(fit)-1; i++ {
+		if fit[i] != "-vf" {
+			continue
+		}
+		for _, part := range strings.Split(fit[i+1], ",") {
+			if spec, ok := strings.CutPrefix(strings.TrimSpace(part), "scale="); ok {
+				return spec, true
+			}
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// hasFilter reports whether the -vf chain contains a filter by name.
+func hasFilter(fit []string, name string) bool {
+	for i := 0; i < len(fit)-1; i++ {
+		if fit[i] != "-vf" {
+			continue
+		}
+		for _, part := range strings.Split(fit[i+1], ",") {
+			if strings.HasPrefix(strings.TrimSpace(part), name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func describeFit(fit []string, hls *domain.HLSDownloadResult) string {
 	var parts []string
 	height := ""
+	if spec, ok := scaleSpec(fit); ok {
+		if _, h, ok := strings.Cut(spec, ":"); ok {
+			height = h
+		}
+	}
 	for i := 0; i < len(fit)-1; i++ {
 		switch fit[i] {
-		case "-vf":
-			if _, h, ok := strings.Cut(fit[i+1], ":"); ok {
-				height = h
-			}
 		case "-c:v":
 			name := fit[i+1]
 			switch {
@@ -768,6 +811,12 @@ func describeFit(fit []string, hls *domain.HLSDownloadResult) string {
 		case "-b:v":
 			parts = append(parts, strings.TrimSuffix(fit[i+1], "k")+" kbps")
 		}
+	}
+	// Деинтерлейс называется вслух: без него человек видит на карточке
+	// перекодирование там, где кадр и так по размеру подходит, и объяснения
+	// этому нет.
+	if hasFilter(fit, "bwdif") {
+		parts = append(parts, "деинтерлейс")
 	}
 	if height != "" {
 		if res := fitResolution(fit, hls); res != "" {
