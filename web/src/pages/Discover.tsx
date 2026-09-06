@@ -22,6 +22,15 @@ import {
 // Watching.tsx, Bookmarks.tsx, History.tsx), which leaves the Catalog with one
 // job: find a title in kino.watch's library, by query or by filter.
 
+// Чем каталог был занят в последний раз. Обычная переменная модуля, а не
+// состояние: её работа — пережить размонтирование страницы, в перерисовке она
+// не участвует. Живёт до перезагрузки приложения.
+let lastView: { search: string; committed: string; filter: FilterState } = {
+  search: "",
+  committed: "",
+  filter: defaultFilter(),
+};
+
 function filterToQuery(f: FilterState): ItemsQuery {
   // The category fixes the content type (and, for Anime/Sport, a spanning genre);
   // within a type category the user's chosen sub-genre wins.
@@ -59,9 +68,11 @@ export function DiscoverPage({
   // it survives a reload and browser back/forward.
   const detailId = useRoute().itemId ?? null;
 
-  // Live search (debounced).
-  const [search, setSearch] = useState("");
-  const [committedSearch, setCommittedSearch] = useState("");
+  // Live search (debounced). Начальное значение — то, с чем страницу оставили:
+  // уход в «Очередь» и обратно размонтирует каталог, и без этого набранный
+  // запрос пропадал вместе с найденным (сетку возвращает снимок в usePaged).
+  const [search, setSearch] = useState(() => lastView.search);
+  const [committedSearch, setCommittedSearch] = useState(() => lastView.committed);
   useEffect(() => {
     const q = search.trim();
     const id = window.setTimeout(() => setCommittedSearch(q.length >= 2 ? q : ""), 350);
@@ -69,12 +80,16 @@ export function DiscoverPage({
   }, [search]);
 
   // Filter (debounced so dragging sliders doesn't spam the API).
-  const [filter, setFilter] = useState<FilterState>(defaultFilter);
-  const [debFilter, setDebFilter] = useState<FilterState>(filter);
+  const [filter, setFilter] = useState<FilterState>(() => lastView.filter);
+  const [debFilter, setDebFilter] = useState<FilterState>(() => lastView.filter);
   useEffect(() => {
     const id = window.setTimeout(() => setDebFilter(filter), 400);
     return () => window.clearTimeout(id);
   }, [filter]);
+
+  useEffect(() => {
+    lastView = { search, committed: committedSearch, filter: debFilter };
+  }, [search, committedSearch, debFilter]);
 
   const [genres, setGenres] = useState<NamedRef[]>([]);
 
@@ -112,6 +127,8 @@ export function DiscoverPage({
     sourceKey,
     load,
     onAppendError: (m) => toast(m || t("Catalog request failed"), "error"),
+    // Возврат в каталог показывает то же, что человек оставил, без запроса.
+    cache: "discover",
   });
 
   // Picking a category (the catalog's spine) clears any sub-genre, since genres

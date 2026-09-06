@@ -8,6 +8,19 @@ import { isNavigationAbort } from "./api";
 // (a toast, since results are already on screen). usePaged owns that loop once so
 // the pages stay about layout.
 
+// Снимок последнего показанного списка на страницу-«владельца» (ключ cache).
+// Каталог размонтируется при переходе в другой раздел, и без этого возвращение
+// к нему стирало найденное: поиск сбрасывался, сетка уезжала на первую
+// страницу. Хранится ровно один снимок на владельца и только для последнего
+// источника — это память о том, что человек только что смотрел, а не кэш.
+interface Snapshot {
+  key: string;
+  items: unknown[];
+  page: number;
+  hasMore: boolean;
+}
+const snapshots = new Map<string, Snapshot>();
+
 /** A page of results, as every list endpoint returns it. */
 export interface PagedResult<T> {
   items: T[];
@@ -35,6 +48,7 @@ export function usePaged<T>({
   sourceKey,
   load,
   onAppendError,
+  cache,
 }: {
   /** False parks the list empty — e.g. logged out, or another mode is showing. */
   enabled: boolean;
@@ -42,6 +56,12 @@ export function usePaged<T>({
   sourceKey: string;
   load: (page: number) => Promise<PagedResult<T>>;
   onAppendError?: (message: string) => void;
+  /**
+   * Имя владельца списка ("discover"). С ним показанное переживает уход на
+   * другую страницу и возвращается без повторного запроса. Без него — прежнее
+   * поведение: каждый заход грузит с первой страницы.
+   */
+  cache?: string;
 }): Paged<T> {
   const [items, setItems] = useState<T[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -65,9 +85,16 @@ export function usePaged<T>({
     try {
       const r = await load(next);
       if (seq !== seqRef.current) return;
-      setItems((prev) => (reset ? r.items : [...prev, ...r.items]));
+      const page = r.page || next;
+      setItems((prev) => {
+        const merged = reset ? r.items : [...prev, ...r.items];
+        // Запись идемпотентна, поэтому безопасна и при двойном вызове
+        // апдейтера в StrictMode: тот же ключ, те же элементы.
+        if (cache) snapshots.set(cache, { key: sourceKey, items: merged, page, hasMore: r.hasMore });
+        return merged;
+      });
       setHasMore(r.hasMore);
-      pageRef.current = r.page || next;
+      pageRef.current = page;
     } catch (e: any) {
       if (seq !== seqRef.current) return;
       // Leaving the page cancels its in-flight loads. That is not a failed load:
@@ -99,12 +126,22 @@ export function usePaged<T>({
   // keeps a stale list from flashing when the source comes back.
   useEffect(() => {
     seqRef.current++;
+    const snap = cache ? snapshots.get(cache) : undefined;
+    if (enabled && snap && snap.key === sourceKey) {
+      // Возврат на ту же страницу с тем же источником: показываем ровно то, что
+      // человек оставил, вместо мигания пустой сеткой и повторного запроса.
+      pageRef.current = snap.page;
+      setItems(snap.items as T[]);
+      setHasMore(snap.hasMore);
+      setError(false);
+      return;
+    }
     pageRef.current = 1;
     setItems([]);
     setHasMore(false);
     setError(false);
     if (enabled) loadRef.current(true);
-  }, [enabled, sourceKey]);
+  }, [enabled, sourceKey, cache]);
 
   // Infinite scroll. An IntersectionObserver only fires on an off→on-screen
   // transition, and a short page (wide collection cards, a folder with four

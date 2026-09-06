@@ -415,7 +415,12 @@ export function TitleDetail({
     ? nothingLeftToQueue(allEpKeys, downloaded, queuedKeys)
     : versions.length > 1
       ? chosenVersions.size > 0 &&
-        [...chosenVersions].every((n) => downloaded.has(epKey(1, n)) || queuedKeys.has(epKey(1, n)))
+        [...chosenVersions].every(
+          // Не queuedKeys: тот набор строится по сериям сезонов, а у фильма их
+          // нет — с ним кнопка после запуска молчала, и «в очереди — открыть»
+          // не появлялось вовсе. Очередь для фильма живёт только в coverage.
+          (n) => coverage.whole || isQueued(coverage, 1, n) || downloaded.has(epKey(1, n)),
+        )
       : coverage.whole || coverage.refs.size > 0 || downloaded.size > 0;
   // Which of the two it is, so the button can say the true one.
   const queuedSomething = isSerial ? queuedCount > 0 : coverage.whole || coverage.refs.size > 0;

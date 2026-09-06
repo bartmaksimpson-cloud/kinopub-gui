@@ -180,3 +180,43 @@ describe("usePaged", () => {
     expect(result.current.loading).toBe(false);
   });
 });
+
+describe("usePaged snapshot", () => {
+  it("возвращает показанное после ухода со страницы и не запрашивает заново", async () => {
+    const { asked, load } = counting(3);
+    const first = renderHook(() =>
+      usePaged({ enabled: true, sourceKey: "поиск", load, cache: "тест-каталог" }),
+    );
+    await waitFor(() => expect(first.result.current.items).toEqual(["p1"]));
+    await act(async () => first.result.current.loadMore());
+    await waitFor(() => expect(first.result.current.items).toEqual(["p1", "p2"]));
+    first.unmount();
+
+    // Возврат на ту же страницу с тем же источником: то же на экране, ни одного
+    // нового запроса — ровно то, чего не хватало каталогу.
+    const again = renderHook(() =>
+      usePaged({ enabled: true, sourceKey: "поиск", load, cache: "тест-каталог" }),
+    );
+    await waitFor(() => expect(again.result.current.items).toEqual(["p1", "p2"]));
+    expect(asked).toEqual([1, 2]);
+
+    // Другой источник снимок не подменяет: он грузится с первой страницы.
+    again.rerender();
+    const other = renderHook(() =>
+      usePaged({ enabled: true, sourceKey: "другой", load, cache: "тест-каталог" }),
+    );
+    await waitFor(() => expect(other.result.current.items).toEqual(["p1"]));
+    expect(asked).toEqual([1, 2, 1]);
+  });
+
+  it("без имени владельца ведёт себя по-старому — грузит заново", async () => {
+    const { asked, load } = counting(3);
+    const first = renderHook(() => usePaged({ enabled: true, sourceKey: "a", load }));
+    await waitFor(() => expect(first.result.current.items).toEqual(["p1"]));
+    first.unmount();
+
+    const again = renderHook(() => usePaged({ enabled: true, sourceKey: "a", load }));
+    await waitFor(() => expect(again.result.current.items).toEqual(["p1"]));
+    expect(asked).toEqual([1, 1]);
+  });
+});
