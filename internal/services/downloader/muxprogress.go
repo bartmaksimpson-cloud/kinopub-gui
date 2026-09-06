@@ -21,6 +21,8 @@ type muxProgress struct {
 	key      domain.EpisodeKey
 	phase    string
 	format   string
+	encoder  string
+	threads  int
 	duration time.Duration
 
 	pr   *io.PipeReader
@@ -28,11 +30,12 @@ type muxProgress struct {
 	done chan struct{}
 }
 
-func newMuxProgress(sink domain.EpisodeStageSink, key domain.EpisodeKey, phase, format string, duration time.Duration) *muxProgress {
+func newMuxProgress(sink domain.EpisodeStageSink, key domain.EpisodeKey, phase, format, encoder string, threads int, duration time.Duration) *muxProgress {
 	pr, pw := io.Pipe()
 	m := &muxProgress{
-		sink: sink, key: key, phase: phase, format: format, duration: duration,
-		pr: pr, pw: pw, done: make(chan struct{}),
+		sink: sink, key: key, phase: phase, format: format, encoder: encoder, threads: threads,
+		duration: duration,
+		pr:       pr, pw: pw, done: make(chan struct{}),
 	}
 	go m.parse()
 	return m
@@ -66,11 +69,17 @@ func (m *muxProgress) parse() {
 			continue
 		}
 		last = time.Now()
+		// Кодировщик и ядра повторяются в КАЖДОМ отчёте: карточка показывает
+		// последний, а не склеивает их между собой — без этого «NVENC · 8 ядер»
+		// жило ровно до первой строки прогресса и исчезало на все три часа
+		// перекодирования.
 		m.sink.EpisodeStage(m.key, domain.EpisodeStage{
-			Phase:  m.phase,
-			Format: m.format,
-			Done:   us / 1_000_000,
-			Total:  int64(m.duration / time.Second),
+			Phase:   m.phase,
+			Format:  m.format,
+			Encoder: m.encoder,
+			Threads: m.threads,
+			Done:    us / 1_000_000,
+			Total:   int64(m.duration / time.Second),
 		})
 	}
 }

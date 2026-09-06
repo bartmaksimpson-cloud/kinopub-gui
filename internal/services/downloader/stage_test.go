@@ -37,3 +37,19 @@ func TestDescribeFit_KeepsAspect(t *testing.T) {
 		t.Errorf("ширина посчитана неверно: %q", got)
 	}
 }
+
+// Кадр подогнанного файла записывается в библиотеку, поэтому размер должен
+// считаться из тех же аргументов, что ушли в ffmpeg, а не из исходника.
+func TestFitResolution(t *testing.T) {
+	hls := &domain.HLSDownloadResult{Resolution: "3840x2314"}
+	if got := fitResolution([]string{"-vf", "scale=-16:2160", "-c:v", "libx264"}, hls); got != "3584x2160" {
+		t.Errorf("fitResolution = %q, ожидалось 3584x2160", got)
+	}
+	// Подгонка только по кадрам в секунду картинку не масштабирует.
+	if got := fitResolution([]string{"-r", "30", "-c:v", "libx264"}, hls); got != "" {
+		t.Errorf("fitResolution без scale = %q, ожидалась пустая строка", got)
+	}
+	if got := fitResolution(nil, hls); got != "" {
+		t.Errorf("fitResolution(nil) = %q, ожидалась пустая строка", got)
+	}
+}

@@ -326,6 +326,10 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 			domain.F("source_fps", hls.FrameRate),
 			domain.F("max_height", d.maxHeight),
 			domain.F("max_fps", d.maxFPS),
+			// Кто именно кодирует — единственный ответ на вопрос «почему три
+			// часа»: железный кодировщик и libx264 отличаются в разы, а в
+			// логе до сих пор было не видно, кого выбрал зонд.
+			domain.F("encoder", encoderLabel(fit)),
 			// The bitrate is carried over rather than re-guessed: fewer pixels in
 			// a better codec on the same budget is what keeps the picture.
 			domain.F("bitrate_kbps", hls.BitrateKbps),
@@ -357,11 +361,11 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 	)
 	if stager, ok := sink.(domain.EpisodeStageSink); ok {
 		if dur := muxDuration(job); dur > 0 {
-			phase, format := "mux", ""
+			phase, format, encoder := "mux", "", ""
 			if len(fit) > 0 {
-				phase, format = "encode", describeFit(fit, hls)
+				phase, format, encoder = "encode", describeFit(fit, hls), encoderLabel(fit)
 			}
-			muxStage = newMuxProgress(stager, job.Episode.Key, phase, format, dur)
+			muxStage = newMuxProgress(stager, job.Episode.Key, phase, format, encoder, threads, dur)
 			stdout = muxStage
 		}
 	}
@@ -393,6 +397,7 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 	}
 
 	var runErr error
+	var usedFit []string
 	for i, a := range attempts {
 		if i > 0 {
 			if ctx.Err() != nil {
@@ -433,6 +438,7 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 			feed.Close()
 		}
 		if runErr == nil {
+			usedFit = a.fit
 			if i > 0 {
 				d.logger.Warn("episode muxed with a fallback",
 					domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
@@ -466,6 +472,9 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 			os.Remove(tempPath)
 			runErr = d.run(ctx, d.ffmpegPath,
 				withDecodeThreads(BuildHLSMuxArgs(job, &onDisk, tempPath, fit...), threads), nil, nil, nil)
+			if runErr == nil {
+				usedFit = fit
+			}
 		}
 	}
 
@@ -476,6 +485,10 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 		os.Remove(tempPath)
 		return fmt.Errorf("%w: %v", domain.ErrFFmpegFailed, runErr)
 	}
+
+	// Что реально лежит в файле, а не что отдал сервер: подгонка меняет размер
+	// кадра, и библиотека до сих пор показывала исходный.
+	hls.OutResolution = fitResolution(usedFit, hls)
 
 	info, err := os.Stat(tempPath)
 	if err != nil || info.Size() == 0 {
@@ -687,6 +700,34 @@ func estimateDuration(job domain.Job) time.Duration {
 // codec it encodes with, the frame rate when it changes one, and the bitrate it
 // carries over. Read off the arguments themselves so the label cannot drift
 // from what ffmpeg is actually told to do.
+// fitResolution is what the fitted file actually comes out in ("3584x2160"),
+// empty when this pass does not scale. Recorded with the finished episode: the
+// library used to show the SOURCE size for a scaled file, so a 3840x2314 movie
+// stayed "3840x2314" in the list while the file on disk was 3584x2160 — exactly
+// the number a person checks to know whether the TV will play it.
+func fitResolution(fit []string, hls *domain.HLSDownloadResult) string {
+	for i := 0; i < len(fit)-1; i++ {
+		if fit[i] != "-vf" {
+			continue
+		}
+		_, height, ok := strings.Cut(fit[i+1], ":")
+		if !ok {
+			return ""
+		}
+		h, err := strconv.Atoi(height)
+		if err != nil {
+			return ""
+		}
+		w, srcH := sizeOf(hls.Resolution)
+		if w <= 0 || srcH <= 0 {
+			return ""
+		}
+		// Ширина считается по тем же пропорциям, что и в фильтре.
+		return fmt.Sprintf("%dx%d", roundTo16(w*h/srcH), h)
+	}
+	return ""
+}
+
 func describeFit(fit []string, hls *domain.HLSDownloadResult) string {
 	var parts []string
 	height := ""
@@ -713,14 +754,9 @@ func describeFit(fit []string, hls *domain.HLSDownloadResult) string {
 		}
 	}
 	if height != "" {
-		if w, _ := sizeOf(hls.Resolution); w > 0 {
-			if _, srcH := sizeOf(hls.Resolution); srcH > 0 {
-				if h, err := strconv.Atoi(height); err == nil {
-					// Ширина считается по тем же пропорциям, что и в фильтре.
-					parts = append([]string{fmt.Sprintf("%dx%s", roundTo16(w*h/srcH), height)}, parts...)
-					return strings.Join(parts, " · ")
-				}
-			}
+		if res := fitResolution(fit, hls); res != "" {
+			parts = append([]string{res}, parts...)
+			return strings.Join(parts, " · ")
 		}
 		parts = append([]string{"↓" + height}, parts...)
 	}

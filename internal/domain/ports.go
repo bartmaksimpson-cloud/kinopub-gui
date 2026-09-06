@@ -238,6 +238,10 @@ type HLSDownloadResult struct {
 	// FrameRate is what the master playlist declared, 0 when it did not say.
 	FrameRate  float64
 	TotalBytes int64
+	// OutResolution is what the FINISHED file came out in, set by the muxer only
+	// when it scaled the picture down to what the player decodes. Empty means
+	// the file kept Resolution above.
+	OutResolution string
 
 	// VideoPath is the local path to the concatenated video .ts file. Empty when
 	// the video is handed to the muxer as VideoParts instead.

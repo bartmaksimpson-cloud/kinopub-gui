@@ -1090,8 +1090,8 @@ func (e *engine) attemptHLSEpisode(
 		Path:       outPath,
 		Bytes:      fileSize,
 		Title:      ep.Title,
-		Quality:    fmt.Sprintf("%s/%s", hlsResult.Resolution, hlsResult.Codec),
-		Resolution: hlsResult.Resolution,
+		Quality:    fmt.Sprintf("%s/%s", outResolution(hlsResult), hlsResult.Codec),
+		Resolution: outResolution(hlsResult),
 		BitRate:    hlsResult.BitrateKbps,
 		PageLink:   ep.PageLink,
 		MediaURL:   manifestURL,
@@ -1500,4 +1500,15 @@ func (e *engine) downloadPoster(ctx context.Context, posterURL, outputDir string
 	}
 
 	return posterPath, nil
+}
+
+// outResolution is the frame size of the file that ended up on disk: the source
+// size, or the smaller one the muxer scaled to when the source was beyond what
+// the player decodes. The library shows this number, and it has to be the truth
+// about the file rather than about the server's stream.
+func outResolution(hls *domain.HLSDownloadResult) string {
+	if hls.OutResolution != "" {
+		return hls.OutResolution
+	}
+	return hls.Resolution
 }
