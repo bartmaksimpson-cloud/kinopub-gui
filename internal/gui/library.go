@@ -148,6 +148,13 @@ func resolveEpisodePath(dir, recorded string, season int) (string, bool) {
 	if base != "" && base != "." {
 		candidates = append(candidates,
 			filepath.Join(dir, fmt.Sprintf("Season %02d", season), base),
+			// Фильм лежит НАД своей папкой с состоянием: «Аладдин.mkv» рядом с
+			// папкой «Аладдин», внутри которой .kinopub-state.json. Без этого
+			// перенесённый на другой диск фильм числился пропавшим — путь в
+			// состоянии всё ещё указывал на старый диск. Не последним в списке:
+			// последний кандидат — это ещё и адрес, который показывают для
+			// пропавшего файла, а он должен вести в папку сканирования.
+			filepath.Join(filepath.Dir(dir), base),
 			filepath.Join(dir, base),
 		)
 	}

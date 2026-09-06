@@ -504,3 +504,22 @@ func TestResolveEpisodePath_MissingPointsHere(t *testing.T) {
 		t.Errorf("путь пропавшего файла ведёт мимо папки сканирования: %q", got)
 	}
 }
+
+// Фильм, перенесённый на другой диск вместе со своей папкой состояния: путь
+// внутри состояния всё ещё указывает на старый диск, а файл лежит НАД папкой.
+func TestResolveEpisodePath_MovedMovieAboveStateDir(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "Аладдин _ Aladdin")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	movie := filepath.Join(root, "Аладдин _ Aladdin.mkv")
+	if err := os.WriteFile(movie, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := resolveEpisodePath(stateDir, `D:\Kinopub\Аладдин _ Aladdin.mkv`, 1)
+	if !ok || got != movie {
+		t.Errorf("resolveEpisodePath = %q (найден: %v), ожидался %q", got, ok, movie)
+	}
+}
