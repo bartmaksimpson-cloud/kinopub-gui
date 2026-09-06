@@ -117,11 +117,60 @@ type fitSource struct {
 	Codec string
 }
 
-// fitLimits is what the player can actually take. Height is the decoder's frame
-// limit; FPS is its throughput limit at a large frame. 0 disables either.
+// fitLimits is what the player can actually take. Width and Height are the
+// decoder's frame limits; FPS is its throughput limit at a large frame. 0
+// disables any of them.
+//
+// Width matters on its own: a TV decoder is specified as a BOX (4096x2176 on
+// the Realtek and Amlogic chips this app targets), and an anamorphic 5120x2160
+// file is legal by height and refused by width — the same silent fall back to
+// software decoding, just entered through the other side.
 type fitLimits struct {
+	Width  int
 	Height int
 	FPS    float64
+}
+
+// fitBox is the frame size that fits src inside the limit box while keeping the
+// picture's proportions, with both sides divisible by 16 (encoders want that,
+// and it keeps chroma alignment honest). ok is false when nothing has to be
+// scaled — or when the source width is unknown, where the caller falls back to
+// capping the height alone.
+//
+// Both sides are computed here rather than left to ffmpeg's "-16": the number
+// is also what gets shown on the card and written into the library, and it has
+// to be the size the file really came out in.
+func fitBox(srcW, srcH, maxW, maxH int) (int, int, bool) {
+	if srcW <= 0 || srcH <= 0 {
+		return 0, 0, false
+	}
+	overW := maxW > 0 && srcW > maxW
+	overH := maxH > 0 && srcH > maxH
+	if !overW && !overH {
+		return 0, 0, false
+	}
+	// Масштаб — по той стороне, которая вылезает сильнее.
+	h := srcH
+	if overH {
+		h = maxH
+	}
+	w := srcW * h / srcH
+	if maxW > 0 && w > maxW {
+		w = maxW
+		h = srcH * w / srcW
+	}
+	w, h = roundTo16(w), roundTo16(h)
+	// Округление вверх может вытолкнуть кадр обратно за предел — тогда шаг вниз.
+	if maxW > 0 && w > maxW {
+		w -= 16
+	}
+	if maxH > 0 && h > maxH {
+		h -= 16
+	}
+	if w < 16 || h < 16 {
+		return 0, 0, false
+	}
+	return w, h, true
 }
 
 // hfrWidth is where the frame-rate limit starts to apply. A decoder that stalls
@@ -146,7 +195,11 @@ const hfrWidth = 1920
 // interpolated.
 func fitArgsFor(src fitSource, lim fitLimits, ffmpegPath string) []string {
 	var filters []string
-	if lim.Height > 0 && src.Height > lim.Height {
+	if w, h, ok := fitBox(src.Width, src.Height, lim.Width, lim.Height); ok {
+		filters = append(filters, fmt.Sprintf("scale=%d:%d", w, h))
+	} else if lim.Height > 0 && src.Height > lim.Height {
+		// Ширина неизвестна: остаётся прижать высоту и дать ffmpeg посчитать
+		// ширину самому (-16 — «кратно шестнадцати, по пропорциям»).
 		filters = append(filters, fmt.Sprintf("scale=-16:%d", lim.Height))
 	}
 

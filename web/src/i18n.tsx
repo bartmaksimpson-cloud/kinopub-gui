@@ -348,6 +348,10 @@ const RU: Record<string, string> = {
   "Choose a folder": "Выбор папки",
   "Parent folder": "Родительская папка",
   "Files download into this folder.": "Файлы скачиваются в эту папку.",
+  "Maximum frame width": "Максимальная ширина кадра",
+  "Automatic — no wider than 4096": "Автоматически — не шире 4096",
+  "The other side of the same limit. A decoder is specified as a box (4096x2176 on TV chips), so an anamorphic 5120x2160 file is legal by height and still refused — and playback silently falls back to stuttering software decoding.":
+    "Вторая сторона того же предела. Декодер описан коробкой (4096x2176 у телевизионных чипов), поэтому анаморфный 5120x2160 законен по высоте и всё равно не принимается — и воспроизведение молча уходит в программный декод с рывками.",
   "Will download:": "Скачается:",
   "re-encoded for the player": "пережмём под плеер",
   "highest available": "максимум доступного",

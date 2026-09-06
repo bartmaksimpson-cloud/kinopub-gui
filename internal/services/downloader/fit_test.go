@@ -118,7 +118,8 @@ func TestFitArgsFor_ScalesAndHalvesTogether(t *testing.T) {
 		fitLimits{Height: 2160, FPS: 30},
 		"ffmpeg",
 	), " ")
-	if !strings.Contains(joined, "scale=-16:2160") || !strings.Contains(joined, "-r 30") {
+	// Ширина считается заранее и стоит в фильтре явно: 3840x2880 → 2880x2160.
+	if !strings.Contains(joined, "scale=2880:2160") || !strings.Contains(joined, "-r 30") {
 		t.Errorf("нужны и масштабирование, и деление частоты: %q", joined)
 	}
 }
@@ -205,6 +206,45 @@ func TestFitEncoders_FallBackToHardwareH264(t *testing.T) {
 	for i, name := range fitEncoders {
 		if strings.HasPrefix(name, "hevc_") && i > h264At {
 			t.Errorf("аппаратный %s стоит после H.264", name)
+		}
+	}
+}
+
+// Кадр вписывается в КОРОБКУ декодера, а не только по высоте: анаморфный
+// 5120x2160 законен по высоте и не лезет по ширине — ровно тот случай, когда
+// телевизор молча уходит в программный декод.
+func TestFitArgsFor_FitsIntoDecoderBox(t *testing.T) {
+	pinFitEncoder(t, "h264_nvenc")
+	joined := strings.Join(fitArgsFor(
+		fitSource{Width: 5120, Height: 2160, Kbps: 20000},
+		fitLimits{Width: 4096, Height: 2160},
+		"ffmpeg",
+	), " ")
+	if !strings.Contains(joined, "scale=4096:1728") {
+		t.Errorf("широкий кадр не вписан в 4096x2160: %q", joined)
+	}
+}
+
+func TestFitBox(t *testing.T) {
+	cases := []struct {
+		name                   string
+		srcW, srcH, maxW, maxH int
+		wantW, wantH           int
+		wantOK                 bool
+	}{
+		{"кадр в пределах — не трогаем", 3840, 2160, 4096, 2160, 0, 0, false},
+		// 3840*2160/2330 = 3559,8 → ближайшее кратное 16 вниз.
+		{"высокий кадр", 3840, 2330, 4096, 2160, 3552, 2160, true},
+		{"широкий кадр", 5120, 2160, 4096, 2160, 4096, 1728, true},
+		{"обе стороны за пределом", 6000, 3000, 4096, 2160, 4096, 2048, true},
+		{"предел ширины выключен", 5120, 2160, 0, 2160, 0, 0, false},
+		{"ширина источника неизвестна", 0, 2880, 4096, 2160, 0, 0, false},
+	}
+	for _, c := range cases {
+		w, h, ok := fitBox(c.srcW, c.srcH, c.maxW, c.maxH)
+		if ok != c.wantOK || (ok && (w != c.wantW || h != c.wantH)) {
+			t.Errorf("%s: fitBox(%d,%d,%d,%d) = %dx%d ok=%v, ожидалось %dx%d ok=%v",
+				c.name, c.srcW, c.srcH, c.maxW, c.maxH, w, h, ok, c.wantW, c.wantH, c.wantOK)
 		}
 	}
 }

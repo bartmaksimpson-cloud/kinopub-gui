@@ -514,7 +514,7 @@ func TestToDiscoverDetail(t *testing.T) {
 			}},
 		},
 	}
-	d := toDiscoverDetail(it, 2160)
+	d := toDiscoverDetail(it, 4096, 2160)
 	if d.Plot != "plot text" || d.Cast != "actor1, actor2" {
 		t.Errorf("plot/cast wrong: %+v", d)
 	}
@@ -558,15 +558,20 @@ func TestDownloadPlan(t *testing.T) {
 				}},
 				// Кадр выше предела плеера — пережатие.
 				{Number: 4, Files: []kinopubapi.File{
-					{Quality: "2160p", Codec: "h264", H: 2314, URL: kinopubapi.FileURL{HLS4: "u6"}},
+					{Quality: "2160p", Codec: "h264", W: 3840, H: 2314, URL: kinopubapi.FileURL{HLS4: "u6"}},
+				}},
+				// Высота законная, а ШИРИНА нет: декодер описан коробкой, и
+				// такой файл он тоже не возьмёт.
+				{Number: 5, Files: []kinopubapi.File{
+					{Quality: "2160p", Codec: "hevc", W: 5120, H: 2160, URL: kinopubapi.FileURL{HLS4: "u7"}},
 				}},
 			}},
 		},
 	}
 
-	plan := downloadPlan(it, 2160)
-	if len(plan) != 4 {
-		t.Fatalf("групп %d, ожидалось 4: %+v", len(plan), plan)
+	plan := downloadPlan(it, 4096, 2160)
+	if len(plan) != 5 {
+		t.Fatalf("групп %d, ожидалось 5: %+v", len(plan), plan)
 	}
 	// Самый большой кадр первым, и это ровно та серия, которую надо пережать.
 	if plan[0].Height != 2314 || !plan[0].Refit || plan[0].Episodes != 1 {
@@ -576,8 +581,22 @@ func TestDownloadPlan(t *testing.T) {
 	for _, g := range plan {
 		byKey[g.Quality+"/"+g.Codec] = g
 	}
-	if g := byKey["2160p/hevc"]; g.Episodes != 1 {
-		t.Errorf("2160p HEVC: серий %d, ожидалась 1 (%+v)", g.Episodes, g)
+	// Две группы 2160p HEVC различаются кадром: обычная и слишком широкая.
+	var wide, plain DiscoverPlanGroup
+	for _, g := range plan {
+		if g.Quality == "2160p" && g.Codec == "hevc" {
+			if g.Refit {
+				wide = g
+			} else {
+				plain = g
+			}
+		}
+	}
+	if plain.Episodes != 1 {
+		t.Errorf("2160p HEVC: серий %d, ожидалась 1 (%+v)", plain.Episodes, plain)
+	}
+	if wide.Episodes != 1 || !wide.Refit {
+		t.Errorf("широкий 5120x2160 должен быть помечен на пережатие: %+v", wide)
 	}
 	if g := byKey["2160p/h264"]; g.Episodes != 1 || g.Refit {
 		t.Errorf("2160p H.264: %+v, ожидалась одна серия без пережатия", g)
@@ -590,7 +609,7 @@ func TestDownloadPlan(t *testing.T) {
 	}
 
 	// Без предела высоты пережимать нечего.
-	for _, g := range downloadPlan(it, 0) {
+	for _, g := range downloadPlan(it, 0, 0) {
 		if g.Refit {
 			t.Errorf("без предела высоты пометки пережатия быть не должно: %+v", g)
 		}

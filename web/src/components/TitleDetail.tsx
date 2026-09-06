@@ -1047,7 +1047,10 @@ export function TitleDetail({
                         {i > 0 && <span className="text-slate-600"> · </span>}
                         <span className={g.refit ? "text-amber-300" : ""}>
                           {t("{n} ep ", { n: g.episodes })}
-                          {g.codec ? `${g.quality} ${codecLabel(g.codec)}` : g.quality}
+                          {/* У пережимаемой группы важен настоящий кадр, а не
+                              ярлык «2160p»: именно он и не лезет в декодер. */}
+                          {g.refit && g.width ? `${g.width}x${g.height}` : g.quality}
+                          {g.codec ? ` ${codecLabel(g.codec)}` : ""}
                           {g.refit ? ` → ${t("re-encoded for the player")}` : ""}
                         </span>
                       </span>

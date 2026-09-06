@@ -485,6 +485,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	// comes from the settings rather than from every start request.
 	saved := s.settings.get()
 	cfg.MaxHeight = saved.MaxHeight
+	cfg.MaxWidth = saved.MaxWidth
 	cfg.MaxFPS = saved.MaxFPS
 	// Where the temp files go is a property of this machine's disks, like the
 	// decoder limits above — not something a single download asks for.

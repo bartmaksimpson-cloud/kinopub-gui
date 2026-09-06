@@ -48,6 +48,7 @@ type Downloader struct {
 	auth          domain.RequestAuth
 	extraArgs     []string
 	transcodeHEVC bool
+	maxWidth      int
 	maxHeight     int
 	maxFPS        float64
 	workDir       string
@@ -65,6 +66,17 @@ type Option func(*Downloader)
 func WithTranscodeHEVC(v bool) Option {
 	return func(d *Downloader) {
 		d.transcodeHEVC = v
+	}
+}
+
+// WithMaxWidth caps the frame WIDTH of finished files. A decoder is specified
+// as a box, and an anamorphic file legal by height can still be refused by
+// width — see fitLimits. 0 disables the check.
+func WithMaxWidth(n int) Option {
+	return func(d *Downloader) {
+		if n > 0 {
+			d.maxWidth = n
+		}
 	}
 }
 
@@ -136,7 +148,7 @@ func (d *Downloader) fitArgs(resolution string, fps float64, srcKbps int, codec 
 	w, h := sizeOf(resolution)
 	return fitArgsFor(
 		fitSource{Width: w, Height: h, FPS: fps, Kbps: srcKbps, Codec: codec},
-		fitLimits{Height: d.maxHeight, FPS: d.maxFPS},
+		fitLimits{Width: d.maxWidth, Height: d.maxHeight, FPS: d.maxFPS},
 		d.ffmpegPath,
 	)
 }
@@ -710,19 +722,23 @@ func fitResolution(fit []string, hls *domain.HLSDownloadResult) string {
 		if fit[i] != "-vf" {
 			continue
 		}
-		_, height, ok := strings.Cut(fit[i+1], ":")
+		width, height, ok := strings.Cut(strings.TrimPrefix(fit[i+1], "scale="), ":")
 		if !ok {
 			return ""
 		}
 		h, err := strconv.Atoi(height)
-		if err != nil {
+		if err != nil || h <= 0 {
 			return ""
 		}
+		// Обычный случай: обе стороны посчитаны заранее и стоят в фильтре.
+		if w, err := strconv.Atoi(width); err == nil && w > 0 {
+			return fmt.Sprintf("%dx%d", w, h)
+		}
+		// "-16": ширину считает ffmpeg, повторяем ту же арифметику по источнику.
 		w, srcH := sizeOf(hls.Resolution)
 		if w <= 0 || srcH <= 0 {
 			return ""
 		}
-		// Ширина считается по тем же пропорциям, что и в фильтре.
 		return fmt.Sprintf("%dx%d", roundTo16(w*h/srcH), h)
 	}
 	return ""

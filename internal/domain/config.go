@@ -111,6 +111,13 @@ type RunConfig struct {
 	// keeps none.
 	SubtitlePref SubtitlePreference
 
+	// MaxWidth caps the frame width of the finished file the same way MaxHeight
+	// caps its height: a decoder is specified as a BOX (4096x2176 on the TV
+	// chips this app targets), so an anamorphic 5120x2160 release is legal by
+	// height and refused by width — the same silent fall back to software
+	// decoding, entered from the other side. 0 leaves the width alone.
+	MaxWidth int
+
 	// MaxHeight caps the frame height of the finished file, scaling anything
 	// taller down to it (aspect ratio kept). 0 leaves the frame alone.
 	//

@@ -173,6 +173,7 @@ export interface Settings {
   libraryDirs: string[] | null;
   transcodeHevc: boolean;
   maxHeight: number;
+  maxWidth: number;
   maxFps: number;
 }
 
@@ -480,6 +481,7 @@ export interface FSEntry {
 export interface DiscoverPlanGroup {
   quality: string;
   codec: string;
+  width?: number;
   height: number;
   episodes: number;
   refit?: boolean;

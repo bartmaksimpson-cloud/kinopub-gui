@@ -68,6 +68,7 @@ const emptySettings: Settings = {
   libraryDirs: null,
   transcodeHevc: false,
   maxHeight: 2160,
+  maxWidth: 4096,
   maxFps: 30,
 };
 

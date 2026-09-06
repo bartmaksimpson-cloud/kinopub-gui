@@ -184,6 +184,20 @@ export function SettingsPage() {
           </select>
         </Field>
         <Field
+          label={t("Maximum frame width")}
+          hint={t("The other side of the same limit. A decoder is specified as a box (4096x2176 on TV chips), so an anamorphic 5120x2160 file is legal by height and still refused — and playback silently falls back to stuttering software decoding.")}
+        >
+          <select
+            className="input"
+            value={String(form.maxWidth ?? 4096)}
+            onChange={(e) => set("maxWidth", Number(e.target.value))}
+          >
+            <option value="4096">{t("Automatic — no wider than 4096")}</option>
+            <option value="0">{t("No limit (keep the source frame)")}</option>
+            <option value="3840">3840</option>
+          </select>
+        </Field>
+        <Field
           label={t("Maximum frame rate for 4K")}
           hint={t("A 4K stream above this is halved (48→24, 60→30), which keeps the film's own cadence. TV decoders accept 4K at 48 fps and then drop most of the frames, and a 60 Hz panel cannot show 48 evenly either. Smaller frames are never touched.")}
         >

@@ -156,6 +156,7 @@ type DiscoverVariant struct {
 type DiscoverPlanGroup struct {
 	Quality  string `json:"quality"` // "2160p", "1080p", …
 	Codec    string `json:"codec"`   // "hevc" / "h264" / "" когда сервис молчит
+	Width    int    `json:"width,omitempty"`
 	Height   int    `json:"height"`
 	Episodes int    `json:"episodes"`
 	// Refit marks a frame the player cannot decode as it is: it will be scaled
@@ -505,7 +506,7 @@ func isHEVCQuality(codec string) bool {
 //
 // The rule is deliberately the same one the engine applies in PlayerAuto mode —
 // a report that describes a different download is worse than no report.
-func downloadPlan(it kinopubapi.Item, maxHeight int) []DiscoverPlanGroup {
+func downloadPlan(it kinopubapi.Item, maxWidth, maxHeight int) []DiscoverPlanGroup {
 	var groups []DiscoverPlanGroup
 	index := map[string]int{}
 	add := func(files []kinopubapi.File) {
@@ -525,7 +526,10 @@ func downloadPlan(it kinopubapi.Item, maxHeight int) []DiscoverPlanGroup {
 			return
 		}
 		codec := normalizeCodec(best.Codec)
-		key := best.Quality + "/" + codec + "/" + strconv.Itoa(best.H)
+		// Ширина входит в ключ наравне с высотой: 3840x2160 и 5120x2160 — это
+		// один "2160p" для сервиса и два разных файла для декодера, один из
+		// которых придётся пережимать.
+		key := best.Quality + "/" + codec + "/" + strconv.Itoa(best.W) + "x" + strconv.Itoa(best.H)
 		pos, known := index[key]
 		if !known {
 			pos = len(groups)
@@ -533,8 +537,10 @@ func downloadPlan(it kinopubapi.Item, maxHeight int) []DiscoverPlanGroup {
 			groups = append(groups, DiscoverPlanGroup{
 				Quality: best.Quality,
 				Codec:   codec,
+				Width:   best.W,
 				Height:  best.H,
-				Refit:   maxHeight > 0 && best.H > maxHeight,
+				Refit: maxHeight > 0 && best.H > maxHeight ||
+					maxWidth > 0 && best.W > maxWidth,
 			})
 		}
 		groups[pos].Episodes++
@@ -559,7 +565,7 @@ func downloadPlan(it kinopubapi.Item, maxHeight int) []DiscoverPlanGroup {
 	return groups
 }
 
-func toDiscoverDetail(it kinopubapi.Item, maxHeight int) DiscoverDetail {
+func toDiscoverDetail(it kinopubapi.Item, maxWidth, maxHeight int) DiscoverDetail {
 	seasons, count := collectSeasons(it)
 	qualities, qualitiesHEVC, variants := collectQualities(it)
 	d := DiscoverDetail{
@@ -576,7 +582,7 @@ func toDiscoverDetail(it kinopubapi.Item, maxHeight int) DiscoverDetail {
 		Qualities:     qualities,
 		QualitiesHEVC: qualitiesHEVC,
 		Variants:      variants,
-		Plan:          downloadPlan(it, maxHeight),
+		Plan:          downloadPlan(it, maxWidth, maxHeight),
 	}
 	return d
 }
@@ -852,7 +858,8 @@ func (s *Server) handleDiscoverItem(w http.ResponseWriter, r *http.Request) {
 		s.kpFail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toDiscoverDetail(item, s.settings.get().MaxHeight))
+	cfg := s.settings.get()
+	writeJSON(w, http.StatusOK, toDiscoverDetail(item, cfg.MaxWidth, cfg.MaxHeight))
 }
 
 // ensureUHD enables 4K/HEVC for this device once (best-effort) so item
