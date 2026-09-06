@@ -95,6 +95,13 @@ type RunConfig struct {
 	// once the episode's source is picked.
 	PreferHEVC bool
 
+	// PlayerAuto asks the app to choose for the player instead of the person:
+	// the largest frame each episode actually offers, HEVC when it comes at the
+	// same size. Combined with MaxHeight/MaxFPS (which trim what no decoder
+	// takes) it is the whole answer to "просто скачай так, чтобы шло на
+	// телевизоре".
+	PlayerAuto bool
+
 	// TranscodeToHEVC re-encodes the episodes PreferHEVC could not satisfy. Kept
 	// apart from it because a mixed season makes the two questions different:
 	// taking the HEVC files that exist is free, converting the rest is not.

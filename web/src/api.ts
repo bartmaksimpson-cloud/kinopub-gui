@@ -284,6 +284,7 @@ export interface DiscoverDetail extends DiscoverItem {
   qualitiesHevc?: string[];
   // Every downloadable file as the service offers it: resolution plus codec.
   variants?: { quality: string; codec: string; height: number; episodes: number }[];
+  plan?: DiscoverPlanGroup[];
 }
 
 export interface DiscoverCollection {
@@ -342,6 +343,9 @@ export interface RunRequest {
   ffmpegArgs: string;
   transcodeHevc: boolean;
   convertMissing: boolean;
+  // Приложение выбирает файл само — самый большой кадр у каждой серии, HEVC при
+  // равном кадре. Качество тогда не спрашивается и не передаётся.
+  playerAuto?: boolean;
   ffmpegPath: string;
   userAgent: string;
   verbosity: string;
@@ -469,6 +473,16 @@ export interface DoctorReport {
 export interface FSEntry {
   name: string;
   path: string;
+}
+
+// DiscoverPlanGroup — строка отчёта «что скачается»: сколько серий приедет в
+// этом виде и придётся ли их пережимать под плеер.
+export interface DiscoverPlanGroup {
+  quality: string;
+  codec: string;
+  height: number;
+  episodes: number;
+  refit?: boolean;
 }
 
 export interface FSListing {

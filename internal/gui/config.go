@@ -261,6 +261,10 @@ type RunRequest struct {
 	// TranscodeHEVC turns the checkbox into encoder arguments server-side, so the
 	// UI never has to know which encoder this platform actually has.
 	TranscodeHEVC bool `json:"transcodeHevc"`
+	// PlayerAuto means "выбери сам": каждой серии — самый большой кадр, который
+	// у неё есть, HEVC при равном кадре, и подгонка под предел плеера. Качество
+	// при этом не спрашивается, поэтому оно и не приходит.
+	PlayerAuto bool `json:"playerAuto"`
 	// ConvertMissing additionally re-encodes the episodes that have no HEVC file.
 	// Separate because it is the expensive half of the same wish: taking the HEVC
 	// files a mixed season already has is free, converting the rest is not.
@@ -319,6 +323,13 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		extraFFmpeg = splitShellArgs(req.FFmpegArgs)
 	}
 
+	// Автовыбор всегда берёт максимум: спрашивать качество у пользователя,
+	// который нажал одну кнопку, не у кого.
+	quality := domain.Quality(req.Quality)
+	if req.PlayerAuto {
+		quality = "max"
+	}
+
 	cfg := domain.RunConfig{
 		// A pasted link may still use the old domain; both resolve, but the
 		// queue should show one consistent (current) form.
@@ -331,7 +342,7 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		// each episode down, and a real 429 is answered by retry-with-backoff,
 		// which adapts to the server instead of guessing ahead of it.
 		ProxyURL:         req.Proxy,
-		Quality:          domain.Quality(req.Quality),
+		Quality:          quality,
 		Verbosity:        verb,
 		FFmpegPath:       req.FFmpegPath,
 		Container:        cont,
@@ -342,6 +353,7 @@ func buildRunConfig(req RunRequest) (domain.RunConfig, error) {
 		DryRun:           req.DryRun,
 		UserAgent:        ua,
 		FFmpegExtraArgs:  extraFFmpeg,
+		PlayerAuto:       req.PlayerAuto,
 		PreferHEVC:       req.TranscodeHEVC,
 		TranscodeToHEVC:  req.TranscodeHEVC && req.ConvertMissing,
 		AudioPref:        audioPref,

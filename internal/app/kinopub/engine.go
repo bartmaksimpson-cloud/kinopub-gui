@@ -1314,7 +1314,15 @@ func (e *engine) buildSeriesFromPlaylist(playlist *domain.PagePlaylist, cfg doma
 		// H.264 stays the default so nothing changes for existing downloads;
 		// the HEVC variant is taken only when asked for and actually offered.
 		hlsURL, hlsCodec := pe.ManifestURL, ""
-		if cfg.PreferHEVC && pe.ManifestURLHEVC != "" {
+		switch {
+		case cfg.PlayerAuto:
+			// Автовыбор: сначала кадр, потом кодек. HEVC телевизор декодирует
+			// охотнее, но не ценой половины разрешения — сервис иногда отдаёт
+			// HEVC только в 1080p, и тогда настоящий 4K в H.264 честно лучше.
+			if pe.ManifestURLHEVC != "" && pe.HeightHEVC >= pe.Height {
+				hlsURL, hlsCodec = pe.ManifestURLHEVC, "h265"
+			}
+		case cfg.PreferHEVC && pe.ManifestURLHEVC != "":
 			hlsURL, hlsCodec = pe.ManifestURLHEVC, "h265"
 		}
 		ep := domain.Episode{

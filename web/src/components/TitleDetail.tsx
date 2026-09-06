@@ -44,7 +44,7 @@ import {
   writeAudioPref,
 } from "../lib/audio";
 import { initialEpisodeSelection, isQueued, nothingLeftToQueue, queueCoverage } from "../lib/queue";
-import { Modal, PosterImage, Toggle } from "./ui";
+import { Modal, PosterImage } from "./ui";
 import { Ratings } from "./Ratings";
 import { Player } from "./Player";
 
@@ -56,7 +56,6 @@ function codecLabel(codec: string): string {
   return known[codec] ?? codec.toUpperCase();
 }
 
-const QUALITIES = ["", "2160p", "1080p", "720p", "480p", "360p"];
 
 // Seasons are expanded on open only while the whole list stays scannable; past
 // this many episodes everything but the first season starts collapsed so the
@@ -97,35 +96,15 @@ export function TitleDetail({
   const [error, setError] = useState("");
   const [similar, setSimilar] = useState<DiscoverItem[]>([]);
 
-  const [quality, setQuality] = useState(settings.quality);
-  // Converting pays off only for 4K: a player that stutters on 4K H.264 handles
-  // 1080p fine, so the option stays hidden until 4K is what will be fetched —
-  // "Auto (highest)" counts when the title actually offers 2160p. Seeded from
-  // the global setting so the usual answer needs no clicking.
-  // Selected "<quality>|<codec>" from the variant menu; "" is auto (best).
-  const [variantKey, setVariantKey] = useState("");
-  // Whether to re-encode the episodes the chosen variant does not cover.
-  const [convertMissing, setConvertMissing] = useState(false);
-  // One menu instead of a resolution list plus a codec guess: the service hands
-  // us the real files, so the choice offered is exactly what can be downloaded.
-  const variants = detail?.variants ?? [];
-  // "" means auto — the first variant, since they arrive highest-first with HEVC
-  // ahead of H.264 at the same height.
-  const chosen = variants.find((v) => `${v.quality}|${v.codec}` === variantKey);
-  // Что спросить у сервиса. Меню показывает variantKey, а не quality: пока его
-  // не трогали, quality хранит качество ИЗ НАСТРОЕК, и «Авто (максимум)» на
-  // экране молча качало 1080p. Спрашиваем ровно то, что видно на экране.
-  // Пустая строка движку означает «оптимальное» (те же 1080p), поэтому автовыбор
-  // передаётся как "max" — максимум из того, что есть у КАЖДОЙ серии.
-  const requestedQuality = variants.length ? (chosen ? chosen.quality : "max") : quality || "max";
-  // On auto the menu made no codec choice, so the global preference decides.
-  const wantHEVC = chosen ? chosen.codec === "hevc" : settings.transcodeHevc;
-  // A season is not always encoded uniformly: the chosen variant may cover only
-  // part of it. The rest can only be had by converting, which is the slow half —
-  // so it is asked for separately instead of happening quietly.
-  const totalEpisodes = detail?.episodeCount ?? 0;
-  const missingEpisodes =
-    chosen && totalEpisodes > 1 ? Math.max(0, totalEpisodes - chosen.episodes) : 0;
+  // Качество не спрашивается: приложение берёт каждой серии самый большой кадр,
+  // который у неё есть, HEVC при равном кадре, и подгоняет под предел плеера.
+  // Меню из вариантов было ровно тем местом, где человек ошибался, а список
+  // из шести строк ничего не добавлял к «скачай так, чтобы шло на телевизоре».
+  // plan — это тот же выбор, но посчитанный заранее, чтобы показать его до
+  // нажатия: сколько серий в каком виде и что придётся пережимать.
+  const plan = detail?.plan ?? [];
+  const mixed = plan.length > 1;
+  const refit = plan.some((g) => g.refit);
 
   // Selected озвучка labels. Empty set → keep every track.
   const [audioSel, setAudioSel] = useState<Set<string>>(new Set());
@@ -186,7 +165,6 @@ export function TitleDetail({
       .then((d) => {
         if (!alive) return;
         setDetail(d);
-        setQuality(settings.quality);
         const keys = (d.seasons || []).flatMap((s) => s.episodes.map((e) => epKey(e.season, e.episode)));
         const seasons = d.seasons || [];
         setOpenSeasons(
@@ -312,7 +290,7 @@ export function TitleDetail({
     let alive = true;
     const first = detail.seasons?.[0]?.episodes?.[0];
     api
-      .audios(id, first?.season, first?.episode, requestedQuality)
+      .audios(id, first?.season, first?.episode, "max")
       .then((r) => {
         if (alive && r.audios && r.audios.length) setMfAudios(r.audios);
       })
@@ -322,7 +300,7 @@ export function TitleDetail({
     return () => {
       alive = false;
     };
-  }, [detail, id, requestedQuality]);
+  }, [detail, id]);
 
   // Одна форма для обоих источников, чтобы ниже ничего не раздваивать. Имя
   // дорожки очищается от ведущего номера («01. MTV (RUS)» → «MTV (RUS)»): в
@@ -497,7 +475,8 @@ export function TitleDetail({
       await api.startJob({
         url: detail.itemUrl,
         outputPath: settings.outputPath,
-        quality: requestedQuality,
+        // Качество выбирает движок, по файлам каждой серии.
+        playerAuto: true,
         container: settings.container,
         proxy: settings.proxy,
         seasons: "",
@@ -525,10 +504,8 @@ export function TitleDetail({
         force: false,
         dryRun: false,
         ffmpegArgs: "",
-        // The menu already picked a real file, so this only says which of the two
-        // codec variants to take — never a re-encode of something the service has.
-        transcodeHevc: wantHEVC,
-        convertMissing,
+        transcodeHevc: false,
+        convertMissing: false,
         ffmpegPath: "",
         userAgent: "",
         verbosity: settings.verbosity,
@@ -1062,47 +1039,20 @@ export function TitleDetail({
             {/* ── Download bar ───────────────────────────────────────── */}
             <div className="shrink-0 border-t border-white/[0.06] bg-ink-900/70 px-5 py-3.5 backdrop-blur sm:px-6">
               <div className="flex flex-wrap items-center gap-3">
-                <select
-                  className="input w-auto"
-                  title={t("Quality")}
-                  value={detail.variants?.length ? variantKey : quality}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (!detail.variants?.length) return setQuality(v);
-                    setVariantKey(v);
-                    setQuality(v ? v.split("|")[0] : "");
-                  }}
-                >
-                  {detail.variants?.length ? (
-                    <>
-                      <option value="">{t("Auto (highest)")}</option>
-                      {detail.variants.map((v) => (
-                        <option key={`${v.quality}|${v.codec}`} value={`${v.quality}|${v.codec}`}>
-                          {v.codec ? `${v.quality} · ${codecLabel(v.codec)}` : v.quality}
-                          {detail.episodeCount > 1 && v.episodes < detail.episodeCount
-                            ? ` · ${v.episodes}/${detail.episodeCount}`
-                            : ""}
-                        </option>
-                      ))}
-                    </>
-                  ) : (
-                    ["", ...QUALITIES.filter(Boolean)].map((q) => (
-                      <option key={q} value={q}>
-                        {q === "" ? t("Auto (highest)") : q}
-                      </option>
-                    ))
-                  )}
-                </select>
-
-                {missingEpisodes > 0 && (
-                  <Toggle
-                    label={t("Convert the remaining episodes")}
-                    hint={t("{n} episodes have no such file; converting them takes long", {
-                      n: missingEpisodes,
-                    })}
-                    checked={convertMissing}
-                    onChange={setConvertMissing}
-                  />
+                {(mixed || refit) && (
+                  <div className="w-full text-xs text-slate-400">
+                    <span className="mr-1.5 font-medium text-slate-300">{t("Will download:")}</span>
+                    {plan.map((g, i) => (
+                      <span key={`${g.quality}|${g.codec}|${g.height}`}>
+                        {i > 0 && <span className="text-slate-600"> · </span>}
+                        <span className={g.refit ? "text-amber-300" : ""}>
+                          {t("{n} ep ", { n: g.episodes })}
+                          {g.codec ? `${g.quality} ${codecLabel(g.codec)}` : g.quality}
+                          {g.refit ? ` → ${t("re-encoded for the player")}` : ""}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
                 )}
                 {nothingLeft ? (
                   <button

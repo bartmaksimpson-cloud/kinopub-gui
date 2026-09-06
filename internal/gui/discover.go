@@ -129,6 +129,11 @@ type DiscoverDetail struct {
 	// variant present on only some episodes still appears: the download falls
 	// back per episode rather than refusing the whole title.
 	Variants []DiscoverVariant `json:"variants,omitempty"`
+	// Plan is what the single Download button would actually fetch, grouped:
+	// the same choice the engine makes per episode (biggest frame; HEVC when it
+	// comes at that size), plus a mark on what has to be re-encoded to fit the
+	// player. Highest first.
+	Plan []DiscoverPlanGroup `json:"plan,omitempty"`
 }
 
 // DiscoverVariant is one downloadable file: a resolution together with the
@@ -142,6 +147,20 @@ type DiscoverVariant struct {
 	// title has means a mixed season: picking it converts the rest, and the user
 	// deserves to know that before starting a long download.
 	Episodes int `json:"episodes"`
+}
+
+// DiscoverPlanGroup is one line of the pre-download report: how many episodes
+// will come in this exact shape. Groups exist because a season is often not
+// encoded uniformly, and the single Download button hides that unless it is
+// said out loud.
+type DiscoverPlanGroup struct {
+	Quality  string `json:"quality"` // "2160p", "1080p", …
+	Codec    string `json:"codec"`   // "hevc" / "h264" / "" когда сервис молчит
+	Height   int    `json:"height"`
+	Episodes int    `json:"episodes"`
+	// Refit marks a frame the player cannot decode as it is: it will be scaled
+	// while muxing, which is the slow path and the one worth warning about.
+	Refit bool `json:"refit,omitempty"`
 }
 
 // DiscoverCollection is a подборка card.
@@ -479,7 +498,68 @@ func isHEVCQuality(codec string) bool {
 	return strings.Contains(c, "265") || strings.Contains(c, "hev") || strings.Contains(c, "hvc")
 }
 
-func toDiscoverDetail(it kinopubapi.Item) DiscoverDetail {
+// downloadPlan groups the episodes by the file the automatic pick would take:
+// the tallest frame the episode offers, HEVC when it is available at that same
+// height. maxHeight is the player's limit; anything above it is marked Refit
+// because it will be scaled (a long re-encode) instead of copied.
+//
+// The rule is deliberately the same one the engine applies in PlayerAuto mode —
+// a report that describes a different download is worse than no report.
+func downloadPlan(it kinopubapi.Item, maxHeight int) []DiscoverPlanGroup {
+	var groups []DiscoverPlanGroup
+	index := map[string]int{}
+	add := func(files []kinopubapi.File) {
+		var best kinopubapi.File
+		found := false
+		for _, f := range files {
+			if f.Quality == "" || f.URL.Manifest() == "" {
+				continue
+			}
+			switch {
+			case !found, f.H > best.H,
+				f.H == best.H && isHEVCQuality(f.Codec) && !isHEVCQuality(best.Codec):
+				best, found = f, true
+			}
+		}
+		if !found {
+			return
+		}
+		codec := normalizeCodec(best.Codec)
+		key := best.Quality + "/" + codec + "/" + strconv.Itoa(best.H)
+		pos, known := index[key]
+		if !known {
+			pos = len(groups)
+			index[key] = pos
+			groups = append(groups, DiscoverPlanGroup{
+				Quality: best.Quality,
+				Codec:   codec,
+				Height:  best.H,
+				Refit:   maxHeight > 0 && best.H > maxHeight,
+			})
+		}
+		groups[pos].Episodes++
+	}
+	if len(it.Seasons) > 0 {
+		for _, sea := range it.Seasons {
+			for _, e := range sea.Episodes {
+				add(e.Files)
+			}
+		}
+	} else {
+		for _, v := range it.Videos {
+			add(v.Files)
+		}
+	}
+	sort.Slice(groups, func(a, b int) bool {
+		if groups[a].Height != groups[b].Height {
+			return groups[a].Height > groups[b].Height
+		}
+		return groups[a].Episodes > groups[b].Episodes
+	})
+	return groups
+}
+
+func toDiscoverDetail(it kinopubapi.Item, maxHeight int) DiscoverDetail {
 	seasons, count := collectSeasons(it)
 	qualities, qualitiesHEVC, variants := collectQualities(it)
 	d := DiscoverDetail{
@@ -496,6 +576,7 @@ func toDiscoverDetail(it kinopubapi.Item) DiscoverDetail {
 		Qualities:     qualities,
 		QualitiesHEVC: qualitiesHEVC,
 		Variants:      variants,
+		Plan:          downloadPlan(it, maxHeight),
 	}
 	return d
 }
@@ -771,7 +852,7 @@ func (s *Server) handleDiscoverItem(w http.ResponseWriter, r *http.Request) {
 		s.kpFail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toDiscoverDetail(item))
+	writeJSON(w, http.StatusOK, toDiscoverDetail(item, s.settings.get().MaxHeight))
 }
 
 // ensureUHD enables 4K/HEVC for this device once (best-effort) so item

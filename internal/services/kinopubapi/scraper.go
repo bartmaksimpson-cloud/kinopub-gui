@@ -93,6 +93,8 @@ func BuildPagePlaylist(item Item) (*domain.PagePlaylist, error) {
 			// Preview keeps the H.264 pick above; only a download may switch to
 			// this one, and only when the user asked for HEVC.
 			ManifestURLHEVC: bestHEVCManifest(files),
+			Height:          bestHeight(files, false),
+			HeightHEVC:      bestHeight(files, true),
 			EpisodeTitle:    title,
 			Duration:        duration,
 			Season:          season,
@@ -197,6 +199,25 @@ func bestHEVCManifest(files []File) string {
 		if f.H > bestH {
 			bestH = f.H
 			best = m
+		}
+	}
+	return best
+}
+
+// bestHeight is the tallest frame among files (hevcOnly limits it to the HEVC
+// ones), 0 when nothing usable is there. It is what makes the automatic pick
+// honest: "prefer HEVC" must not mean "take 1080p HEVC over 2160p H.264".
+func bestHeight(files []File, hevcOnly bool) int {
+	best := 0
+	for _, f := range files {
+		if hevcOnly && !isHEVCCodec(f.Codec) {
+			continue
+		}
+		if f.URL.Manifest() == "" {
+			continue
+		}
+		if f.H > best {
+			best = f.H
 		}
 	}
 	return best

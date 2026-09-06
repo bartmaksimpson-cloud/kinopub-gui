@@ -315,7 +315,13 @@ type PageEpisode struct {
 	// preview keeps playing in the browser; a download switches to this one only
 	// when the user asked for HEVC.
 	ManifestURLHEVC string
-	MediaID         int
+	// Height is the frame height of ManifestURL's file, HeightHEVC that of
+	// ManifestURLHEVC (0 when unknown). The automatic pick needs both: HEVC is
+	// the better codec for a TV, but not when the service ships it only at half
+	// the resolution — там real 4K в H.264 честно лучше.
+	Height     int
+	HeightHEVC int
+	MediaID    int
 	EpisodeTitle    string
 	Duration        int // seconds
 	Season          int

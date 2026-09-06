@@ -514,7 +514,7 @@ func TestToDiscoverDetail(t *testing.T) {
 			}},
 		},
 	}
-	d := toDiscoverDetail(it)
+	d := toDiscoverDetail(it, 2160)
 	if d.Plot != "plot text" || d.Cast != "actor1, actor2" {
 		t.Errorf("plot/cast wrong: %+v", d)
 	}
@@ -532,5 +532,67 @@ func TestToDiscoverDetail(t *testing.T) {
 	}
 	if !reflect.DeepEqual(d.Qualities, []string{"1080p"}) {
 		t.Errorf("Qualities = %v", d.Qualities)
+	}
+}
+
+// Отчёт перед скачиванием должен описывать ровно то, что скачается: самый
+// большой кадр у каждой серии, HEVC — только при равном кадре, и пометка на
+// том, что придётся пережимать.
+func TestDownloadPlan(t *testing.T) {
+	it := kinopubapi.Item{
+		Seasons: []kinopubapi.Season{
+			{Number: 1, Episodes: []kinopubapi.Episode{
+				// 4K есть в обоих кодеках — берём HEVC.
+				{Number: 1, Files: []kinopubapi.File{
+					{Quality: "2160p", Codec: "h264", H: 2160, URL: kinopubapi.FileURL{HLS4: "u1"}},
+					{Quality: "2160p", Codec: "hevc", H: 2160, URL: kinopubapi.FileURL{HLS4: "u2"}},
+				}},
+				// HEVC только в 1080p — настоящий 4K в H.264 лучше.
+				{Number: 2, Files: []kinopubapi.File{
+					{Quality: "2160p", Codec: "h264", H: 2160, URL: kinopubapi.FileURL{HLS4: "u3"}},
+					{Quality: "1080p", Codec: "hevc", H: 1080, URL: kinopubapi.FileURL{HLS4: "u4"}},
+				}},
+				// 4K нет вовсе.
+				{Number: 3, Files: []kinopubapi.File{
+					{Quality: "1080p", Codec: "h264", H: 1080, URL: kinopubapi.FileURL{HLS4: "u5"}},
+				}},
+				// Кадр выше предела плеера — пережатие.
+				{Number: 4, Files: []kinopubapi.File{
+					{Quality: "2160p", Codec: "h264", H: 2314, URL: kinopubapi.FileURL{HLS4: "u6"}},
+				}},
+			}},
+		},
+	}
+
+	plan := downloadPlan(it, 2160)
+	if len(plan) != 4 {
+		t.Fatalf("групп %d, ожидалось 4: %+v", len(plan), plan)
+	}
+	// Самый большой кадр первым, и это ровно та серия, которую надо пережать.
+	if plan[0].Height != 2314 || !plan[0].Refit || plan[0].Episodes != 1 {
+		t.Errorf("первая группа = %+v, ожидалось 2314 с пометкой пережатия", plan[0])
+	}
+	byKey := map[string]DiscoverPlanGroup{}
+	for _, g := range plan {
+		byKey[g.Quality+"/"+g.Codec] = g
+	}
+	if g := byKey["2160p/hevc"]; g.Episodes != 1 {
+		t.Errorf("2160p HEVC: серий %d, ожидалась 1 (%+v)", g.Episodes, g)
+	}
+	if g := byKey["2160p/h264"]; g.Episodes != 1 || g.Refit {
+		t.Errorf("2160p H.264: %+v, ожидалась одна серия без пережатия", g)
+	}
+	if g := byKey["1080p/h264"]; g.Episodes != 1 {
+		t.Errorf("1080p H.264: серий %d, ожидалась 1", g.Episodes)
+	}
+	if _, ok := byKey["1080p/hevc"]; ok {
+		t.Error("1080p HEVC не должен попасть в план: у той серии есть настоящий 4K")
+	}
+
+	// Без предела высоты пережимать нечего.
+	for _, g := range downloadPlan(it, 0) {
+		if g.Refit {
+			t.Errorf("без предела высоты пометки пережатия быть не должно: %+v", g)
+		}
 	}
 }
