@@ -271,6 +271,37 @@ func pickFitEncoder(ffmpegPath string) string {
 	return fitEncoderName
 }
 
+// EncoderStatus is one candidate encoder as this machine sees it: whether this
+// ffmpeg знает такое имя вообще и открывается ли он на самом деле. Второе без
+// первого бессмысленно, а первое без второго обманывает: ffmpeg перечисляет
+// h264_nvenc и на машине без подходящего драйвера, где он падает при открытии.
+type EncoderStatus struct {
+	Name      string `json:"name"`
+	Available bool   `json:"available"`
+	Opens     bool   `json:"opens"`
+	Chosen    bool   `json:"chosen"`
+}
+
+// ProbeEncoders reports every candidate encoder and which one the fit will use.
+// Нужен ровно для одного вопроса, на который иначе отвечают гаданием: почему на
+// этой машине перекодирование идёт процессором.
+func ProbeEncoders(ffmpegPath string) []EncoderStatus {
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+	available := listEncoders(ffmpegPath, fitEncoders)
+	chosen := pickFitEncoder(ffmpegPath)
+	out := make([]EncoderStatus, 0, len(fitEncoders))
+	for _, name := range fitEncoders {
+		st := EncoderStatus{Name: name, Available: available[name], Chosen: name == chosen}
+		if st.Available {
+			st.Opens = encoderOpens(ffmpegPath, name)
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
 // fitEncoderArgs encodes at the source bitrate: the same budget now covers
 // fewer pixels (or fewer frames) in a codec at least as efficient, which is what
 // keeps the picture. kbps 0 falls back to the HEVC quality preset.
@@ -282,6 +313,15 @@ func fitEncoderArgs(ffmpegPath string, kbps int) []string {
 	args := []string{"-c:v", name, "-b:v", fmt.Sprintf("%dk", kbps)}
 	if strings.HasPrefix(name, "hevc") {
 		args = append(args, "-tag:v", "hvc1")
+	}
+	// Программному кодировщику — быстрый пресет. Это не архивное сжатие, а
+	// приведение файла к тому, что берёт декодер, причём на битрейте
+	// ИСТОЧНИКА: запаса там столько, что разница с «medium» на глаз не видна,
+	// а время падает примерно вдвое. Три с половиной часа на фильм — это
+	// цена, которую платит человек, а не диск. У железных кодировщиков свои
+	// имена пресетов, их не трогаем.
+	if name == "libx264" || name == "libx265" {
+		args = append(args, "-preset", "faster")
 	}
 	return args
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/services/downloader"
 	"github.com/ZioSHik/kinopub-gui/internal/services/kinopubapi"
 )
 
@@ -220,6 +221,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /api/hls", s.handleHLSProxy)
 
 	mux.HandleFunc("GET /api/ffmpeg", s.handleFFmpeg)
+	mux.HandleFunc("GET /api/encoders", s.handleEncoders)
 
 	mux.HandleFunc("GET /api/deps", s.handleDeps)
 	mux.HandleFunc("POST /api/deps/install", s.handleDepsInstall)
@@ -359,6 +361,16 @@ func writeWithDeadline(rc *http.ResponseController, w io.Writer, p []byte) error
 
 func (s *Server) handleFFmpeg(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ffmpegStatus())
+}
+
+// handleEncoders says which video encoder this machine can actually use, and
+// why. «Перекодирование идёт процессором» — вопрос, на который иначе отвечают
+// гаданием: ffmpeg перечисляет h264_nvenc и там, где драйвер его не откроет,
+// поэтому проверяется и наличие имени, и живое открытие.
+func (s *Server) handleEncoders(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"encoders": downloader.ProbeEncoders(ffmpegStatus().FFmpegPath),
+	})
 }
 
 func (s *Server) handleDeps(w http.ResponseWriter, r *http.Request) {
