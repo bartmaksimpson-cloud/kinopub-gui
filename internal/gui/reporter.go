@@ -104,6 +104,10 @@ func (r *eventReporter) Start(plan domain.SeriesPlan) {
 		ev.ETASeconds = 0
 		ev.Error = ""
 		ev.Tracks = nil
+		// Отметка о диске относилась к прошлому: раз серия в плане, движок
+		// собирается её качать. Оставить отметку — значит показать «уже в
+		// папке» рядом с нулевым прогрессом и кнопкой «Отмена».
+		ev.Disk = ""
 	}
 	r.job.mu.Unlock()
 	r.mgr.publishNow(r.job)

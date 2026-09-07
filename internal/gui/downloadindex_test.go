@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"os"
 	"path/filepath"
@@ -64,3 +65,47 @@ func completedInfoFor(season, episode int, path string, size int64) domain.Compl
 		Bytes: size,
 	}
 }
+
+// Список приложения должен подсказывать движку, что серия уже скачана, — но
+// только про файлы, проверенные на месте. Иначе пропавший файл никогда бы не
+// перекачался, а это хуже лишней перекачки.
+func TestIndexingStateStore_LoadMergesVerifiedOnly(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "S01E01.mkv")
+	if err := os.WriteFile(present, []byte("кино"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ix := &downloadIndex{path: filepath.Join(dir, "downloads.json"), recs: map[string]DownloadRec{}}
+	ix.remember("8739", "Во все тяжкие", completedInfoFor(1, 1, present, 4))
+	ix.remember("8739", "Во все тяжкие", completedInfoFor(1, 2, filepath.Join(dir, "S01E02.mkv"), 4)) // файла нет
+	ix.remember("8739", "Во все тяжкие", completedInfoFor(1, 3, filepath.Join(dir, "нет-папки", "S01E03.mkv"), 4))
+
+	store := indexingStateStore{StateStore: emptyStateStore{}, ix: ix, seriesID: "8739"}
+	st, err := store.Load(context.Background(), domain.SeriesID("8739"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := st.Completed["S1E1"]; !ok {
+		t.Error("проверенный файл не попал в готовые — серия будет скачана заново")
+	}
+	if _, ok := st.Completed["S1E2"]; ok {
+		t.Error("пропавший файл попал в готовые — его никогда не перекачают")
+	}
+	if _, ok := st.Completed["S1E3"]; ok {
+		t.Error("файл в недоступной папке попал в готовые")
+	}
+}
+
+// emptyStateStore — файл состояния, которого нет: ровно то, что видит движок,
+// когда сетевая папка отвалилась.
+type emptyStateStore struct{}
+
+func (emptyStateStore) Load(context.Context, domain.SeriesID) (domain.DownloadState, error) {
+	return domain.DownloadState{}, nil
+}
+func (emptyStateStore) MarkCompleted(context.Context, domain.CompletedInfo) error { return nil }
+func (emptyStateStore) SetMetadata(context.Context, domain.SeriesID, domain.SeriesMetadata) error {
+	return nil
+}
+func (emptyStateStore) IsCompleted(domain.DownloadState, domain.EpisodeKey) bool { return false }

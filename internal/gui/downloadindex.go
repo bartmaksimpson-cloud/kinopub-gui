@@ -192,3 +192,44 @@ func (s indexingStateStore) MarkCompleted(ctx context.Context, info domain.Compl
 	}
 	return err
 }
+
+// Load merges the app's own list into the state read from disk.
+//
+// Движок решает, что качать, по файлу состояния рядом с фильмами. Файл лежит
+// на сетевой папке и исчезает вместе с ней — и сериал, целиком скачанный на
+// выключенный NAS, планируется заново. Список приложения переживает это и
+// подсказывает: вот эти серии скачаны.
+//
+// Подсказка принимается ТОЛЬКО если файл проверен на месте. Пропавший файл
+// (папка доступна, файла нет) в список готовых не попадает — его действительно
+// надо качать. Недоступная папка тоже: пока её нет, класть туда нечего, и
+// запуск всё равно упрётся в неё раньше.
+func (s indexingStateStore) Load(ctx context.Context, series domain.SeriesID) (domain.DownloadState, error) {
+	st, err := s.StateStore.Load(ctx, series)
+	if err != nil {
+		return st, err
+	}
+	if s.seriesID == "" {
+		return st, nil
+	}
+	if st.Completed == nil {
+		st.Completed = map[string]domain.CompletedRec{}
+	}
+	for key, rec := range s.ix.forSeries(s.seriesID) {
+		if _, known := st.Completed[key]; known {
+			continue
+		}
+		if checkDisk(rec.Path) != diskOK {
+			continue
+		}
+		st.Completed[key] = domain.CompletedRec{
+			Season:      rec.Season,
+			Episode:     rec.Episode,
+			Path:        rec.Path,
+			Bytes:       rec.Bytes,
+			CompletedAt: rec.CompletedAt,
+			Title:       rec.Title,
+		}
+	}
+	return st, nil
+}
