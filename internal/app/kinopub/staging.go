@@ -86,7 +86,20 @@ func isMediaFile(name string) bool {
 			return false
 		}
 	}
+	// init.mp4 — заголовок fMP4-дорожки, а не фильм. По имени он неотличим от
+	// готового файла, и первая версия этой проверки его переносила: на NAS
+	// приезжала папка с одним init.mp4 внутри вместо серии.
+	if lower == "init.mp4" {
+		return false
+	}
 	return strings.HasSuffix(lower, ".mkv") || strings.HasSuffix(lower, ".mp4")
+}
+
+// isTempDir reports whether a directory holds work in progress rather than
+// results. Внутрь таких папок ходить незачем: там сегменты, а не серии.
+func isTempDir(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".hls-tmp") || strings.HasSuffix(lower, ".tmp")
 }
 
 // FlushStaged moves everything that waited out an outage into the download
@@ -101,7 +114,16 @@ func FlushStaged(ctx context.Context, cfg domain.RunConfig, move func(from, to s
 	}
 	moved := 0
 	_ = filepath.Walk(cfg.WorkPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || ctx.Err() != nil {
+		if err != nil || info == nil || ctx.Err() != nil {
+			return nil
+		}
+		// В папку с сегментами не заходим вовсе: там тысячи файлов, среди них
+		// init.mp4, и по имени он выглядит как готовое кино. Проверять
+		// СТРУКТУРУ надёжнее, чем расширение: имя врёт, расположение — нет.
+		if info.IsDir() {
+			if isTempDir(info.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !isMediaFile(info.Name()) {

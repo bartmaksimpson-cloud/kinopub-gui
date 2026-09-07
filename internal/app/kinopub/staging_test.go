@@ -83,6 +83,19 @@ func TestFlushStaged(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Папка с сегментами: внутри init.mp4, который по имени выглядит как кино.
+	// Именно его первая версия сборщика утащила на NAS — вместо серии там
+	// появлялась папка с одним заголовком fMP4 внутри.
+	segs := filepath.Join(work, "Сериал", "Season 01", "S01E10 - Двухпалатный.mkv.ts.hls-tmp")
+	if err := os.MkdirAll(segs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"init.mp4", "seg_00001.ts"} {
+		if err := os.WriteFile(filepath.Join(segs, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// Уже лежащий на месте файл трогать нельзя.
 	taken := filepath.Join(work, "Сериал", "Season 01", "S01E03.mkv")
 	if err := os.WriteFile(taken, []byte("новое"), 0o644); err != nil {
@@ -112,5 +125,11 @@ func TestFlushStaged(t *testing.T) {
 	}
 	if body, _ := os.ReadFile(target3); string(body) != "старое" {
 		t.Error("файл на месте перезаписан тем, что лежало в рабочей папке")
+	}
+	if _, err := os.Stat(filepath.Join(segs, "init.mp4")); err != nil {
+		t.Error("заголовок fMP4 унесли из папки сегментов — серия перестанет докачиваться")
+	}
+	if _, err := os.Stat(filepath.Join(out, "Сериал", "Season 01", "S01E10 - Двухпалатный.mkv.ts.hls-tmp")); !os.IsNotExist(err) {
+		t.Error("в папке назначения появилась папка сегментов")
 	}
 }
