@@ -348,6 +348,7 @@ const RU: Record<string, string> = {
   "Choose a folder": "Выбор папки",
   "Parent folder": "Родительская папка",
   "Files download into this folder.": "Файлы скачиваются в эту папку.",
+  "already in the folder": "уже в папке",
   "Remote access": "Доступ по сети",
   "Lets you open this app from another computer on the same network — the queue, the library, starting downloads. Off by default: this server holds access to the kino.watch account, so the address alone must not be enough, and every request from the network has to carry the key below.":
     "Позволяет открыть приложение с другого компьютера в той же сети — очередь, библиотеку, запуск закачек. По умолчанию выключено: сервер держит доступ к аккаунту kino.watch, поэтому одного адреса быть недостаточно, и каждый запрос из сети обязан нести ключ ниже.",

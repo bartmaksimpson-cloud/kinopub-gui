@@ -3,6 +3,7 @@ import clsx from "clsx";
 import {
   AlertTriangle,
   ArrowUp,
+  Check,
   Ban,
   CheckCircle2,
   ChevronDown,
@@ -295,11 +296,27 @@ function EpisodeMeta({
             ) : null}
           </span>
         )}
-        {ep.segTotal > 0 && <span>{ep.segDone}/{ep.segTotal} seg</span>}
-        {ep.total > 0 && (
-          <span title={ep.totalApprox ? t("Estimated size — refines as it downloads (HLS has no fixed total)") : undefined}>
-            {bytes(ep.bytes)} / {ep.totalApprox ? "~" : ""}{bytes(ep.total)}
-          </span>
+        {/* Серия, которая уже лежит в папке загрузки: этот запуск её не качал.
+            Счётчик сегментов и «скачано» тут только путают — они показывали
+            «711/711 seg · 0 B / ~14.2 GB», то есть всё на месте и ничего не
+            скачано одновременно. */}
+        {ep.existing ? (
+          <>
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/[0.14] px-2 py-0.5 font-medium text-emerald-300">
+              <Check className="h-3 w-3" strokeWidth={3} />
+              {t("already in the folder")}
+            </span>
+            {ep.bytes > 0 && <span>{bytes(ep.bytes)}</span>}
+          </>
+        ) : (
+          <>
+            {ep.segTotal > 0 && <span>{ep.segDone}/{ep.segTotal} seg</span>}
+            {ep.total > 0 && (
+              <span title={ep.totalApprox ? t("Estimated size — refines as it downloads (HLS has no fixed total)") : undefined}>
+                {bytes(ep.bytes)} / {ep.totalApprox ? "~" : ""}{bytes(ep.total)}
+              </span>
+            )}
+          </>
         )}
         {active && ep.speedBps > 0 && (!ep.stage || ep.stage === "download") && (
           <span className="text-gold-400/90">{speed(ep.speedBps)}</span>

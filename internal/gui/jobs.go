@@ -78,12 +78,16 @@ type EpisodeView struct {
 	// TotalApprox marks Total as an estimate rather than a known size. HLS has no
 	// declared total, so it's extrapolated from the average segment size and drifts
 	// as it downloads; progressive downloads report the real Content-Length.
-	TotalApprox bool        `json:"totalApprox"`
-	SpeedBps    float64     `json:"speedBps"`
-	ETASeconds  int         `json:"etaSeconds"`
-	SegDone     int         `json:"segDone"`
-	SegTotal    int         `json:"segTotal"`
-	Tracks      []TrackView `json:"tracks,omitempty"`
+	TotalApprox bool `json:"totalApprox"`
+	// Existing marks an episode this run did not download because the file is
+	// already in the download folder. Размер тогда взят из записи о скачанном, а
+	// не из счётчика этого запуска, который честно показывает ноль.
+	Existing   bool        `json:"existing,omitempty"`
+	SpeedBps   float64     `json:"speedBps"`
+	ETASeconds int         `json:"etaSeconds"`
+	SegDone    int         `json:"segDone"`
+	SegTotal   int         `json:"segTotal"`
+	Tracks     []TrackView `json:"tracks,omitempty"`
 	// Stage is what is happening right now — "download", "mux" or "encode" —
 	// and StageFormat what comes out of it ("2880x2160 · HEVC · 12000 kbps").
 	// Without these a job sits at 100% through a half-hour re-encode with

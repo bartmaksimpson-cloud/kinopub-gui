@@ -173,6 +173,29 @@ func (r *eventReporter) EpisodeCompleted(key domain.EpisodeKey) {
 	r.mgr.autoPauseIfAllHeld(r.job)
 }
 
+// EpisodeAlreadyDone помечает серию, которую скачивать не нужно: она уже лежит
+// в папке загрузки. Строка при этом перестаёт врать — раньше там стояло «в
+// очереди, 0 Б» рядом с полным счётчиком сегментов, и отличить давно готовую
+// серию от неначатой было нельзя.
+func (r *eventReporter) EpisodeAlreadyDone(key domain.EpisodeKey, rec domain.CompletedRec) {
+	r.job.mu.Lock()
+	ev := r.job.ensureEpisode(key)
+	ev.State = epCompleted
+	ev.Existing = true
+	ev.Percent = 100
+	ev.Stage, ev.StageFormat, ev.StageEncoder, ev.StageThreads = "", "", "", 0
+	ev.StagePercent, ev.StageETASeconds = 0, 0
+	ev.SpeedBps, ev.ETASeconds = 0, 0
+	ev.Error = ""
+	// Размер берётся из записи о скачанном: этот запуск не скачал ни байта, и
+	// собственный счётчик показал бы ноль.
+	if rec.Bytes > 0 {
+		ev.Bytes, ev.Total, ev.TotalApprox = rec.Bytes, rec.Bytes, false
+	}
+	r.job.mu.Unlock()
+	r.mgr.publishNow(r.job)
+}
+
 func (r *eventReporter) EpisodeFailed(key domain.EpisodeKey, err error) {
 	r.job.mu.Lock()
 	// The engine acknowledges a per-episode cancel through this generic hook.

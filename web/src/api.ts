@@ -27,6 +27,8 @@ export interface EpisodeView {
   bytes: number;
   total: number;
   totalApprox?: boolean; // total is an estimate (HLS), not a known size
+  // Серия уже лежала в папке загрузки — этот запуск её не качал.
+  existing?: boolean;
   speedBps: number;
   etaSeconds: number;
   segDone: number;

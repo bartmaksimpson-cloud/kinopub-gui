@@ -124,6 +124,17 @@ type ProgressReporter interface {
 	Stop()
 }
 
+// EpisodeExistingSink принимает серии, которые скачивать не нужно — они уже
+// лежат на диске. Интерфейс необязательный: реализует его тот, кому есть что
+// показать человеку.
+//
+// Без этого такие серии оставались в карточке «в очереди, 0 Б» с полным
+// счётчиком сегментов: скачано всё, показано ничего. Движок про них знает —
+// он их и пропустил, — а интерфейс не знал.
+type EpisodeExistingSink interface {
+	EpisodeAlreadyDone(key EpisodeKey, rec CompletedRec)
+}
+
 // StateStore persists and queries download completion state (Req 12).
 type StateStore interface {
 	Load(ctx context.Context, series SeriesID) (DownloadState, error)

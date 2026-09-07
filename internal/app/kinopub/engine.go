@@ -153,6 +153,21 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	}
 
 	alreadyCompleted := len(allMatching) - len(selected)
+	// Сказать про уже скачанные вслух: иначе в карточке они висят «в очереди,
+	// 0 Б» рядом с полным счётчиком сегментов, и понять, что серия давно на
+	// месте, можно только по библиотеке.
+	if sink, ok := e.deps.ProgressReporter.(domain.EpisodeExistingSink); ok && alreadyCompleted > 0 {
+		chosen := make(map[domain.EpisodeKey]bool, len(selected))
+		for _, ep := range selected {
+			chosen[ep.Key] = true
+		}
+		for _, ep := range allMatching {
+			if chosen[ep.Key] {
+				continue
+			}
+			sink.EpisodeAlreadyDone(ep.Key, state.Completed[episodeKeyStr(ep.Key)])
+		}
+	}
 	log.Info("HLS download starting",
 		domain.F("to_download", len(selected)),
 		domain.F("already_completed", alreadyCompleted),
