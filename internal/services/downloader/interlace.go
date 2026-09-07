@@ -2,12 +2,12 @@ package downloader
 
 import (
 	"context"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/proc"
 )
 
 // interlacedFieldOrders are the ffprobe answers that mean "two half-frames from
@@ -42,7 +42,7 @@ func isInterlacedFile(ffmpegPath, path string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, ffprobeNear(ffmpegPath),
+	out, err := proc.CommandContext(ctx, ffprobeNear(ffmpegPath),
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=field_order",
@@ -81,7 +81,7 @@ func isTenBitFile(ffmpegPath, path string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, ffprobeNear(ffmpegPath),
+	out, err := proc.CommandContext(ctx, ffprobeNear(ffmpegPath),
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=pix_fmt",

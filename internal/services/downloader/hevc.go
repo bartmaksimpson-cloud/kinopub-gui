@@ -3,11 +3,12 @@ package downloader
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ZioSHik/kinopub-gui/internal/lib/proc"
 )
 
 // hevcSourceCodecs marks a source that already carries HEVC video, so asking for
@@ -93,7 +94,7 @@ func encoderOpensDepth(ffmpegPath, name string, tenBit bool) bool {
 		args = append(args, "-pix_fmt", tenBitPixFmt)
 	}
 	args = append(args, "-c:v", name, "-f", "null", "-")
-	return exec.CommandContext(ctx, ffmpegPath, args...).Run() == nil
+	return proc.CommandContext(ctx, ffmpegPath, args...).Run() == nil
 }
 
 // tenBitPixFmt is the depth worth keeping: 10 бит на канал, планарный 4:2:0 —
@@ -430,7 +431,7 @@ func listEncoders(ffmpegPath string, names []string) map[string]bool {
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
-	b, err := exec.Command(ffmpegPath, "-hide_banner", "-encoders").Output()
+	b, err := proc.Command(ffmpegPath, "-hide_banner", "-encoders").Output()
 	if err != nil {
 		return out
 	}

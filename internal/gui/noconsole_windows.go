@@ -4,9 +4,8 @@ package gui
 
 import (
 	"os/exec"
-	"syscall"
 
-	"golang.org/x/sys/windows"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/proc"
 )
 
 // hideConsole keeps a console child from opening a window of its own.
@@ -21,9 +20,4 @@ import (
 //
 // CREATE_NO_WINDOW is the flag that actually prevents the console being
 // created; HideWindow only hides a window that was made anyway.
-func hideConsole(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
-}
+func hideConsole(cmd *exec.Cmd) { proc.Hide(cmd) }

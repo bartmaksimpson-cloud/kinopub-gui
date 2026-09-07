@@ -4,10 +4,11 @@ package credstore
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
+
+	"github.com/ZioSHik/kinopub-gui/internal/lib/proc"
 )
 
 // machineSeed returns a machine-specific identifier on Windows.
@@ -38,7 +39,7 @@ func machineSeed() ([]byte, error) {
 	}
 
 	// 2. PowerShell CIM (Win32_ComputerSystemProduct.UUID).
-	if out, err := exec.Command(
+	if out, err := proc.Command(
 		"powershell", "-NoProfile", "-NonInteractive", "-Command",
 		"(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID",
 	).Output(); err == nil {
@@ -48,7 +49,7 @@ func machineSeed() ([]byte, error) {
 	}
 
 	// 3. Legacy wmic (removed on current Windows, but kept for back-compat).
-	if out, err := exec.Command("wmic", "csproduct", "get", "UUID").Output(); err == nil {
+	if out, err := proc.Command("wmic", "csproduct", "get", "UUID").Output(); err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			if line = strings.TrimSpace(line); line != "" && line != "UUID" {
 				return []byte(line), nil
