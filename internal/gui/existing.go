@@ -17,9 +17,15 @@ import (
 // весь интерфейс.
 func (m *JobManager) refreshExisting(j *Job) {
 	j.mu.Lock()
-	url, out := j.url, j.outputPath
+	url, out, status := j.url, j.outputPath, j.status
 	j.mu.Unlock()
 	if url == "" || out == "" {
+		return
+	}
+	// Пока запуск идёт, правду о сериях знает движок: он их и качает, и
+	// пропускает. Скан диска в это время только спорил бы с ним, причём с
+	// задержкой на обход сетевой папки.
+	if status == statusRunning || status == statusResolving {
 		return
 	}
 	id := kinopubapi.ItemIDFromURL(url)

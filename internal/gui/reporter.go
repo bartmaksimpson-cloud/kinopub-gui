@@ -116,6 +116,10 @@ func (r *eventReporter) EpisodeStarted(key domain.EpisodeKey) {
 	if ev.Percent >= 100 {
 		ev.Percent = 0
 	}
+	// Отметка «уже в папке» относится к прошлому: раз серию качают, файла в
+	// папке загрузки нет. Иначе она остаётся висеть рядом с идущим прогрессом —
+	// «уже в папке · 1% · 2.4 МБ», — и карточка врёт в самом важном месте.
+	ev.Existing = false
 	ev.Error = ""
 	ev.lastTime = time.Time{}
 	ev.lastBytes = 0
