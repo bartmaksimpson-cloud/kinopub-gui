@@ -89,13 +89,13 @@ func isMediaFile(name string) bool {
 	return strings.HasSuffix(lower, ".mkv") || strings.HasSuffix(lower, ".mp4")
 }
 
-// flushStaged moves everything that waited out an outage into the download
+// FlushStaged moves everything that waited out an outage into the download
 // folder. Вызывается в начале запуска: к этому моменту диск обычно уже вернулся,
 // а человек ничего для этого не делал.
 //
 // Ошибки не останавливают запуск: не переехало — значит подождёт следующего
 // раза, файл при этом никуда не девается.
-func flushStaged(ctx context.Context, cfg domain.RunConfig, move func(from, to string) error, log domain.Logger) int {
+func FlushStaged(ctx context.Context, cfg domain.RunConfig, move func(from, to string) error, log domain.Logger) int {
 	if cfg.WorkPath == "" || cfg.OutputPath == "" || cfg.WorkPath == cfg.OutputPath {
 		return 0
 	}

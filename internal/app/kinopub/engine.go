@@ -63,7 +63,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// пока папка загрузки была недоступна, уезжают на своё место. К началу
 	// следующего запуска диск обычно уже вернулся, и человек для этого ничего
 	// не делал.
-	if n := flushStaged(ctx, cfg, fsutil.Move, log); n > 0 {
+	if n := FlushStaged(ctx, cfg, fsutil.Move, log); n > 0 {
 		log.Info("перенёс файлы, дождавшиеся папки загрузки", domain.F("count", n))
 	}
 

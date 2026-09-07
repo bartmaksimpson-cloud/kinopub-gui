@@ -96,7 +96,7 @@ func TestFlushStaged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if n := flushStaged(context.Background(), cfg, fsutil.Move, &mockLogger{}); n != 1 {
+	if n := FlushStaged(context.Background(), cfg, fsutil.Move, &mockLogger{}); n != 1 {
 		t.Fatalf("перенесено файлов: %d, ожидался один", n)
 	}
 

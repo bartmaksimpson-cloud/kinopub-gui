@@ -116,6 +116,10 @@ func NewServer(version string, static fs.FS) *Server {
 	// as paused cards (failed ones keep their error) with Resume/Retry working —
 	// the engine skips completed episodes and continues partial .hls-tmp segments.
 	s.mgr.attachStore(newJobStore())
+	// Сессия живёт неделями, а сетевая папка загрузки пропадает и возвращается
+	// посреди дня. Сборщик ждёт её возвращения и уносит туда серии, собранные
+	// в рабочей папке, пока диска не было.
+	s.startStagedSweeper(context.Background())
 	s.routes()
 	return s
 }
