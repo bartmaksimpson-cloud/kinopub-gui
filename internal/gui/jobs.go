@@ -451,6 +451,21 @@ func (m *JobManager) attachStore(store *jobStore) {
 	// for the same episodes. Resuming both would put two engines on one set of
 	// files, so collapse them now, while nothing is running yet.
 	m.dedupeQueue()
+	// Восстановленная карточка ничего не знает о том, что уже лежит на диске:
+	// движок не запускался и сообщить об этом было некому. Спрашиваем диск —
+	// иначе давно скачанные серии показываются как «на паузе, 0 Б» с кнопкой
+	// «Продолжить».
+	m.mu.Lock()
+	restored := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		restored = append(restored, j)
+	}
+	m.mu.Unlock()
+	go func() {
+		for _, j := range restored {
+			m.refreshExisting(j)
+		}
+	}()
 	go m.persistLoop()
 }
 
@@ -1406,6 +1421,10 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 	}
 	j.mu.Unlock()
 	m.publishNow(j)
+	// Запуск кончился — самое время сверить карточку с диском: серии, которые
+	// он пропустил как уже скачанные, только что были помечены «на паузе» или
+	// «не удалось», хотя лежат в папке загрузки целыми.
+	go m.refreshExisting(j)
 }
 
 // nothingLeftButPausedLocked reports whether the engine has nothing left to do

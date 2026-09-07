@@ -396,7 +396,11 @@ function SeasonList({ job }: { job: JobView }) {
     <>
       {seasons.map(({ season, eps, done, total, active, size }) => {
         const complete = done === total;
-        const open = manual[season] ?? (active || !complete);
+        // Раскрыт только тот сезон, в котором сейчас работа. Остальные свёрнуты,
+        // даже если не докачаны: пять раскрытых сезонов по тринадцать серий —
+        // это снова список, мимо которого надо листать. Ручное решение сильнее:
+        // раскрыл сам — останется раскрытым.
+        const open = manual[season] ?? active;
         return (
           <div key={season}>
             <button
