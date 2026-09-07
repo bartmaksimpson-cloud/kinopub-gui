@@ -295,15 +295,20 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// cancel removes the episode from the run for good — its row leaves the card
 	// too — so keeping the .hls-tmp would strand gigabytes with nothing left
 	// pointing at them. (A PAUSE is the opposite: there the data is the point.)
-	// muxing отмечает серии, у которых скачивание уже ЗАКОНЧИЛОСЬ и идёт
-	// склейка. Отмена на этой стадии не должна стирать сегменты: скачаны все,
-	// это часы работы, а отменяют обычно саму склейку — и человек справедливо
-	// ждёт, что повтор начнётся с неё, а не с нуля.
-	muxing := map[string]bool{}
+	// downloaded отмечает серии, у которых скачивание уже ЗАКОНЧИЛОСЬ: дальше
+	// шла склейка. Отмена на этой стадии не должна стирать сегменты — скачаны
+	// все, это часы работы, а отменяют обычно саму склейку, и повтор человек
+	// справедливо ждёт с неё, а не с нуля.
+	//
+	// Отметка НЕ снимается по выходу из попытки: отмену обрабатывает отдельная
+	// горутина, и она вполне может добраться до дела уже после того, как
+	// попытка свернулась. Снятая к тому моменту отметка означала бы стёртые
+	// сегменты — ровно то, чего мы избегаем.
+	downloaded := map[string]bool{}
 	dropCanceledTemp := func(ep domain.Episode) {
 		ks := episodeKeyStr(ep.Key)
 		mu.Lock()
-		keep := muxing[ks]
+		keep := downloaded[ks]
 		mu.Unlock()
 		if keep {
 			log.Info("отмена на склейке: скачанное оставляю на диске",
@@ -382,16 +387,12 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		epCancels[ks] = epCancel
 		mu.Unlock()
 
-		markMuxing := func(on bool) {
+		markDownloaded := func() {
 			mu.Lock()
-			if on {
-				muxing[episodeKeyStr(pe.ep.Key)] = true
-			} else {
-				delete(muxing, episodeKeyStr(pe.ep.Key))
-			}
+			downloaded[episodeKeyStr(pe.ep.Key)] = true
 			mu.Unlock()
 		}
-		res, err := e.attemptHLSEpisode(epCtx, cfg, series, pe.ep, pe.manifest, posterPath, markMuxing)
+		res, err := e.attemptHLSEpisode(epCtx, cfg, series, pe.ep, pe.manifest, posterPath, markDownloaded)
 
 		mu.Lock()
 		delete(epCancels, ks)
@@ -1055,9 +1056,9 @@ func (e *engine) attemptHLSEpisode(
 	ep domain.Episode,
 	manifestURL string,
 	posterPath string,
-	// markMuxing сообщает наружу, что скачивание кончилось и пошла склейка:
+	// markDownloaded сообщает наружу, что скачивание кончилось и пошла склейка:
 	// отмена на этой стадии не должна стирать скачанные сегменты.
-	markMuxing func(bool),
+	markDownloaded func(),
 ) (episodeOutcome, error) {
 	log := e.deps.Logger.Component("engine-hls")
 	epLabel := fmt.Sprintf("S%02dE%02d", ep.Key.Season, ep.Key.Episode)
@@ -1115,9 +1116,8 @@ func (e *engine) attemptHLSEpisode(
 	}
 
 	// Mux downloaded video + audio streams into the final container.
-	if markMuxing != nil {
-		markMuxing(true)
-		defer markMuxing(false)
+	if markDownloaded != nil {
+		markDownloaded()
 	}
 	log.Info("muxing",
 		domain.F("episode", epLabel),
