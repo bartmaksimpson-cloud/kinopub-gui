@@ -119,7 +119,7 @@ func (r *eventReporter) EpisodeStarted(key domain.EpisodeKey) {
 	// Отметка «уже в папке» относится к прошлому: раз серию качают, файла в
 	// папке загрузки нет. Иначе она остаётся висеть рядом с идущим прогрессом —
 	// «уже в папке · 1% · 2.4 МБ», — и карточка врёт в самом важном месте.
-	ev.Existing = false
+	ev.Disk = ""
 	ev.Error = ""
 	ev.lastTime = time.Time{}
 	ev.lastBytes = 0
@@ -185,7 +185,7 @@ func (r *eventReporter) EpisodeAlreadyDone(key domain.EpisodeKey, rec domain.Com
 	r.job.mu.Lock()
 	ev := r.job.ensureEpisode(key)
 	ev.State = epCompleted
-	ev.Existing = true
+	ev.Disk = diskOK
 	ev.Percent = 100
 	ev.Stage, ev.StageFormat, ev.StageEncoder, ev.StageThreads = "", "", "", 0
 	ev.StagePercent, ev.StageETASeconds = 0, 0

@@ -79,10 +79,15 @@ type EpisodeView struct {
 	// declared total, so it's extrapolated from the average segment size and drifts
 	// as it downloads; progressive downloads report the real Content-Length.
 	TotalApprox bool `json:"totalApprox"`
-	// Existing marks an episode this run did not download because the file is
-	// already in the download folder. Размер тогда взят из записи о скачанном, а
-	// не из счётчика этого запуска, который честно показывает ноль.
-	Existing   bool        `json:"existing,omitempty"`
+	// Disk is what a check of the finished file found: "ok" — файл на месте,
+	// "offline" — папка сейчас недоступна (сетевой диск отключён), "missing" —
+	// папка есть, а файла в ней нет. Пусто означает «не проверяли» или «эта
+	// серия ещё не скачивалась».
+	//
+	// Три состояния вместо одного «скачано» появились не от любви к деталям:
+	// пропавшая шара и удалённый файл требуют разного — первое ждут, второе
+	// перекачивают, — а выглядели одинаково.
+	Disk string `json:"disk,omitempty"`
 	SpeedBps   float64     `json:"speedBps"`
 	ETASeconds int         `json:"etaSeconds"`
 	SegDone    int         `json:"segDone"`
@@ -389,6 +394,12 @@ type JobManager struct {
 
 	hub *Hub
 
+	// index — собственный список скачанного, живущий в папке приложения.
+	// Файл состояния лежит рядом с фильмом и исчезает вместе с сетевым диском;
+	// этот остаётся, и по нему видно, что серия скачивалась, даже когда папку
+	// сейчас не видно.
+	index *downloadIndex
+
 	// store persists the queue to disk so unfinished downloads survive a restart
 	// (restored as paused/failed cards that can be resumed). persistGen is bumped
 	// on every job change; persistLoop writes a snapshot when it advances, and
@@ -417,8 +428,9 @@ type JobManager struct {
 
 func newJobManager(hub *Hub) *JobManager {
 	m := &JobManager{
-		jobs: make(map[string]*Job),
-		hub:  hub,
+		jobs:  make(map[string]*Job),
+		hub:   hub,
+		index: newDownloadIndex(),
 		// No handlers: the controller's debug chatter belongs to no single job's
 		// card, and there is no log view to send it to.
 		limiter: hlsdownloader.NewLimiter(0, logx.New(nil)),
@@ -1363,7 +1375,7 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 		m.failJob(j, "not signed in to kino.watch — sign in in Settings to download")
 		return
 	}
-	deps, err := buildEngineDeps(cfg, apiClient, logger, reporter, chooser, j.prioritize, j.pauseEp, j.resumeEp, j.retryEp, j.cancelEp, j.paused.Load, m.limiter)
+	deps, err := buildEngineDeps(cfg, apiClient, logger, m.index, reporter, chooser, j.prioritize, j.pauseEp, j.resumeEp, j.retryEp, j.cancelEp, j.paused.Load, m.limiter)
 	if err != nil {
 		m.failJob(j, "setup failed: "+err.Error())
 		return

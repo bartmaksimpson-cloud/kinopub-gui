@@ -300,11 +300,22 @@ function EpisodeMeta({
             Счётчик сегментов и «скачано» тут только путают — они показывали
             «711/711 seg · 0 B / ~14.2 GB», то есть всё на месте и ничего не
             скачано одновременно. */}
-        {ep.existing ? (
+        {ep.disk ? (
           <>
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/[0.14] px-2 py-0.5 font-medium text-emerald-300">
-              <Check className="h-3 w-3" strokeWidth={3} />
-              {t("already in the folder")}
+            <span
+              className={clsx(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium",
+                ep.disk === "ok" && "bg-emerald-500/[0.14] text-emerald-300",
+                ep.disk === "offline" && "bg-amber-500/[0.14] text-amber-300",
+                ep.disk === "missing" && "bg-ember-500/[0.14] text-ember-400",
+              )}
+            >
+              {ep.disk === "ok" && <Check className="h-3 w-3" strokeWidth={3} />}
+              {ep.disk === "ok"
+                ? t("already in the folder")
+                : ep.disk === "offline"
+                  ? t("downloaded — folder unavailable")
+                  : t("downloaded — file is gone")}
             </span>
             {ep.bytes > 0 && <span>{bytes(ep.bytes)}</span>}
           </>

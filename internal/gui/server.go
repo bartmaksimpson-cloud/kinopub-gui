@@ -358,6 +358,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/doctor", s.handleDoctor)
 	mux.HandleFunc("GET /api/library", s.handleLibrary)
 	mux.HandleFunc("GET /api/library/downloaded", s.handleLibraryDownloaded)
+	mux.HandleFunc("POST /api/downloads/verify", s.handleVerifyDownloads)
 	mux.HandleFunc("POST /api/library/delete", s.handleDeleteLibrary)
 	mux.HandleFunc("POST /api/library/delete-episode", s.handleDeleteLibraryEpisode)
 	mux.HandleFunc("POST /api/open", s.handleOpenPath)
@@ -1011,6 +1012,45 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+// handleVerifyDownloads checks every finished download the app remembers and
+// says what became of it.
+//
+// Отвечает на вопрос, который до сих пор оставался без ответа: файл скачан —
+// а он вообще на месте? Три исхода различаются намеренно. «Папка недоступна» —
+// это отключённый сетевой диск, ждать; «файла нет» — его удалили, качать
+// заново. Раньше оба выглядели как «не скачано», и приложение молча начинало
+// перекачивать сериал, который целиком лежал на выключенном NAS.
+func (s *Server) handleVerifyDownloads(w http.ResponseWriter, r *http.Request) {
+	recs := s.mgr.index.all()
+	type item struct {
+		DownloadRec
+		Disk string `json:"disk"`
+	}
+	out := make([]item, 0, len(recs))
+	counts := map[string]int{diskOK: 0, diskOffline: 0, diskMissing: 0}
+	var okBytes int64
+	for _, rec := range recs {
+		st := checkDisk(rec.Path)
+		counts[st]++
+		if st == diskOK {
+			okBytes += rec.Bytes
+		}
+		out = append(out, item{DownloadRec: rec, Disk: st})
+	}
+	// Карточки в очереди тоже должны увидеть свежую правду — человек нажал
+	// «Обновить» именно ради этого.
+	go s.mgr.refreshAllExisting()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":     out,
+		"total":     len(out),
+		"ok":        counts[diskOK],
+		"offline":   counts[diskOffline],
+		"missing":   counts[diskMissing],
+		"okBytes":   okBytes,
+		"checkedAt": time.Now(),
+	})
 }
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {

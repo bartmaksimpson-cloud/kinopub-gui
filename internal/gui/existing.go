@@ -35,16 +35,30 @@ func (m *JobManager) refreshExisting(j *Job) {
 
 	type onDisk struct {
 		bytes int64
+		state string
 	}
 	found := map[string]onDisk{}
+
+	// Сначала собственный список: он знает, ЧТО приложение скачивало, даже
+	// когда папку сейчас не видно. Библиотека такого сказать не может — она
+	// читает файлы состояния, а те лежат вместе с фильмами и пропадают вместе
+	// с диском.
+	for key, rec := range m.index.forSeries(id) {
+		found[key] = onDisk{bytes: rec.Bytes, state: checkDisk(rec.Path)}
+	}
+
+	// Дополняем сканом папки: серии, скачанные до появления списка или другой
+	// машиной, в нём не значатся, а на диске лежат.
 	for _, series := range scanLibrary([]string{out}).Series {
 		if !seriesMatchesItem(series, id) {
 			continue
 		}
 		for _, ep := range series.Episodes {
-			if ep.Exists {
-				found[epKey(domain.EpisodeKey{Season: ep.Season, Episode: ep.Episode})] = onDisk{bytes: ep.Bytes}
+			key := epKey(domain.EpisodeKey{Season: ep.Season, Episode: ep.Episode})
+			if _, known := found[key]; known || !ep.Exists {
+				continue
 			}
+			found[key] = onDisk{bytes: ep.Bytes, state: diskOK}
 		}
 	}
 	if len(found) == 0 {
@@ -58,11 +72,22 @@ func (m *JobManager) refreshExisting(j *Job) {
 		if !ok || ev.State == epRunning {
 			continue // идущую серию не трогаем: у неё своя, живая правда
 		}
-		if ev.State == epCompleted && ev.Existing {
+		if ev.State == epCompleted && ev.Disk == disk.state {
+			continue
+		}
+		// Файла нет, а папка на месте — это не «скачано»: значит его удалили, и
+		// притворяться, что серия готова, значит прятать работу, которую придётся
+		// сделать заново.
+		if disk.state == diskMissing {
+			if ev.State == epCompleted {
+				ev.State = epFailed
+				ev.Disk = diskMissing
+				changed = true
+			}
 			continue
 		}
 		ev.State = epCompleted
-		ev.Existing = true
+		ev.Disk = disk.state
 		ev.Percent = 100
 		ev.Error = ""
 		ev.SpeedBps, ev.ETASeconds = 0, 0
@@ -76,5 +101,18 @@ func (m *JobManager) refreshExisting(j *Job) {
 	j.mu.Unlock()
 	if changed {
 		m.publishNow(j)
+	}
+}
+
+// refreshAllExisting re-checks every job's episodes against the disk.
+func (m *JobManager) refreshAllExisting() {
+	m.mu.RLock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	m.mu.RUnlock()
+	for _, j := range jobs {
+		m.refreshExisting(j)
 	}
 }

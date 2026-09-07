@@ -17,6 +17,7 @@ import {
   MonitorPlay,
   Play,
   RefreshCw,
+  ShieldCheck,
   Search,
   Trash2,
   Tv,
@@ -729,6 +730,33 @@ export function LibraryPage({ onNew }: { onNew: () => void }) {
   const cardId = useRoute().itemId ?? null;
 
   const [scanError, setScanError] = useState(false);
+  // Проверка всех загрузок: где файл, доступна ли папка, не пропал ли он.
+  const [verifying, setVerifying] = useState(false);
+  const verify = async () => {
+    setVerifying(true);
+    try {
+      const r = await api.verifyDownloads();
+      if (r.total === 0) {
+        toast(t("Nothing to check yet"), "info");
+      } else {
+        toast(
+          t("Checked {n}: {ok} in place, {offline} unavailable, {missing} gone", {
+            n: r.total,
+            ok: r.ok,
+            offline: r.offline,
+            missing: r.missing,
+          }),
+          r.missing > 0 ? "error" : r.offline > 0 ? "info" : "success",
+        );
+      }
+      await load();
+    } catch (e: any) {
+      toast(e.message || "Error", "error");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
   const load = () => {
     setLoading(true);
     api
@@ -863,6 +891,15 @@ export function LibraryPage({ onNew }: { onNew: () => void }) {
         <div className="flex items-center gap-2">
           <button className="btn-ghost" onClick={onNew} title={t("Download by a kino.watch link")}>
             <Link2 className="h-4 w-4" /> {t("Advanced download")}
+          </button>
+          {/* «Пересканировать» перечитывает папки: что в них лежит сейчас.
+              «Проверить файлы» отвечает на другой вопрос — где всё, что мы
+              когда-либо скачали, — и отличает отключённый диск от удалённого
+              файла. Первое видит только доступные папки, второе помнит и
+              недоступные. */}
+          <button className="btn-ghost" onClick={verify} disabled={verifying}>
+            {verifying ? <Spinner className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
+            {verifying ? t("Checking…") : t("Check files")}
           </button>
           <button className="btn-ghost" onClick={load} disabled={loading}>
             {loading ? <Spinner className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}

@@ -34,6 +34,7 @@ func buildEngineDeps(
 	cfg domain.RunConfig,
 	apiClient *kinopubapi.Client,
 	logger domain.Logger,
+	index *downloadIndex,
 	reporter domain.ProgressReporter,
 	chooser domain.AudioChooser,
 	prioritize <-chan domain.EpisodeKey,
@@ -64,6 +65,17 @@ func buildEngineDeps(
 		outputDir, _ = os.Getwd()
 	}
 	stateStr := statestore.New(outputDir, logger)
+	// Каждое завершение записывается и в собственный список приложения: файл
+	// состояния лежит рядом с фильмом и исчезает вместе с сетевым диском, а
+	// помнить о своей работе приложение должно и без диска.
+	var store domain.StateStore = stateStr
+	if index != nil {
+		store = indexingStateStore{
+			StateStore: stateStr,
+			ix:         index,
+			seriesID:   kinopubapi.ItemIDFromURL(cfg.InputURL),
+		}
+	}
 
 	dl := downloader.New(
 		makeRunFunc(),
@@ -101,7 +113,7 @@ func buildEngineDeps(
 		Downloader:       dl,
 		ProxyProvider:    proxyProv,
 		ProgressReporter: reporter,
-		StateStore:       stateStr,
+		StateStore:       store,
 		OutputLayout:     layout,
 		PageScraper:      kinopubapi.NewScraper(apiClient, logger),
 		// Segment concurrency starts at the downloader's modest default and is

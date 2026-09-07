@@ -27,8 +27,9 @@ export interface EpisodeView {
   bytes: number;
   total: number;
   totalApprox?: boolean; // total is an estimate (HLS), not a known size
-  // Серия уже лежала в папке загрузки — этот запуск её не качал.
-  existing?: boolean;
+  // Что показала проверка готового файла: "ok" — на месте, "offline" — папка
+  // сейчас недоступна, "missing" — папка есть, а файла нет.
+  disk?: "ok" | "offline" | "missing";
   speedBps: number;
   etaSeconds: number;
   segDone: number;
@@ -740,6 +741,13 @@ export const api = {
   fs: (path: string) => req<FSListing>("GET", `/api/fs?path=${encodeURIComponent(path)}`),
   net: () => req<{ urls: string[] }>("GET", "/api/net"),
   newRemoteKey: () => req<Settings>("POST", "/api/settings/remote-key"),
+  verifyDownloads: () =>
+    req<{ total: number; ok: number; offline: number; missing: number; okBytes: number }>(
+      "POST",
+      "/api/downloads/verify",
+      undefined,
+      { timeoutMs: 180_000 },
+    ),
 
   // Official kino.watch API auth (device-code).
   kpStatus: () => req<KPStatus>("GET", "/api/kp/status"),

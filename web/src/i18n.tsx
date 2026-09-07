@@ -349,6 +349,13 @@ const RU: Record<string, string> = {
   "Parent folder": "Родительская папка",
   "Files download into this folder.": "Файлы скачиваются в эту папку.",
   "already in the folder": "уже в папке",
+  "downloaded — folder unavailable": "скачано — папка недоступна",
+  "downloaded — file is gone": "скачано — файла нет",
+  "Check files": "Проверить файлы",
+  "Checking…": "Проверяю…",
+  "Checked {n}: {ok} in place, {offline} unavailable, {missing} gone":
+    "Проверено {n}: на месте {ok}, папка недоступна у {offline}, пропало {missing}",
+  "Nothing to check yet": "Пока нечего проверять",
   "Remote access": "Доступ по сети",
   "Lets you open this app from another computer on the same network — the queue, the library, starting downloads. Off by default: this server holds access to the kino.watch account, so the address alone must not be enough, and every request from the network has to carry the key below.":
     "Позволяет открыть приложение с другого компьютера в той же сети — очередь, библиотеку, запуск закачек. По умолчанию выключено: сервер держит доступ к аккаунту kino.watch, поэтому одного адреса быть недостаточно, и каждый запрос из сети обязан нести ключ ниже.",
