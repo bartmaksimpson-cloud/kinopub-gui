@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import clsx from "clsx";
 import {
   AlertTriangle,
@@ -355,6 +355,72 @@ function EpisodeMeta({
           ))}
         </div>
       )}
+    </>
+  );
+}
+
+// SeasonList раскладывает серии по сезонам и сворачивает то, что уже скачано.
+//
+// У «Во все тяжкие» шестьдесят две серии одним списком: чтобы увидеть, где
+// работа идёт сейчас, приходилось листать мимо готового. Сезон, в котором всё
+// скачано, свёрнут — от него нужен только итог; сезон, где что-то качается или
+// ждёт очереди, раскрыт. Ручное переключение сильнее этого правила: открыл
+// сезон сам — он останется открытым.
+function SeasonList({ job }: { job: JobView }) {
+  const { t } = useI18n();
+  const [manual, setManual] = useState<Record<number, boolean>>({});
+
+  const seasons = useMemo(() => {
+    const order: number[] = [];
+    const byNum = new Map<number, EpisodeView[]>();
+    for (const ep of job.episodes) {
+      if (!byNum.has(ep.season)) {
+        byNum.set(ep.season, []);
+        order.push(ep.season);
+      }
+      byNum.get(ep.season)!.push(ep);
+    }
+    return order.map((season) => {
+      const eps = byNum.get(season)!;
+      const done = eps.filter((e) => e.state === "completed").length;
+      const active = eps.some((e) => e.state === "running" || e.state === "deferred");
+      // Размер считается по готовым сериям: у недокачанной он ещё меняется, и
+      // складывать одно с другим значило бы показывать число, которое ничего
+      // не означает.
+      const size = eps.reduce((acc, e) => acc + (e.state === "completed" ? e.bytes : 0), 0);
+      return { season, eps, done, total: eps.length, active, size };
+    });
+  }, [job.episodes]);
+
+  return (
+    <>
+      {seasons.map(({ season, eps, done, total, active, size }) => {
+        const complete = done === total;
+        const open = manual[season] ?? (active || !complete);
+        return (
+          <div key={season}>
+            <button
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-slate-300 hover:bg-white/[0.04]"
+              onClick={() => setManual((m) => ({ ...m, [season]: !open }))}
+            >
+              {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <span className="font-medium">{t("Season {n}", { n: season })}</span>
+              <span className={clsx("tabular-nums", complete ? "text-emerald-300/90" : "text-slate-500")}>
+                {done}/{total}
+              </span>
+              {size > 0 && <span className="text-slate-500">{bytes(size)}</span>}
+              {active && <span className="text-gold-400/90">{t("downloading")}</span>}
+            </button>
+            {open && (
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                {eps.map((ep) => (
+                  <EpisodeRow key={ep.key} ep={ep} jobId={job.id} jobStatus={job.status} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </>
   );
 }
@@ -771,18 +837,8 @@ export function JobCard({ job }: { job: JobView }) {
       </div>
 
       {showEps && totalEps > 0 && !single && (
-        <div className="grid gap-2 border-t border-white/[0.05] bg-black/20 p-4 md:grid-cols-2">
-          {job.episodes.map((ep) => (
-            <EpisodeRow
-              key={ep.key}
-              ep={ep}
-              jobId={job.id}
-              jobStatus={job.status}
-              // "Next" needs something to get ahead of: other not-yet-done
-              // episodes here (plan total counts unstarted ones without rows),
-              // or another active download in the queue.
-            />
-          ))}
+        <div className="space-y-3 border-t border-white/[0.05] bg-black/20 p-4">
+          <SeasonList job={job} />
         </div>
       )}
 
