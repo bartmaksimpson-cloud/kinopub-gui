@@ -59,6 +59,14 @@ func (e *engine) run(ctx context.Context, cfg domain.RunConfig) (domain.RunResul
 func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunResult, error) {
 	log := e.deps.Logger.Component("engine-hls")
 
+	// Сначала разбираем завалы прошлого раза: серии, собранные в рабочей папке
+	// пока папка загрузки была недоступна, уезжают на своё место. К началу
+	// следующего запуска диск обычно уже вернулся, и человек для этого ничего
+	// не делал.
+	if n := flushStaged(ctx, cfg, fsutil.Move, log); n > 0 {
+		log.Info("перенёс файлы, дождавшиеся папки загрузки", domain.F("count", n))
+	}
+
 	// 1. Extract playlist from page, retrying a few times: kino.watch sits behind
 	// Cloudflare and the first request after an idle period often fails
 	// transiently (timeout / 5xx / reset). Without this a flaky first hit fails
@@ -1044,7 +1052,30 @@ func (e *engine) attemptHLSEpisode(
 		return epFatal, fmt.Errorf("output path: %w", err)
 	}
 	if err := e.deps.OutputLayout.EnsureDirs(outPath); err != nil {
-		return epFatal, fmt.Errorf("create directory: %w", err)
+		// Папки нет по разным причинам, и лечатся они по-разному. Отказ в
+		// правах — это к настройкам, и серия действительно провалена. А вот
+		// «сетевой путь не найден» означает, что диск временно отвалился:
+		// включился корпоративный VPN, уснул NAS, выдернули кабель. Валить на
+		// этом всю очередь — худшее, что можно сделать: причина у всех серий
+		// одна, и запуск успевает пометить проваленными все до единой.
+		if !outputUnavailable(err) {
+			return epFatal, fmt.Errorf("create directory: %w", err)
+		}
+		staged := stagedPathFor(cfg, outPath)
+		if staged == "" {
+			// Складывать некуда — ждём возвращения диска.
+			return epRetryable, fmt.Errorf("папка загрузки недоступна: %w", err)
+		}
+		if err := e.deps.OutputLayout.EnsureDirs(staged); err != nil {
+			return epRetryable, fmt.Errorf("папка загрузки недоступна, рабочая тоже: %w", err)
+		}
+		log.Warn("папка загрузки недоступна — собираю в рабочую, перенесу когда вернётся",
+			domain.F("episode", epLabel),
+			domain.F("output", outPath),
+			domain.F("staged", staged),
+			domain.F("error", err.Error()),
+		)
+		outPath = staged
 	}
 
 	e.deps.ProgressReporter.EpisodeStarted(ep.Key)
