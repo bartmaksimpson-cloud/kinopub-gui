@@ -186,11 +186,25 @@ type indexingStateStore struct {
 }
 
 func (s indexingStateStore) MarkCompleted(ctx context.Context, info domain.CompletedInfo) error {
+	// Записываем в свой список независимо от того, легла ли запись рядом с
+	// фильмом: файл состояния живёт на сетевой папке, и падает эта запись как
+	// раз тогда, когда папка отвалилась — то есть ровно в тот момент, ради
+	// которого локальный список и заводился.
 	err := s.StateStore.MarkCompleted(ctx, info)
-	if err == nil {
-		s.ix.remember(s.seriesID, s.seriesTitle, info)
-	}
+	s.ix.remember(s.seriesID, s.seriesTitle, info)
 	return err
+}
+
+// SetSeriesDir forwards the optional probe the engine makes on the state store.
+//
+// Обёртка встраивает интерфейс domain.StateStore, в котором этого метода нет,
+// поэтому наружу он не пробрасывался, и проверка типа в движке молча не
+// срабатывала. Файл состояния читался из корня выходной папки вместо папки
+// сериала — там пусто, и полностью скачанный сериал планировался заново.
+func (s indexingStateStore) SetSeriesDir(dir string) {
+	if ss, ok := s.StateStore.(interface{ SetSeriesDir(string) }); ok {
+		ss.SetSeriesDir(dir)
+	}
 }
 
 // Load merges the app's own list into the state read from disk.

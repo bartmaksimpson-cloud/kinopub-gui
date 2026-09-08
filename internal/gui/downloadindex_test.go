@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"errors"
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"os"
 	"path/filepath"
@@ -109,3 +110,51 @@ func (emptyStateStore) SetMetadata(context.Context, domain.SeriesID, domain.Seri
 	return nil
 }
 func (emptyStateStore) IsCompleted(domain.DownloadState, domain.EpisodeKey) bool { return false }
+
+// Обёртка не должна скрывать необязательный интерфейс состояния: движок ищет
+// SetSeriesDir проверкой типа, и без проброса читал файл состояния из корня
+// выходной папки, а не из папки сериала.
+type seriesDirStore struct {
+	emptyStateStore
+	dir string
+}
+
+func (s *seriesDirStore) SetSeriesDir(dir string) { s.dir = dir }
+
+func TestIndexingStateStore_ForwardsSetSeriesDir(t *testing.T) {
+	inner := &seriesDirStore{}
+	var store domain.StateStore = indexingStateStore{StateStore: inner, ix: &downloadIndex{recs: map[string]DownloadRec{}}, seriesID: "8739"}
+
+	ss, ok := store.(interface{ SetSeriesDir(string) })
+	if !ok {
+		t.Fatal("indexingStateStore не отдаёт SetSeriesDir — движок не найдёт папку сериала")
+	}
+	ss.SetSeriesDir(`Z:\Сериал`)
+	if inner.dir != `Z:\Сериал` {
+		t.Fatalf("папка сериала не дошла до хранилища: %q", inner.dir)
+	}
+}
+
+// Скачанное запоминается, даже если запись рядом с фильмом не удалась: сетевая
+// папка отваливается именно тогда, когда локальный список и нужен.
+func TestIndexingStateStore_RemembersWhenDiskWriteFails(t *testing.T) {
+	ix := &downloadIndex{recs: map[string]DownloadRec{}}
+	store := indexingStateStore{StateStore: failingStateStore{}, ix: ix, seriesID: "8739"}
+
+	err := store.MarkCompleted(context.Background(), domain.CompletedInfo{
+		Key:  domain.EpisodeKey{Season: 2, Episode: 2},
+		Path: `Z:\Сериал\Season 02\S02E02.mkv`,
+	})
+	if err == nil {
+		t.Fatal("ошибка записи файла состояния должна возвращаться наверх")
+	}
+	if _, ok := ix.forSeries("8739")["S2E2"]; !ok {
+		t.Fatal("серия не попала в список приложения")
+	}
+}
+
+type failingStateStore struct{ emptyStateStore }
+
+func (failingStateStore) MarkCompleted(context.Context, domain.CompletedInfo) error {
+	return errors.New("the network path was not found")
+}
