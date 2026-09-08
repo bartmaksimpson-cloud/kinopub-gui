@@ -316,6 +316,12 @@ func (d *Downloader) MuxHLS(ctx context.Context, job domain.Job, hls *domain.HLS
 // plain copy: scaling a too-tall frame re-encodes the whole episode, and that
 // takes long enough that a silent job reads as a hang.
 func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *domain.HLSDownloadResult, sink domain.ProgressSink) error {
+	release, err := acquireMuxGate(ctx, sink, job.Episode.Key)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	d.logger.Info("muxing HLS streams",
 		domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
 		domain.F("audio_tracks", len(hls.AudioTracks)),
@@ -563,6 +569,14 @@ func (d *Downloader) MuxHLSProgress(ctx context.Context, job domain.Job, hls *do
 // track + subtitles) using -map 0, applies container metadata and poster, and
 // does NOT inject any HTTP auth options (the input is a local file).
 func (d *Downloader) RemuxLocal(ctx context.Context, job domain.Job, localPath string) error {
+	// Та же очередь, что и у HLS-склейки: работа та же — прочитать собранное и
+	// записать конечный файл.
+	release, gateErr := acquireMuxGate(ctx, nil, job.Episode.Key)
+	if gateErr != nil {
+		return gateErr
+	}
+	defer release()
+
 	d.logger.Info("remuxing local file",
 		domain.F("episode", fmt.Sprintf("S%02dE%02d", job.Episode.Key.Season, job.Episode.Key.Episode)),
 		domain.F("input", localPath),
