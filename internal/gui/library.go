@@ -29,6 +29,11 @@ type LibraryEpisode struct {
 	Bytes       int64     `json:"bytes"`
 	Resolution  string    `json:"resolution,omitempty"`
 	CompletedAt time.Time `json:"completedAt"`
+	// Что внутри файла: кодек, битрейт и частота кадров читаются из самого
+	// файла (см. mediainfo.go), потому что в состоянии их может не быть.
+	Codec       string  `json:"videoCodec,omitempty"`
+	BitrateKbps int     `json:"bitrateKbps,omitempty"`
+	FPS         float64 `json:"fps,omitempty"`
 	// Audio is the voiceover this episode was downloaded with, and AudioFallback
 	// marks it as a substitute taken because the requested one was not offered.
 	Audio         []string `json:"audio,omitempty"`

@@ -1063,6 +1063,12 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	// spinner that hung for minutes. The enrichment is written to the state files,
 	// so the next scan serves it straight from disk.
 	s.startMetadataBackfill(resp.Series)
+	// Что внутри файлов, спрашивается у самих файлов — и только здесь: карточке
+	// тайтла и проверке «уже скачано» это не нужно, а лишний обход папки стоит
+	// денег на сетевой шаре.
+	for i := range resp.Series {
+		fillMediaInfo(resp.Series[i].Episodes)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

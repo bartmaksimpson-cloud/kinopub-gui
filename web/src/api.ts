@@ -401,6 +401,11 @@ export interface LibraryEpisode {
   exists: boolean;
   bytes: number;
   resolution?: string;
+  // What is actually inside the file, read from the file itself: codec,
+  // bitrate in kbps and frame rate.
+  videoCodec?: string;
+  bitrateKbps?: number;
+  fps?: number;
   completedAt: string;
 }
 

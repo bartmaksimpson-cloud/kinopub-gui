@@ -197,6 +197,20 @@ function useSeriesActions(s: LibrarySeries, onDeleted: () => void) {
   return { openPath, remove, removeEpisode, deleting, removingKey };
 }
 
+// mediaSummary is what the file turned out to be: "3840x2160 · HEVC · 26836 kbps · 24 fps".
+// Всё, чего нет, просто выпадает — у старых загрузок это может быть одно
+// разрешение, и строка тогда выглядит как раньше.
+function mediaSummary(e: LibraryEpisode): string {
+  return [
+    e.resolution,
+    e.videoCodec,
+    e.bitrateKbps ? `${e.bitrateKbps} kbps` : "",
+    e.fps ? `${e.fps} fps` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 // EpisodeRow is one file inside an episode list.
 function EpisodeRow({
   e,
@@ -230,7 +244,9 @@ function EpisodeRow({
       <span className={clsx("min-w-0 flex-1 truncate", e.exists ? "text-slate-300" : "text-slate-500 line-through")}>
         {e.title || t("Episode {n}", { n: e.episode })}
       </span>
-      {e.resolution && <span className="hidden shrink-0 text-[11px] text-slate-500 sm:inline">{e.resolution}</span>}
+      {mediaSummary(e) && (
+        <span className="hidden shrink-0 text-[11px] text-slate-500 sm:inline">{mediaSummary(e)}</span>
+      )}
       <span className="w-16 shrink-0 text-right text-[11px] tabular-nums text-slate-500">{bytes(e.bytes)}</span>
       {/* Row actions stay visible on touch screens (no hover) and fade in on desktop. */}
       <span className="flex shrink-0 items-center gap-0.5 transition sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover:opacity-100">
