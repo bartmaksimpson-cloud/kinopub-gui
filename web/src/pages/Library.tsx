@@ -904,7 +904,9 @@ export function LibraryPage({ onNew }: { onNew: () => void }) {
                 : t("Downloads found in your output folders")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* flex-wrap: три кнопки в ряд не помещались на телефоне, и последняя
+            уезжала за край экрана. */}
+        <div className="flex flex-wrap items-center gap-2">
           <button className="btn-ghost" onClick={onNew} title={t("Download by a kino.watch link")}>
             <Link2 className="h-4 w-4" /> {t("Advanced download")}
           </button>

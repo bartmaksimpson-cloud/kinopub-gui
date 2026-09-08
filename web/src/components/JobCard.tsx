@@ -138,15 +138,22 @@ function EpisodeRow({
 
   return (
     <div className="rounded-xl border border-white/[0.05] bg-ink-900/40 px-3 py-2.5">
-      <div className="flex items-center gap-3">
+      {/* items-start: строка может свернуться в две (название сверху, кнопки под
+          ним), и значок серии должен остаться у первой, а не уплыть в середину. */}
+      <div className="flex items-start gap-2.5">
         <span
           className={clsx(
-            "grid h-7 w-7 shrink-0 place-items-center rounded-lg text-[11px] font-semibold",
+            // min-w-7 + px-1.5, а не жёсткие w-7: «2.13» в 28 пикселей не влезало
+            // и вылезало за скруглённый квадрат.
+            "grid h-7 min-w-[1.75rem] shrink-0 place-items-center rounded-lg px-1.5 text-[11px] font-semibold tabular-nums",
             ep.state === "completed" && "bg-emerald-500/15 text-emerald-300",
             ep.state === "failed" && "bg-ember-500/15 text-ember-400",
             ep.state === "deferred" && "bg-sky-500/15 text-sky-300",
             ep.state === "paused" && "bg-amber-500/15 text-amber-300",
-            (ep.state === "running" || ep.state === "pending") && "bg-white/[0.05] text-slate-400",
+            // Качается — золотым: вертушки больше нет, и «идёт прямо сейчас»
+            // должно быть видно по цвету номера.
+            ep.state === "running" && "bg-gold-500/15 text-gold-300",
+            ep.state === "pending" && "bg-white/[0.05] text-slate-400",
           )}
         >
           {ep.state === "completed" ? (
@@ -157,23 +164,30 @@ function EpisodeRow({
             <Hourglass className="h-3.5 w-3.5" />
           ) : ep.state === "paused" ? (
             <Pause className="h-3.5 w-3.5" />
-          ) : ep.state === "running" ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
+            // Вертушки здесь нет намеренно: она крутилась в каждой качающейся
+            // строке, а движение уже показывает полоса прогресса. Номер серии
+            // полезнее — он один и тот же во всех состояниях, и глазу не надо
+            // переучиваться.
             <span className="font-mono">{ep.key.replace("S", "").replace("E", ".")}</span>
           )}
         </span>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <span className="truncate text-sm text-slate-200">
+          {/* flex-wrap + basis у названия: в двухколоночной сетке на планшете
+              кнопки шире карточки, а нерастягиваемыми они выдавливали название
+              в ноль и вылезали за её край — вместе с процентами и плашкой
+              формата. Теперь при нехватке места кнопки уезжают на свою строку,
+              а название остаётся читаемым. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="min-w-0 flex-1 basis-36 truncate text-sm text-slate-200">
               <span className="font-mono text-xs text-slate-500">{ep.key}</span>{" "}
               {ep.title || ""}
             </span>
-            <span className="flex shrink-0 items-center gap-2">
+            <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
               {canResumeEp && (
                 <button
-                  className="btn-ghost px-2 py-0.5 text-amber-300"
+                  className="btn-ghost whitespace-nowrap px-2 py-0.5 text-amber-300"
                   onClick={resumeEp}
                   disabled={busy}
                   title={t("Resume this episode")}
@@ -183,7 +197,7 @@ function EpisodeRow({
               )}
               {canPauseEp && (
                 <button
-                  className="btn-ghost px-2 py-0.5 text-amber-300"
+                  className="btn-ghost whitespace-nowrap px-2 py-0.5 text-amber-300"
                   onClick={pauseEp}
                   disabled={busy}
                   title={t("Pause this episode — hold it in the queue")}
@@ -193,7 +207,7 @@ function EpisodeRow({
               )}
               {canPrioritize && (
                 <button
-                  className="btn-ghost px-2 py-0.5 text-gold-300"
+                  className="btn-ghost whitespace-nowrap px-2 py-0.5 text-gold-300"
                   onClick={prioritizeEp}
                   disabled={busy}
                   title={t("Download this episode next")}
@@ -203,7 +217,7 @@ function EpisodeRow({
               )}
               {canRetryEp && (
                 <button
-                  className="btn-ghost px-2 py-0.5 text-gold-300"
+                  className="btn-ghost whitespace-nowrap px-2 py-0.5 text-gold-300"
                   onClick={retryEp}
                   disabled={busy}
                   title={t("Retry this episode now — without waiting for the rest")}
@@ -213,7 +227,7 @@ function EpisodeRow({
               )}
               {canCancelEp && (
                 <button
-                  className="btn-ghost px-2 py-0.5 text-ember-400"
+                  className="btn-ghost whitespace-nowrap px-2 py-0.5 text-ember-400"
                   onClick={cancelEp}
                   disabled={busy}
                   title={t("Cancel this episode — the rest keep downloading")}
@@ -426,8 +440,11 @@ function SeasonList({ job }: { job: JobView }) {
               {size > 0 && <span className="text-slate-500">{bytes(size)}</span>}
               {active && <span className="text-gold-400/90">{t("downloading")}</span>}
             </button>
+            {/* Две колонки только с xl: на планшете (768–1279) карточка
+                получалась ~250 пикселей шириной, и в неё не помещались ни
+                название, ни кнопки, ни плашка формата. */}
             {open && (
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <div className="mt-2 grid gap-2 xl:grid-cols-2">
                 {eps.map((ep) => (
                   <EpisodeRow key={ep.key} ep={ep} jobId={job.id} jobStatus={job.status} />
                 ))}
