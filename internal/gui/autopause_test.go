@@ -115,6 +115,9 @@ func TestResumeEpisode_OnPausedJobRunsWholeJobAndReHoldsSiblings(t *testing.T) {
 	m.running = 1
 
 	j := runningJobWithEpisodes("j", epPaused, epPaused, epPaused)
+	for _, ev := range j.episodes {
+		ev.Held = true // each paused on its own
+	}
 	j.status = statusPaused
 	j.paused.Store(true)
 	m.add(j)
@@ -203,5 +206,46 @@ func TestCancelEpisode_LeavesPlanAloneWhenAbsent(t *testing.T) {
 	}
 	if len(j.episodes) != 0 {
 		t.Errorf("episodes = %v, want the canceled one gone", j.episodes)
+	}
+}
+
+// Задачу заморозили целиком (пауза задачи или перезапуск приложения), а потом
+// нажали «Продолжить» у одной серии. Остальные не ставили на паузу по одной —
+// они обязаны пойти следом, иначе после этой серии задача снова встаёт и не
+// переходит к следующим сериям и сезонам.
+func TestResumeEpisode_OnFrozenJobReleasesTheRest(t *testing.T) {
+	m := newJobManager(newHub())
+	m.maxActive = 1
+	m.running = 1
+
+	j := runningJobWithEpisodes("j", epPaused, epPaused, epPaused)
+	j.episodes["S1E3"].Held = true // эту одну человек держит сам
+	j.status = statusPaused
+	j.paused.Store(true)
+	m.add(j)
+
+	if !m.resumeEpisode("j", domain.EpisodeKey{Season: 1, Episode: 2}) {
+		t.Fatal("resume should be accepted")
+	}
+	j.mu.Lock()
+	s1, s2, s3 := j.episodes["S1E1"].State, j.episodes["S1E2"].State, j.episodes["S1E3"].State
+	j.mu.Unlock()
+	if s1 != epPending || s2 != epPending {
+		t.Errorf("S1E1/S1E2 = %q/%q, want both pending", s1, s2)
+	}
+	if s3 != epPaused {
+		t.Errorf("S1E3 = %q, want it still held", s3)
+	}
+	var held []int
+	for done := false; !done; {
+		select {
+		case k := <-j.pauseEp:
+			held = append(held, k.Episode)
+		default:
+			done = true
+		}
+	}
+	if len(held) != 1 || held[0] != 3 {
+		t.Errorf("pause requests = %v, want only S1E3", held)
 	}
 }

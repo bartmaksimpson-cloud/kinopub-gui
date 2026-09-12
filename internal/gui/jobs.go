@@ -88,6 +88,12 @@ type EpisodeView struct {
 	// пропавшая шара и удалённый файл требуют разного — первое ждут, второе
 	// перекачивают, — а выглядели одинаково.
 	Disk string `json:"disk,omitempty"`
+	// Held — серию поставили на паузу ОТДЕЛЬНО, а не вместе со всей задачей.
+	// «На паузе» выглядит одинаково, но значит разное: пауза задачи (или
+	// перезапуск приложения) замораживает всё недокачанное, и «Продолжить» у
+	// одной серии не должно оставлять остальные стоять — иначе, докачав её,
+	// задача снова встаёт, так и не перейдя к следующим сериям и сезонам.
+	Held       bool        `json:"held,omitempty"`
 	SpeedBps   float64     `json:"speedBps"`
 	ETASeconds int         `json:"etaSeconds"`
 	SegDone    int         `json:"segDone"`
@@ -1630,6 +1636,7 @@ func resetEpisodesForRerunLocked(j *Job) {
 	for _, ev := range j.episodes {
 		if ev.State == epPaused || ev.State == epFailed || ev.State == epDeferred || ev.State == epRunning {
 			ev.State = epPending
+			ev.Held = false
 			ev.Error = ""
 			ev.SpeedBps = 0
 			ev.ETASeconds = 0
@@ -1706,6 +1713,7 @@ func (m *JobManager) pauseEpisode(id string, key domain.EpisodeKey) bool {
 	ch := j.pauseEp
 	if live && pausable {
 		ev.State = epPaused
+		ev.Held = true
 		ev.SpeedBps = 0
 		ev.ETASeconds = 0
 	}
@@ -1788,6 +1796,7 @@ func (m *JobManager) resumeEpisode(id string, key domain.EpisodeKey) bool {
 	ch := j.resumeEp
 	if live && resumable {
 		ev.State = epPending // engine flips it to running when it actually starts
+		ev.Held = false
 	}
 	j.mu.Unlock()
 	// No engine to tell: pausing the last active episode paused the job itself,
@@ -1827,12 +1836,17 @@ func (m *JobManager) resumeEpisodeParked(id string, key domain.EpisodeKey) bool 
 		j.mu.Unlock()
 		return false
 	}
-	ev.State = epPending
-	ev.Error = ""
 	var hold []domain.EpisodeKey
 	for _, other := range j.episodes {
-		if other != ev && other.State == epPaused {
+		switch {
+		case other.State != epPaused:
+		case other != ev && other.Held:
 			hold = append(hold, domain.EpisodeKey{Season: other.Season, Episode: other.Episode})
+		default:
+			// Заморожена вместе с задачей — продолжает вместе с этой серией.
+			other.State = epPending
+			other.Held = false
+			other.Error = ""
 		}
 	}
 	j.paused.Store(false)
