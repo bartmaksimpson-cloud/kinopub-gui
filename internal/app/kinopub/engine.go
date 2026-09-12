@@ -59,6 +59,12 @@ func (e *engine) run(ctx context.Context, cfg domain.RunConfig) (domain.RunResul
 func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunResult, error) {
 	log := e.deps.Logger.Component("engine-hls")
 
+	// Что уже скачано, записано рядом с сериалом в папке загрузки. Не видя её,
+	// запуск считал скачанным ноль серий и начинал всё заново.
+	if err := waitForOutput(ctx, cfg.OutputPath, log); err != nil {
+		return domain.RunResult{}, err
+	}
+
 	// Сначала разбираем завалы прошлого раза: серии, собранные в рабочей папке
 	// пока папка загрузки была недоступна, уезжают на своё место. К началу
 	// следующего запуска диск обычно уже вернулся, и человек для этого ничего

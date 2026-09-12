@@ -133,3 +133,11 @@ func TestFlushStaged(t *testing.T) {
 		t.Error("в папке назначения появилась папка сегментов")
 	}
 }
+
+// Несозданная папка на живом диске — не повод ждать: её создадут при записи.
+// Иначе первый запуск в новую папку висел бы вечно.
+func TestOutputReachableFreshFolder(t *testing.T) {
+	if !outputReachable(filepath.Join(t.TempDir(), "ещё", "нет")) {
+		t.Fatal("несозданная папка на доступном диске принята за отключённый диск")
+	}
+}

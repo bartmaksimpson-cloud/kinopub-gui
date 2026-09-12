@@ -59,6 +59,15 @@ func (m *JobManager) refreshExisting(j *Job) {
 				continue
 			}
 			found[key] = onDisk{bytes: ep.Bytes, state: diskOK}
+			// И запоминаем: иначе, стоит диску отключиться, движок не узнает об
+			// этой серии ни из файла состояния, ни из списка — и скачает её
+			// заново, хотя карточка только что показывала «скачано».
+			m.index.remember(id, series.Title, domain.CompletedInfo{
+				Key:   domain.EpisodeKey{Season: ep.Season, Episode: ep.Episode},
+				Path:  ep.Path,
+				Bytes: ep.Bytes,
+				Title: ep.Title,
+			})
 		}
 	}
 	if len(found) == 0 {

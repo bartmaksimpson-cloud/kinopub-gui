@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 )
@@ -150,4 +151,59 @@ func FlushStaged(ctx context.Context, cfg domain.RunConfig, move func(from, to s
 		return nil
 	})
 	return moved
+}
+
+// outputReachable reports whether the download folder can be looked at at all.
+//
+// Папки может не быть просто потому, что её ещё не создали, — это нормально.
+// Ненормально, когда нет самого диска: Z:\ отключён, \\nas\share не отвечает.
+// Тогда os.Stat отвечает «путь не найден», ровно как для несозданной папки,
+// поэтому смотрим на корень тома.
+func outputReachable(dir string) bool {
+	if dir == "" {
+		return true
+	}
+	_, err := os.Stat(dir)
+	if err == nil {
+		return true
+	}
+	if outputUnavailable(err) {
+		return false
+	}
+	if vol := filepath.VolumeName(dir); vol != "" {
+		if _, err := os.Stat(vol + string(filepath.Separator)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// outputPollInterval — как часто проверять, не вернулась ли папка загрузки.
+var outputPollInterval = 15 * time.Second
+
+// waitForOutput blocks until the download folder is reachable or ctx ends.
+//
+// Без этого запуск на отключённом диске не мог прочитать файл состояния рядом с
+// сериалом, получал пустое «ничего не скачано» и через рабочую папку начинал
+// качать заново уже скачанные серии (так и было: 0 из 62 при 13 готовых).
+// Решать, что качать, не видя папки загрузки, нельзя — поэтому ждём её.
+func waitForOutput(ctx context.Context, dir string, log domain.Logger) error {
+	if outputReachable(dir) {
+		return nil
+	}
+	log.Warn("папка загрузки недоступна — жду её, чтобы не качать заново уже скачанное",
+		domain.F("output", dir))
+	t := time.NewTicker(outputPollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			if outputReachable(dir) {
+				log.Info("папка загрузки вернулась", domain.F("output", dir))
+				return nil
+			}
+		}
+	}
 }
