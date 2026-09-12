@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,8 +41,17 @@ type eventLog struct {
 	ch   chan EventRec
 }
 
-// events is the process-wide journal; nil (tests, no config dir) disables it.
-var events *eventLog
+// events is the process-wide journal; nil (no config dir) disables it. Атомарный
+// указатель, потому что серверов в тестах много и они поднимаются параллельно
+// с уже идущими задачами.
+var events atomic.Pointer[eventLog]
+
+// initEventLog opens the journal once per process.
+func initEventLog() {
+	if events.Load() == nil {
+		events.CompareAndSwap(nil, openEventLog())
+	}
+}
 
 func openEventLog() *eventLog {
 	dir, err := configDir()
@@ -172,7 +182,7 @@ func (s *Server) handleEventJournal(w http.ResponseWriter, r *http.Request) {
 		}
 		since = t
 	}
-	writeJSON(w, http.StatusOK, events.query(q.Get("job"), q.Get("level"), q.Get("q"), since, limit))
+	writeJSON(w, http.StatusOK, events.Load().query(q.Get("job"), q.Get("level"), q.Get("q"), since, limit))
 }
 
 // jobOutcomeEntry is the line that closes a run. Причина провала задачи живёт в

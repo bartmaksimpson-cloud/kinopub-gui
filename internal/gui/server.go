@@ -86,7 +86,7 @@ func NewServer(version string, static fs.FS) *Server {
 	cleanupOldExecutable()    // remove a leftover binary from a previous self-update
 	ensureManagedBinOnPath()  // so a previously installed ffmpeg/ffprobe is found
 	ensureSystemToolsOnPath() // so a system ffmpeg (Homebrew, …) is found from a .app launch
-	events = openEventLog() // журнал событий на диске, см. events.go
+	initEventLog() // журнал событий на диске, см. events.go
 	hub := newHub()
 	s := &Server{
 		version:  version,

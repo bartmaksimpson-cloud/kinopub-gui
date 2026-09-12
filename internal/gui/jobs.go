@@ -371,7 +371,7 @@ func (j *Job) addLog(e LogEntry) {
 
 // addLogLocked appends a log line for a caller that already holds j.mu.
 func (j *Job) addLogLocked(e LogEntry) {
-	events.add(j.id, j.title, e)
+	events.Load().add(j.id, j.title, e)
 	j.logs = append(j.logs, e)
 	if len(j.logs) > maxJobLogs {
 		j.logs = j.logs[len(j.logs)-maxJobLogs:]
