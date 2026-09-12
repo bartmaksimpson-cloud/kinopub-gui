@@ -284,6 +284,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		pauseMark  = map[string]bool{}               // in-flight episodes to hold (not fail) when their attempt returns
 		cancelMark = map[string]bool{}               // episodes canceled by the user: fail as "canceled", never re-park
 		inFlight   int
+		muxing     int  // из inFlight: скачались и ждут склейку — слот скачивания уже не держат
 		winding    bool // set once workers have exited; the control goroutine stops mutating
 	)
 	// A per-episode cancel is the user dropping an episode, not a failure: it is
@@ -355,7 +356,11 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// after the attempt budget); fatal failure → mark failed. The download runs
 	// outside mu so episodes proceed in parallel; the lock is taken only to
 	// mutate shared counters and the retry queue.
-	processOne := func(pe *pendingEpisode) {
+	//
+	// Возвращает true, если серия дошла до склейки: её слот скачивания к этому
+	// моменту уже отдан новому работнику (см. spawnWorker), и старому пора уйти.
+	var spawnWorker func()
+	processOne := func(pe *pendingEpisode) (released bool) {
 		if ctx.Err() != nil {
 			// Re-park so the post-loop sweep accounts it in the result totals.
 			mu.Lock()
@@ -387,10 +392,22 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		epCancels[ks] = epCancel
 		mu.Unlock()
 
+		// Склейки идут по одной на всё приложение, и ждать своей очереди серия
+		// может дольше, чем качалась. Держать при этом слот скачивания — значит
+		// простаивать канал: поэтому слот отдаётся новому работнику сразу, как
+		// скачались сегменты.
 		markDownloaded := func() {
 			mu.Lock()
 			downloaded[episodeKeyStr(pe.ep.Key)] = true
+			first := !released
+			if first {
+				released = true
+				muxing++
+			}
 			mu.Unlock()
+			if first {
+				spawnWorker()
+			}
 		}
 		res, err := e.attemptHLSEpisode(epCtx, cfg, series, pe.ep, pe.manifest, posterPath, markDownloaded)
 
@@ -427,8 +444,8 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			pe.nextAt = time.Time{}
 			pe.lastErr = nil
 			// It was downloading when the user paused it: its slot stays empty
-			// until it is resumed or canceled.
-			pe.heldFromRunning = true
+			// until it is resumed or canceled. На склейке слот уже отдан.
+			pe.heldFromRunning = !released
 			mu.Lock()
 			pausedHold = append(pausedHold, pe)
 			mu.Unlock()
@@ -514,6 +531,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			mu.Unlock()
 			e.deps.ProgressReporter.EpisodeFailed(pe.ep.Key, err)
 		}
+		return released
 	}
 
 	// moveToFront promotes the episode matching key to the head of newQueue so it
@@ -693,7 +711,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		// episode stopped and another started in the same instant, which is
 		// exactly what the user saw and did not ask for. An episode paused while
 		// still queued holds no slot: there it means "not this one, carry on".
-		if held := heldRunningCount(); held > 0 && inFlight+held >= cfg.MaxConcurrency {
+		if held := heldRunningCount(); held > 0 && inFlight-muxing+held >= cfg.MaxConcurrency {
 			return nil, 300 * time.Millisecond, false
 		}
 		if len(newQueue) > 0 {
@@ -854,29 +872,39 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		workers = 1
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ctx.Err() == nil {
-				pe, wait, done := takeTask()
-				if done {
-					return
-				}
-				if pe == nil {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(wait):
-					}
-					continue
-				}
-				processOne(pe)
-				mu.Lock()
-				inFlight--
-				mu.Unlock()
+	worker := func() {
+		defer wg.Done()
+		for ctx.Err() == nil {
+			pe, wait, done := takeTask()
+			if done {
+				return
 			}
-		}()
+			if pe == nil {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+				continue
+			}
+			released := processOne(pe)
+			mu.Lock()
+			inFlight--
+			if released {
+				muxing--
+			}
+			mu.Unlock()
+			if released {
+				return // вместо нас уже работает замена
+			}
+		}
+	}
+	spawnWorker = func() {
+		wg.Add(1)
+		go worker()
+	}
+	for i := 0; i < workers; i++ {
+		spawnWorker()
 	}
 	wg.Wait()
 
@@ -1067,31 +1095,40 @@ func (e *engine) attemptHLSEpisode(
 	if err != nil {
 		return epFatal, fmt.Errorf("output path: %w", err)
 	}
-	if err := e.deps.OutputLayout.EnsureDirs(outPath); err != nil {
-		// Папки нет по разным причинам, и лечатся они по-разному. Отказ в
-		// правах — это к настройкам, и серия действительно провалена. А вот
-		// «сетевой путь не найден» означает, что диск временно отвалился:
-		// включился корпоративный VPN, уснул NAS, выдернули кабель. Валить на
-		// этом всю очередь — худшее, что можно сделать: причина у всех серий
-		// одна, и запуск успевает пометить проваленными все до единой.
-		if !outputUnavailable(err) {
-			return epFatal, fmt.Errorf("create directory: %w", err)
+	// ensureOutput готовит папку под файл и, если сетевой диск пропал, уводит
+	// сборку в рабочую папку. Зовётся дважды: в начале серии и перед склейкой —
+	// скачивание 4K идёт часами, и диск успевает отвалиться посередине.
+	ensureOutput := func() (episodeOutcome, error) {
+		if err := e.deps.OutputLayout.EnsureDirs(outPath); err != nil {
+			// Папки нет по разным причинам, и лечатся они по-разному. Отказ в
+			// правах — это к настройкам, и серия действительно провалена. А вот
+			// «сетевой путь не найден» означает, что диск временно отвалился:
+			// включился корпоративный VPN, уснул NAS, выдернули кабель. Валить на
+			// этом всю очередь — худшее, что можно сделать: причина у всех серий
+			// одна, и запуск успевает пометить проваленными все до единой.
+			if !outputUnavailable(err) {
+				return epFatal, fmt.Errorf("create directory: %w", err)
+			}
+			staged := stagedPathFor(cfg, outPath)
+			if staged == "" {
+				// Складывать некуда — ждём возвращения диска.
+				return epRetryable, fmt.Errorf("папка загрузки недоступна: %w", err)
+			}
+			if err := e.deps.OutputLayout.EnsureDirs(staged); err != nil {
+				return epRetryable, fmt.Errorf("папка загрузки недоступна, рабочая тоже: %w", err)
+			}
+			log.Warn("папка загрузки недоступна — собираю в рабочую, перенесу когда вернётся",
+				domain.F("episode", epLabel),
+				domain.F("output", outPath),
+				domain.F("staged", staged),
+				domain.F("error", err.Error()),
+			)
+			outPath = staged
 		}
-		staged := stagedPathFor(cfg, outPath)
-		if staged == "" {
-			// Складывать некуда — ждём возвращения диска.
-			return epRetryable, fmt.Errorf("папка загрузки недоступна: %w", err)
-		}
-		if err := e.deps.OutputLayout.EnsureDirs(staged); err != nil {
-			return epRetryable, fmt.Errorf("папка загрузки недоступна, рабочая тоже: %w", err)
-		}
-		log.Warn("папка загрузки недоступна — собираю в рабочую, перенесу когда вернётся",
-			domain.F("episode", epLabel),
-			domain.F("output", outPath),
-			domain.F("staged", staged),
-			domain.F("error", err.Error()),
-		)
-		outPath = staged
+		return epSuccess, nil
+	}
+	if res, err := ensureOutput(); err != nil {
+		return res, err
 	}
 
 	e.deps.ProgressReporter.EpisodeStarted(ep.Key)
@@ -1125,6 +1162,18 @@ func (e *engine) attemptHLSEpisode(
 		domain.F("audio_tracks", len(hlsResult.AudioTracks)),
 	)
 
+	// Диск мог пропасть, пока качались сегменты.
+	if res, err := ensureOutput(); err != nil {
+		return res, err
+	}
+	// Обложка лежит в папке сериала на том же диске: без неё ffmpeg не
+	// откроет выход вовсе, а файл без обложки лучше, чем никакого.
+	if posterPath != "" {
+		if _, err := os.Stat(posterPath); err != nil {
+			posterPath = ""
+		}
+	}
+
 	muxJob := domain.Job{
 		Episode:     ep,
 		OutPath:     outPath,
@@ -1143,17 +1192,27 @@ func (e *engine) attemptHLSEpisode(
 		remuxErr = fmt.Errorf("downloader does not support HLS muxing")
 	}
 
-	// Clean up temp segment files regardless of mux outcome.
-	if hlsResult.TempDir != "" {
-		os.RemoveAll(hlsResult.TempDir)
-	}
-
 	if remuxErr != nil {
 		log.Warn("remux failed",
 			domain.F("episode", epLabel),
 			domain.F("error", remuxErr.Error()),
 		)
+		// Склейку прервали (пауза, отмена, выход) или из-под неё ушёл диск —
+		// сегменты целы, и повтор начнётся сразу со склейки. Стереть их значит
+		// выкинуть часы скачивания из-за мигнувшей сети.
+		if ctx.Err() != nil {
+			return epRetryable, remuxErr
+		}
+		if err := e.deps.OutputLayout.EnsureDirs(outPath); err != nil && outputUnavailable(err) {
+			return epRetryable, remuxErr
+		}
+		if hlsResult.TempDir != "" {
+			os.RemoveAll(hlsResult.TempDir)
+		}
 		return epFatal, remuxErr
+	}
+	if hlsResult.TempDir != "" {
+		os.RemoveAll(hlsResult.TempDir)
 	}
 
 	// Mark completed.

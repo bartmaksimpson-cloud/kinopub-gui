@@ -2,8 +2,10 @@ package kinopub
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -461,4 +463,98 @@ func TestRunHLS_CancelDuringMuxKeepsSegments(t *testing.T) {
 	if _, err := os.Stat(segDir); err != nil {
 		t.Errorf("сегменты стёрты отменой на склейке: %v", err)
 	}
+}
+
+// Серия, ждущая склейку, не держит слот скачивания: при одном слоте следующая
+// серия начинает качаться, пока первая ещё склеивается.
+func TestRunHLS_MuxWaitFreesDownloadSlot(t *testing.T) {
+	k1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	k2 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 2}
+	g := newGatedHLS(k1, k2)
+	e, _, _ := newRetryTestEngine(g, &fakePageScraper{playlist: makePlaylist(2)})
+	mux := &gatedMuxer{started: make(chan struct{}, 2), release: make(chan struct{})}
+	e.deps.Downloader = mux
+
+	cfg := retryTestConfig()
+	cfg.MaxConcurrency = 1
+	type out struct {
+		res domain.RunResult
+		err error
+	}
+	done := make(chan out, 1)
+	go func() { r, err := e.runHLS(context.Background(), cfg); done <- out{r, err} }()
+
+	wait := func(ch <-chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatal(what)
+		}
+	}
+	wait(g.started[k1], "первая серия не начала качаться")
+	close(g.release[k1])
+	wait(mux.started, "первая серия не дошла до склейки")
+	wait(g.started[k2], "вторая серия ждёт склейку первой вместо того, чтобы качаться")
+
+	close(g.release[k2])
+	close(mux.release)
+	select {
+	case o := <-done:
+		if o.err != nil || o.res.Succeeded != 2 {
+			t.Fatalf("итог: %+v, %v; want 2 успешных", o.res, o.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("запуск не завершился")
+	}
+}
+
+// dropAfterLayout: первые n подготовок папки проходят, дальше диск «пропал».
+type dropAfterLayout struct {
+	mockOutputLayout
+	mu    sync.Mutex
+	okFor int
+}
+
+func (l *dropAfterLayout) EnsureDirs(path string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if strings.HasPrefix(path, filepath.Dir(l.path)) {
+		if l.okFor == 0 {
+			return errors.New("mkdir Z:\\x: The network path was not found.")
+		}
+		l.okFor--
+	}
+	return nil
+}
+
+// Диск пропал, пока качались сегменты: склейка уходит в рабочую папку, а не
+// падает на недоступном выходе.
+func TestRunHLS_OutputDropsBeforeMuxStages(t *testing.T) {
+	root := t.TempDir()
+	outDir, work := filepath.Join(root, "out"), filepath.Join(root, "work")
+	e, _, _ := newRetryTestEngine(newFakeHLS(nil), &fakePageScraper{playlist: makePlaylist(1)})
+	mux := &pathMuxer{}
+	e.deps.Downloader = mux
+	e.deps.OutputLayout = &dropAfterLayout{mockOutputLayout: mockOutputLayout{path: filepath.Join(outDir, "S01E01.mkv")}, okFor: 1}
+
+	cfg := retryTestConfig()
+	cfg.OutputPath, cfg.WorkPath = outDir, work
+	res, err := e.runHLS(context.Background(), cfg)
+	if err != nil || res.Succeeded != 1 {
+		t.Fatalf("итог: %+v, %v; want 1 успешная", res, err)
+	}
+	if !strings.HasPrefix(mux.out, work) {
+		t.Errorf("склейка должна идти в рабочую папку, а пишет в %q", mux.out)
+	}
+}
+
+type pathMuxer struct {
+	mockDownloader
+	out string
+}
+
+func (m *pathMuxer) MuxHLS(_ context.Context, j domain.Job, _ *domain.HLSDownloadResult) error {
+	m.out = j.OutPath
+	return nil
 }
