@@ -74,6 +74,7 @@ func buildEngineDeps(
 			StateStore: stateStr,
 			ix:         index,
 			seriesID:   kinopubapi.ItemIDFromURL(cfg.InputURL),
+			run:        cfg,
 		}
 	}
 

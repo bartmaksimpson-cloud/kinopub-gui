@@ -86,6 +86,7 @@ func NewServer(version string, static fs.FS) *Server {
 	cleanupOldExecutable()    // remove a leftover binary from a previous self-update
 	ensureManagedBinOnPath()  // so a previously installed ffmpeg/ffprobe is found
 	ensureSystemToolsOnPath() // so a system ffmpeg (Homebrew, …) is found from a .app launch
+	events = openEventLog() // журнал событий на диске, см. events.go
 	hub := newHub()
 	s := &Server{
 		version:  version,
@@ -338,6 +339,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/preview", s.handlePreview)
 
 	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
+	mux.HandleFunc("GET /api/journal", s.handleEventJournal)
 	mux.HandleFunc("POST /api/jobs", s.handleCreateJob)
 	mux.HandleFunc("POST /api/jobs/clear", s.handleClearJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)

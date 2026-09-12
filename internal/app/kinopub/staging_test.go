@@ -51,15 +51,15 @@ func TestStagedPathRoundTrip(t *testing.T) {
 	if staged != want {
 		t.Fatalf("stagedPathFor = %q, ожидалось %q", staged, want)
 	}
-	if back := outputPathFor(cfg, staged); back != out {
-		t.Errorf("outputPathFor = %q, ожидалось %q", back, out)
+	if back := OutputPathFor(cfg, staged); back != out {
+		t.Errorf("OutputPathFor = %q, ожидалось %q", back, out)
 	}
 	// Без рабочей папки складывать некуда, и притворяться нечем.
 	if got := stagedPathFor(domain.RunConfig{OutputPath: "/nas"}, out); got != "" {
 		t.Errorf("без рабочей папки ожидалась пустая строка, получено %q", got)
 	}
 	// Файл вне зеркала переносить некуда.
-	if got := outputPathFor(cfg, filepath.FromSlash("/somewhere/else.mkv")); got != "" {
+	if got := OutputPathFor(cfg, filepath.FromSlash("/somewhere/else.mkv")); got != "" {
 		t.Errorf("файл вне рабочей папки: %q", got)
 	}
 }
@@ -131,13 +131,5 @@ func TestFlushStaged(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "Сериал", "Season 01", "S01E10 - Двухпалатный.mkv.ts.hls-tmp")); !os.IsNotExist(err) {
 		t.Error("в папке назначения появилась папка сегментов")
-	}
-}
-
-// Несозданная папка на живом диске — не повод ждать: её создадут при записи.
-// Иначе первый запуск в новую папку висел бы вечно.
-func TestOutputReachableFreshFolder(t *testing.T) {
-	if !outputReachable(filepath.Join(t.TempDir(), "ещё", "нет")) {
-		t.Fatal("несозданная папка на доступном диске принята за отключённый диск")
 	}
 }

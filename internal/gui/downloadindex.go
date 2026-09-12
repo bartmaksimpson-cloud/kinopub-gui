@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZioSHik/kinopub-gui/internal/app/kinopub"
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 )
@@ -183,6 +184,11 @@ type indexingStateStore struct {
 	ix          *downloadIndex
 	seriesID    string
 	seriesTitle string
+	// run gives the download and work folders: серия, собранная в рабочей
+	// папке на время отключения диска, запоминается по своему месту в папке
+	// загрузки. Иначе, как только сборщик перенесёт её на место, запись
+	// указывала бы на пустоту в рабочей папке, и серию скачали бы ещё раз.
+	run domain.RunConfig
 }
 
 func (s indexingStateStore) MarkCompleted(ctx context.Context, info domain.CompletedInfo) error {
@@ -191,6 +197,9 @@ func (s indexingStateStore) MarkCompleted(ctx context.Context, info domain.Compl
 	// раз тогда, когда папка отвалилась — то есть ровно в тот момент, ради
 	// которого локальный список и заводился.
 	err := s.StateStore.MarkCompleted(ctx, info)
+	if out := kinopub.OutputPathFor(s.run, info.Path); out != "" && out != info.Path {
+		info.Path = out
+	}
 	s.ix.remember(s.seriesID, s.seriesTitle, info)
 	return err
 }
@@ -214,10 +223,11 @@ func (s indexingStateStore) SetSeriesDir(dir string) {
 // выключенный NAS, планируется заново. Список приложения переживает это и
 // подсказывает: вот эти серии скачаны.
 //
-// Подсказка принимается ТОЛЬКО если файл проверен на месте. Пропавший файл
-// (папка доступна, файла нет) в список готовых не попадает — его действительно
-// надо качать. Недоступная папка тоже: пока её нет, класть туда нечего, и
-// запуск всё равно упрётся в неё раньше.
+// Подсказка отвергается ТОЛЬКО для пропавшего файла (папка доступна, файла
+// нет) — его действительно надо качать. Файл на недоступном диске считается
+// скачанным: запуск в это время собирает новые серии в рабочую папку, и
+// перекачивать туда уже лежащие на выключенном NAS — ровно та беда, из-за
+// которой список заводился («скачано 0 из 62» при отключённом Z:).
 func (s indexingStateStore) Load(ctx context.Context, series domain.SeriesID) (domain.DownloadState, error) {
 	st, err := s.StateStore.Load(ctx, series)
 	if err != nil {
@@ -233,7 +243,7 @@ func (s indexingStateStore) Load(ctx context.Context, series domain.SeriesID) (d
 		if _, known := st.Completed[key]; known {
 			continue
 		}
-		if checkDisk(rec.Path) != diskOK {
+		if checkDisk(rec.Path) == diskMissing {
 			continue
 		}
 		st.Completed[key] = domain.CompletedRec{

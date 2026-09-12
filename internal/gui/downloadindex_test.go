@@ -70,7 +70,7 @@ func completedInfoFor(season, episode int, path string, size int64) domain.Compl
 // Список приложения должен подсказывать движку, что серия уже скачана, — но
 // только про файлы, проверенные на месте. Иначе пропавший файл никогда бы не
 // перекачался, а это хуже лишней перекачки.
-func TestIndexingStateStore_LoadMergesVerifiedOnly(t *testing.T) {
+func TestIndexingStateStore_LoadSkipsOnlyMissing(t *testing.T) {
 	dir := t.TempDir()
 	present := filepath.Join(dir, "S01E01.mkv")
 	if err := os.WriteFile(present, []byte("кино"), 0o644); err != nil {
@@ -93,8 +93,8 @@ func TestIndexingStateStore_LoadMergesVerifiedOnly(t *testing.T) {
 	if _, ok := st.Completed["S1E2"]; ok {
 		t.Error("пропавший файл попал в готовые — его никогда не перекачают")
 	}
-	if _, ok := st.Completed["S1E3"]; ok {
-		t.Error("файл в недоступной папке попал в готовые")
+	if _, ok := st.Completed["S1E3"]; !ok {
+		t.Error("файл на отключённом диске не попал в готовые — его скачают заново в рабочую папку")
 	}
 }
 
@@ -157,4 +157,23 @@ type failingStateStore struct{ emptyStateStore }
 
 func (failingStateStore) MarkCompleted(context.Context, domain.CompletedInfo) error {
 	return errors.New("the network path was not found")
+}
+
+// Серия, собранная в рабочей папке на время отключения диска, запоминается по
+// месту в папке загрузки: сборщик перенесёт её туда, и запись на рабочую папку
+// указывала бы на пустоту — серию скачали бы в третий раз.
+func TestIndexingStateStore_RemembersStagedByOutputPath(t *testing.T) {
+	ix := &downloadIndex{recs: map[string]DownloadRec{}}
+	work, out := filepath.FromSlash("/work"), filepath.FromSlash("/nas")
+	store := indexingStateStore{StateStore: emptyStateStore{}, ix: ix, seriesID: "8739",
+		run: domain.RunConfig{WorkPath: work, OutputPath: out}}
+
+	_ = store.MarkCompleted(context.Background(), domain.CompletedInfo{
+		Key:  domain.EpisodeKey{Season: 1, Episode: 1},
+		Path: filepath.Join(work, "Сериал", "Season 01", "S01E01.mkv"),
+	})
+	want := filepath.Join(out, "Сериал", "Season 01", "S01E01.mkv")
+	if got := ix.forSeries("8739")["S1E1"].Path; got != want {
+		t.Fatalf("запомнен путь %q, ожидался %q", got, want)
+	}
 }

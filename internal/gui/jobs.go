@@ -371,6 +371,7 @@ func (j *Job) addLog(e LogEntry) {
 
 // addLogLocked appends a log line for a caller that already holds j.mu.
 func (j *Job) addLogLocked(e LogEntry) {
+	events.add(j.id, j.title, e)
 	j.logs = append(j.logs, e)
 	if len(j.logs) > maxJobLogs {
 		j.logs = j.logs[len(j.logs)-maxJobLogs:]
@@ -1426,6 +1427,7 @@ func (m *JobManager) run(parent context.Context, j *Job, cfg domain.RunConfig, t
 	default:
 		j.status = statusCompleted
 	}
+	j.addLogLocked(jobOutcomeEntry(fin, j.status, j.errMsg))
 	if j.status == statusPaused {
 		settlePausedEpisodesLocked(j)
 	} else {
@@ -1515,6 +1517,7 @@ func (m *JobManager) failJob(j *Job, msg string) {
 	j.errMsg = msg
 	fin := time.Now()
 	j.finishedAt = &fin
+	j.addLogLocked(jobOutcomeEntry(fin, j.status, msg))
 	j.mu.Unlock()
 	m.publishNow(j)
 }
