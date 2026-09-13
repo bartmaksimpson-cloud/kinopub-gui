@@ -3,6 +3,7 @@ package hlsdownloader
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -213,7 +214,10 @@ func TestFetchSegmentDetectsTruncatedBody(t *testing.T) {
 	// resumes from (see TestFetchSegmentResumesAfterTruncation). Cleanup of a
 	// segment that is given up on for good belongs to the caller, which removes
 	// segPath once downloadSegment has exhausted its retries.
-	fi, statErr := os.Stat(out)
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("a partial segment must not sit under the final name: resume would take it as whole")
+	}
+	fi, statErr := os.Stat(out + ".part")
 	if statErr != nil {
 		t.Fatalf("the partial file must survive for the retry to resume: %v", statErr)
 	}
@@ -265,7 +269,7 @@ func TestFetchSegmentResumesAfterTruncation(t *testing.T) {
 	if _, err := d.fetchSegment(context.Background(), srv.URL+"/seg.ts", out); err == nil {
 		t.Fatal("the truncated first attempt must fail")
 	}
-	fi, err := os.Stat(out)
+	fi, err := os.Stat(out + ".part")
 	if err != nil {
 		t.Fatalf("the partial file must survive for the retry to resume from: %v", err)
 	}
@@ -290,5 +294,44 @@ func TestFetchSegmentResumesAfterTruncation(t *testing.T) {
 	}
 	if len(ranges) != 2 || ranges[0] != "" || ranges[1] != fmt.Sprintf("bytes=%d-", len(full)/2) {
 		t.Fatalf("Range headers were %q, want [\"\", \"bytes=%d-\"]", ranges, len(full)/2)
+	}
+}
+
+// Обрубок сегмента узнаётся по его собственной структуре: TS — пакеты по 188
+// байт, fMP4 — боксы, чьи размеры складываются в размер файла.
+func TestSegmentWhole(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, data []byte) (string, int64) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p, int64(len(data))
+	}
+	box := func(typ string, n int) []byte {
+		b := make([]byte, n)
+		binary.BigEndian.PutUint32(b, uint32(n))
+		copy(b[4:], typ)
+		return b
+	}
+	ts := bytes.Repeat(append([]byte{0x47}, make([]byte, 187)...), 10)
+	fmp4 := append(box("moof", 64), box("mdat", 1000)...)
+	vtt := []byte("WEBVTT\n\n00:00.000 --> 00:01.000\nhi\n")
+
+	for _, c := range []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"ts whole", ts, true},
+		{"ts cut", ts[:1000], false},
+		{"fmp4 whole", fmp4, true},
+		{"fmp4 cut", fmp4[:700], false},
+		{"subtitles", vtt, true},
+	} {
+		p, n := write(strings.ReplaceAll(c.name, " ", "_"), c.data)
+		if got := segmentWhole(p, n); got != c.want {
+			t.Errorf("%s: segmentWhole = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

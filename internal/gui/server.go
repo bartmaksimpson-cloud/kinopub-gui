@@ -360,6 +360,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/doctor", s.handleDoctor)
 	mux.HandleFunc("GET /api/library", s.handleLibrary)
 	mux.HandleFunc("GET /api/library/downloaded", s.handleLibraryDownloaded)
+	mux.HandleFunc("GET /api/library/check", s.handleLibraryCheck)
 	mux.HandleFunc("POST /api/downloads/verify", s.handleVerifyDownloads)
 	mux.HandleFunc("POST /api/library/delete", s.handleDeleteLibrary)
 	mux.HandleFunc("POST /api/library/delete-episode", s.handleDeleteLibraryEpisode)
@@ -1109,6 +1110,30 @@ func (s *Server) handleLibraryDownloaded(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, downloadedForItem(s.libraryDirs(), id))
+}
+
+// handleLibraryCheck reads one downloaded episode end to end and reports whether
+// its video track has holes. Долго (файл читается целиком), поэтому по одной
+// серии и только по запросу.
+func (s *Server) handleLibraryCheck(w http.ResponseWriter, r *http.Request) {
+	id, key := r.URL.Query().Get("id"), r.URL.Query().Get("key")
+	for _, series := range scanLibrary(s.libraryDirs()).Series {
+		if series.SeriesID != id {
+			continue
+		}
+		for _, ep := range series.Episodes {
+			if ep.Key == key && ep.Exists {
+				res, err := checkVideoGaps(r.Context(), ep.Path)
+				if err != nil {
+					writeErr(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, res)
+				return
+			}
+		}
+	}
+	writeErr(w, http.StatusNotFound, "episode not found")
 }
 
 func (s *Server) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {

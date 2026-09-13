@@ -209,3 +209,76 @@ func prettyCodec(name string) string {
 	}
 	return strings.ToUpper(name)
 }
+
+// gapCheck is what a full read of the file found: сколько кадров видео на деле
+// и сколько должно быть по длине файла.
+type gapCheck struct {
+	DurationSec  float64 `json:"durationSec"`
+	VideoFrames  int64   `json:"videoFrames"`
+	ExpectFrames int64   `json:"expectFrames"`
+	MissingSec   float64 `json:"missingSec"`
+}
+
+// checkVideoGaps counts the video packets of the whole file. Дыра от
+// недокачанного сегмента — это секунды без кадров при идущем звуке: кадров
+// оказывается меньше, чем длина файла, умноженная на частоту.
+func checkVideoGaps(ctx context.Context, path string) (gapCheck, error) {
+	probe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return gapCheck{}, err
+	}
+	cmd := exec.CommandContext(ctx, probe, "-v", "error",
+		"-select_streams", "v:0", "-count_packets",
+		"-show_entries", "stream=nb_read_packets,avg_frame_rate,r_frame_rate:format=duration",
+		"-of", "json", path)
+	hideConsole(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return gapCheck{}, err
+	}
+	return parseGapCheck(out), nil
+}
+
+func parseGapCheck(data []byte) gapCheck {
+	var probed struct {
+		Streams []struct {
+			Packets  string `json:"nb_read_packets"`
+			AvgFrame string `json:"avg_frame_rate"`
+			RFrame   string `json:"r_frame_rate"`
+		} `json:"streams"`
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	var res gapCheck
+	if json.Unmarshal(data, &probed) != nil || len(probed.Streams) == 0 {
+		return res
+	}
+	st := probed.Streams[0]
+	res.DurationSec, _ = strconv.ParseFloat(probed.Format.Duration, 64)
+	res.VideoFrames, _ = strconv.ParseInt(st.Packets, 10, 64)
+	// Точная дробь (24000/1001), без округления parseFrameRate: на часе
+	// разница 24 и 23.976 — это восемьдесят «пропавших» кадров.
+	fps := exactRate(st.RFrame)
+	if fps == 0 {
+		fps = exactRate(st.AvgFrame)
+	}
+	if fps > 0 {
+		res.ExpectFrames = int64(math.Round(res.DurationSec * fps))
+		res.MissingSec = math.Round(float64(res.ExpectFrames-res.VideoFrames)/fps*10) / 10
+	}
+	return res
+}
+
+func exactRate(s string) float64 {
+	num, den, ok := strings.Cut(s, "/")
+	if !ok {
+		return 0
+	}
+	n, err1 := strconv.ParseFloat(num, 64)
+	d, err2 := strconv.ParseFloat(den, 64)
+	if err1 != nil || err2 != nil || d == 0 {
+		return 0
+	}
+	return n / d
+}

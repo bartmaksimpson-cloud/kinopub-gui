@@ -41,3 +41,12 @@ func TestParseFrameRate(t *testing.T) {
 		}
 	}
 }
+
+func TestParseGapCheck(t *testing.T) {
+	// 100 секунд при 24000/1001 — 2398 кадров; 240 кадров недостаёт (~10 с).
+	out := []byte(`{"streams":[{"nb_read_packets":"2158","r_frame_rate":"24000/1001","avg_frame_rate":"24000/1001"}],"format":{"duration":"100.000"}}`)
+	got := parseGapCheck(out)
+	if got.ExpectFrames != 2398 || got.VideoFrames != 2158 || got.MissingSec < 9.9 || got.MissingSec > 10.1 {
+		t.Fatalf("parseGapCheck = %+v", got)
+	}
+}

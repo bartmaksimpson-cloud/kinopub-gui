@@ -4,6 +4,7 @@ package hlsdownloader
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -669,7 +670,7 @@ func (d *Downloader) downloadEpisodeInternal(
 					// Release without measuring: a failed attempt's bytes say
 					// nothing about whether the current concurrency is right.
 					lim.release()
-					os.Remove(segPath)
+					os.Remove(segPath + ".part")
 					setErr(fmt.Errorf("segment %d failed: %w", seg.Index, err))
 					return
 				}
@@ -722,10 +723,18 @@ func (d *Downloader) downloadEpisodeInternal(
 		n := 0
 		for _, seg := range segments {
 			p := filepath.Join(segDir, fmt.Sprintf("seg_%05d.ts", seg.Index))
-			if info, err := os.Stat(p); err == nil && info.Size() > 0 {
-				recordSegLocked(trackIdx, info.Size())
-				n++
+			info, err := os.Stat(p)
+			if err != nil || info.Size() == 0 {
+				continue
 			}
+			// Обрубок от версии, писавшей сразу под настоящим именем, — обратно
+			// в .part: его докачают с места обрыва, а не склеят как есть.
+			if !segmentWhole(p, info.Size()) {
+				_ = os.Rename(p, p+".part")
+				continue
+			}
+			recordSegLocked(trackIdx, info.Size())
+			n++
 		}
 		return n
 	}
@@ -989,8 +998,14 @@ func (d *Downloader) fetchSegment(ctx context.Context, segURL, outPath string) (
 	// megabytes, and a connection cut two thirds of the way in used to throw
 	// all of it away and start over — five times, then fail the download. The
 	// partial file the previous attempt left behind is the offset to ask for.
+	//
+	// Качается в .part и получает настоящее имя, только когда пришёл целиком.
+	// Раньше недокачанный кусок лежал под настоящим именем: закрылось приложение
+	// посреди сегмента (обновление, перезагрузка) — и докачка принимала обрубок
+	// за готовый сегмент. В серии получалась дыра: звук идёт, видео стоит.
+	part := outPath + ".part"
 	var offset int64
-	if fi, statErr := os.Stat(outPath); statErr == nil && fi.Size() > 0 {
+	if fi, statErr := os.Stat(part); statErr == nil && fi.Size() > 0 {
 		offset = fi.Size()
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
@@ -1019,7 +1034,7 @@ func (d *Downloader) fetchSegment(ctx context.Context, segURL, outPath string) (
 	if offset == 0 {
 		flags |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(outPath, flags, 0o644)
+	f, err := os.OpenFile(part, flags, 0o644)
 	if err != nil {
 		return 0, err
 	}
@@ -1059,8 +1074,11 @@ func (d *Downloader) fetchSegment(ctx context.Context, segURL, outPath string) (
 			have, want, time.Since(started).Round(time.Millisecond), resp.Proto)
 	}
 	if closeErr != nil {
-		os.Remove(outPath)
+		os.Remove(part)
 		return 0, closeErr
+	}
+	if err := os.Rename(part, outPath); err != nil {
+		return 0, err
 	}
 
 	return have, nil
@@ -1134,3 +1152,48 @@ func formatHLSBytes(b int64) string {
 
 // Verify that *Downloader satisfies domain.HLSDownloader at compile time.
 var _ domain.HLSDownloader = (*Downloader)(nil)
+
+// segmentWhole reports whether a segment file on disk is complete, judged by its
+// own structure: MPEG-TS is a run of 188-byte packets, fMP4 a run of boxes whose
+// sizes add up to the file. Формат, который не распознан (субтитры), считается
+// целым — судить его не по чему.
+func segmentWhole(path string, size int64) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var hdr [16]byte
+	if _, err := io.ReadFull(f, hdr[:8]); err != nil {
+		return size < 8 && hdr[0] != 0x47
+	}
+	if hdr[0] == 0x47 {
+		return size%188 == 0
+	}
+	switch string(hdr[4:8]) {
+	case "styp", "moof", "sidx", "emsg", "prft", "ftyp", "mdat", "free":
+	default:
+		return true
+	}
+	var off int64
+	for off < size {
+		if _, err := f.ReadAt(hdr[:8], off); err != nil {
+			return false
+		}
+		box := int64(binary.BigEndian.Uint32(hdr[:4]))
+		switch box {
+		case 0: // до конца файла
+			return true
+		case 1:
+			if _, err := f.ReadAt(hdr[8:16], off+8); err != nil {
+				return false
+			}
+			box = int64(binary.BigEndian.Uint64(hdr[8:16]))
+		}
+		if box < 8 {
+			return false
+		}
+		off += box
+	}
+	return off == size
+}
