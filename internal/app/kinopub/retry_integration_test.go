@@ -159,9 +159,8 @@ func TestRunHLS_DeferredRetrySucceeds(t *testing.T) {
 }
 
 // Deferred retry under a single worker: a transiently-failed episode is
-// re-queued and retried once the fresh episodes drain, rather than being
-// dropped. (With concurrency > 1 a free worker picks the ready retry up in
-// parallel; this test pins one worker so the order is deterministic.)
+// retried as soon as its backoff elapses, ahead of fresh episodes, rather than
+// waiting for the whole queue to drain. (Backoff is zero in this test.)
 func TestRunHLS_DeferredRetryInterleaves(t *testing.T) {
 	hls := newFakeHLS(errors.New("unexpected EOF"))
 	key1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
@@ -175,14 +174,12 @@ func TestRunHLS_DeferredRetryInterleaves(t *testing.T) {
 		t.Fatalf("runHLS error: %v", err)
 	}
 
-	// New episodes dispatch first (E01 fails and is parked), then the parked
-	// E01 is retried after the queue of fresh episodes drains:
-	// E01 (fail) → E02 → E03 → E01 (retry, ok).
+	// E01 (fail) → E01 (retry, ok) → E02 → E03.
 	want := []domain.EpisodeKey{
+		{Series: "42", Season: 1, Episode: 1},
 		{Series: "42", Season: 1, Episode: 1},
 		{Series: "42", Season: 1, Episode: 2},
 		{Series: "42", Season: 1, Episode: 3},
-		{Series: "42", Season: 1, Episode: 1},
 	}
 	if len(hls.order) != len(want) {
 		t.Fatalf("call order = %v, want %v", hls.order, want)

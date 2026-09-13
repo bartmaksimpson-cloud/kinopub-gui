@@ -714,6 +714,16 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		if held := heldRunningCount(); held > 0 && inFlight-muxing+held >= cfg.MaxConcurrency {
 			return nil, 300 * time.Millisecond, false
 		}
+		// Серия с ошибкой идёт раньше новых: иначе она ждала конца всего сезона, и
+		// человек видел «отложено» у серий, которые докачались бы за минуту.
+		// Короткая пауза (backoff) остаётся — 429 и обрыв сети мгновенный повтор
+		// только повторят.
+		if idx := readyDeferredIndex(retryQueue, time.Now()); idx >= 0 {
+			pe := retryQueue[idx]
+			retryQueue = append(retryQueue[:idx], retryQueue[idx+1:]...)
+			inFlight++
+			return pe, 0, false
+		}
 		if len(newQueue) > 0 {
 			pe := newQueue[0]
 			newQueue = newQueue[1:]
@@ -1027,9 +1037,9 @@ const (
 // episode that has failed `attempts` times. It grows linearly and is capped so
 // a stuck CDN segment doesn't stall the whole run indefinitely.
 func episodeRetryBackoff(attempts int) time.Duration {
-	wait := time.Duration(attempts) * 20 * time.Second
-	if wait > 3*time.Minute {
-		wait = 3 * time.Minute
+	wait := time.Duration(attempts) * 5 * time.Second
+	if wait > time.Minute {
+		wait = time.Minute
 	}
 	return wait
 }
