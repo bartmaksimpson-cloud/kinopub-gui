@@ -100,6 +100,10 @@ func (r *eventReporter) Start(plan domain.SeriesPlan) {
 		ev.State = epPending
 		ev.Percent = 0
 		ev.Bytes = 0
+		// Счётчик сегментов тоже от прошлой попытки: рядом с обнулёнными байтами
+		// он давал «0 Б · 578/579». Докачка пришлёт настоящие цифры при старте.
+		ev.SegDone, ev.SegTotal = 0, 0
+		ev.Total, ev.TotalApprox = 0, false
 		ev.SpeedBps = 0
 		ev.ETASeconds = 0
 		ev.Error = ""

@@ -207,3 +207,38 @@ func TestRemovePersistsSynchronously(t *testing.T) {
 		t.Errorf("removed job still persisted: %v", got)
 	}
 }
+
+// Прерванная перезапуском (обновлением) задача продолжается сама; поставленная
+// на паузу руками — стоит.
+func TestAttachStoreResumesInterruptedJobs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	store := newJobStore()
+	held := testPersistedJob("job-2", statusPaused)
+	held.URL = "https://kino.watch/item/view/500"
+	held.Cfg.InputURL = held.URL
+	if err := store.save([]persistedJob{testPersistedJob("job-1", statusRunning), held}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	m := newJobManager(newHub())
+	started := make(chan string, 2)
+	m.startFn = func(j *Job) { started <- j.id }
+	m.attachStore(store)
+
+	select {
+	case id := <-started:
+		if id != "job-1" {
+			t.Fatalf("started %q, want job-1", id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted job-1 was not resumed")
+	}
+	select {
+	case id := <-started:
+		t.Fatalf("user-paused %q was resumed", id)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if j, _ := m.get("job-2"); j.status != statusPaused {
+		t.Errorf("job-2 status = %q, want paused", j.status)
+	}
+}

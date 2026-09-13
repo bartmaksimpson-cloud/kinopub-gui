@@ -450,6 +450,7 @@ func newJobManager(hub *Hub) *JobManager {
 // manager (in-flight ones come back paused, see restoreJob) and starts the
 // background persist loop. Must be called before the server starts serving.
 func (m *JobManager) attachStore(store *jobStore) {
+	var interrupted []*Job
 	m.mu.Lock()
 	m.store = store
 	for _, p := range store.load() {
@@ -458,6 +459,12 @@ func (m *JobManager) attachStore(store *jobStore) {
 		}
 		j := restoreJob(p)
 		m.jobs[j.id] = j
+		// Работу прервал перезапуск, а не человек: после обновления задача
+		// должна продолжиться сама, без «Продолжить». Поставленное на паузу
+		// руками сохранено как paused и так и остаётся.
+		if p.Status == statusQueued || p.Status == statusResolving || p.Status == statusRunning {
+			interrupted = append(interrupted, j)
+		}
 		// Keep the id sequence ahead of every restored id so new jobs never
 		// collide ("job-7" restored → next new job is at least "job-8").
 		var n int
@@ -483,6 +490,13 @@ func (m *JobManager) attachStore(store *jobStore) {
 	go func() {
 		for _, j := range restored {
 			m.refreshExisting(j)
+		}
+		// В прежнем порядке очереди: кто стоял первым, тот и начнёт.
+		sort.Slice(interrupted, func(a, b int) bool {
+			return interrupted[a].createdAt.Before(interrupted[b].createdAt)
+		})
+		for _, j := range interrupted {
+			m.resumeJob(j.id)
 		}
 	}()
 	go m.persistLoop()

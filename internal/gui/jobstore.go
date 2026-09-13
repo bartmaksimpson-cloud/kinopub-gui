@@ -185,7 +185,7 @@ func restoreJob(p persistedJob) *Job {
 		j.addLog(LogEntry{
 			Time:    time.Now(),
 			Level:   "INFO",
-			Message: "restored after restart — press Resume to continue this download",
+			Message: "restored after restart",
 		})
 	}
 	return j
