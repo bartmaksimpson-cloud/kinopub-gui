@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
@@ -132,4 +133,27 @@ func TestFlushStaged(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "Сериал", "Season 01", "S01E10 - Двухпалатный.mkv.ts.hls-tmp")); !os.IsNotExist(err) {
 		t.Error("в папке назначения появилась папка сегментов")
 	}
+}
+
+// Перенос стоит в одной очереди со склейкой: пока идёт склейка, файл ждёт.
+func TestFlushStagedWaitsForDiskGate(t *testing.T) {
+	work, out := t.TempDir(), t.TempDir()
+	cfg := domain.RunConfig{OutputPath: out, WorkPath: work}
+	if err := os.WriteFile(filepath.Join(work, "S01E01.mkv"), []byte("кино"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fsutil.DiskGate <- struct{}{} // «идёт склейка»
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int)
+	go func() { done <- FlushStaged(ctx, cfg, fsutil.Move, &mockLogger{}) }()
+	select {
+	case n := <-done:
+		t.Fatalf("перенос не дождался склейки, перенесено %d", n)
+	case <-time.After(100 * time.Millisecond):
+	}
+	<-fsutil.DiskGate // склейка закончилась
+	if n := <-done; n != 1 {
+		t.Fatalf("перенесено %d, want 1", n)
+	}
+	cancel()
 }

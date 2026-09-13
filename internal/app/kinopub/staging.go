@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 )
 
 // Сетевой диск исчезает буднично: у человека включился корпоративный VPN,
@@ -208,9 +209,19 @@ func FlushStaged(ctx context.Context, cfg domain.RunConfig, move func(from, to s
 				domain.F("to", target), domain.F("error", err.Error()))
 			return filepath.SkipAll
 		}
-		if err := move(path, target); err != nil {
+		// В общую очередь со склейкой: вместе они делят один диск и обе ползут.
+		// Очередь берётся на каждый файл, а не на весь проход — иначе склейка
+		// ждала бы, пока уедут все два десятка серий.
+		select {
+		case fsutil.DiskGate <- struct{}{}:
+		case <-ctx.Done():
+			return filepath.SkipAll
+		}
+		moveErr := move(path, target)
+		<-fsutil.DiskGate
+		if moveErr != nil {
 			log.Warn("не удалось перенести отложенный файл",
-				domain.F("from", path), domain.F("to", target), domain.F("error", err.Error()))
+				domain.F("from", path), domain.F("to", target), domain.F("error", moveErr.Error()))
 			return nil
 		}
 		moved++

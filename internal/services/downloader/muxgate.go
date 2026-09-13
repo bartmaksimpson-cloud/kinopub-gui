@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
+	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 )
 
 // Склейка идёт по одной за раз на всё приложение.
@@ -17,7 +18,10 @@ import (
 // ponytail: семафор на пакет, а не поле Downloader — у каждой задачи свой
 // Downloader (см. gui.buildEngineDeps), а ограничен тут один общий диск. Если
 // когда-нибудь выходных дисков станет несколько, ключевать по выходной папке.
-var muxGate = make(chan struct{}, 1)
+//
+// Канал общий с переносом отложенных файлов (kinopub.FlushStaged): перенос на
+// тот же NAS просаживал склейку так же, как вторая склейка.
+var muxGate = fsutil.DiskGate
 
 // acquireMuxGate waits for the single assembly slot and returns the release.
 //

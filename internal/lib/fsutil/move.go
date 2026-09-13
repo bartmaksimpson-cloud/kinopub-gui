@@ -6,6 +6,12 @@ import (
 	"os"
 )
 
+// DiskGate — одна тяжёлая дисковая работа на всё приложение: склейка серии или
+// перенос готового файла в папку загрузки. Обе читают десятки гигабайт и пишут
+// столько же на тот же NAS, и вместе каждая шла в разы медленнее, чем по
+// очереди. Занять — отправить в канал, освободить — прочитать из него.
+var DiskGate = make(chan struct{}, 1)
+
 // Move moves a finished file to its final place. A rename is instant, but it
 // only works inside one filesystem: with the work folder on another drive — the
 // whole point of having one — it fails with EXDEV and the file would be lost.
