@@ -63,9 +63,14 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// пока папка загрузки была недоступна, уезжают на своё место. К началу
 	// следующего запуска диск обычно уже вернулся, и человек для этого ничего
 	// не делал.
-	if n := FlushStaged(ctx, cfg, fsutil.Move, log); n > 0 {
-		log.Info("перенёс файлы, дождавшиеся папки загрузки", domain.F("count", n))
-	}
+	//
+	// В фоне: серия в 4K весит больше 10 ГБ, и два десятка таких по сети едут
+	// час — всё это время запуск ничего не качал.
+	go func() {
+		if n := FlushStaged(context.WithoutCancel(ctx), cfg, fsutil.Move, log); n > 0 {
+			log.Info("перенёс файлы, дождавшиеся папки загрузки", domain.F("count", n))
+		}
+	}()
 
 	// 1. Extract playlist from page, retrying a few times: kino.watch sits behind
 	// Cloudflare and the first request after an idle period often fails

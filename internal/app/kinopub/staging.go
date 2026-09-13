@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 )
@@ -126,6 +127,8 @@ func isTempDir(name string) bool {
 	return strings.HasSuffix(lower, ".hls-tmp") || strings.HasSuffix(lower, ".tmp")
 }
 
+var flushMu sync.Mutex
+
 // FlushStaged moves everything that waited out an outage into the download
 // folder. Вызывается в начале запуска: к этому моменту диск обычно уже вернулся,
 // а человек ничего для этого не делал.
@@ -136,6 +139,13 @@ func FlushStaged(ctx context.Context, cfg domain.RunConfig, move func(from, to s
 	if cfg.WorkPath == "" || cfg.OutputPath == "" || cfg.WorkPath == cfg.OutputPath {
 		return 0
 	}
+	// Одновременно зовут запуски всех задач и фоновый сборщик, а рабочая папка
+	// у них общая: два прохода копировали бы один и тот же файл в один и тот же
+	// .moving. Занято — значит файлы уже едут, второй проход не нужен.
+	if !flushMu.TryLock() {
+		return 0
+	}
+	defer flushMu.Unlock()
 	moved := 0
 	_ = filepath.Walk(cfg.WorkPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || ctx.Err() != nil {
