@@ -477,6 +477,12 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 				mu.Unlock()
 				return
 			}
+			// Нет места — ждём, пока появится, сколько бы ни пришлось: попытку не
+			// тратим, иначе через пять минут серия провалится и сотрёт сегменты.
+			noSpace := diskFull(err)
+			if noSpace {
+				pe.attempts--
+			}
 			if pe.attempts >= maxEpisodeAttempts {
 				log.Warn("giving up on episode after repeated transient failures",
 					domain.F("episode", epLabel),
@@ -499,6 +505,9 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 				return
 			}
 			wait := e.backoffFor(pe.attempts)
+			if noSpace {
+				wait = e.backoffFor(maxEpisodeAttempts)
+			}
 			// Capture everything read for the log/report BEFORE re-parking: once pe
 			// is back in retryQueue another worker may pick it up immediately (the
 			// retry backoff is zero in tests), so touching pe past the unlock races.
@@ -1152,7 +1161,7 @@ func (e *engine) attemptHLSEpisode(
 		if ctx.Err() != nil {
 			return epRetryable, dlErr
 		}
-		if isTransientDownloadError(dlErr) {
+		if isTransientDownloadError(dlErr) || diskFull(dlErr) {
 			return epRetryable, dlErr
 		}
 		// Terminal failure: clean up the segment temp directory so it does not
@@ -1210,7 +1219,7 @@ func (e *engine) attemptHLSEpisode(
 		// Склейку прервали (пауза, отмена, выход) или из-под неё ушёл диск —
 		// сегменты целы, и повтор начнётся сразу со склейки. Стереть их значит
 		// выкинуть часы скачивания из-за мигнувшей сети.
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || diskFull(remuxErr) {
 			return epRetryable, remuxErr
 		}
 		if err := e.deps.OutputLayout.EnsureDirs(outPath); err != nil && outputUnavailable(err) {

@@ -2,7 +2,6 @@ package gui
 
 import (
 	"context"
-	"io"
 	"os"
 	"time"
 
@@ -54,7 +53,7 @@ func (s *Server) sweepStaged(ctx context.Context) int {
 		return 0
 	}
 	run := domain.RunConfig{OutputPath: cfg.OutputPath, WorkPath: cfg.WorkPath}
-	n := kinopub.FlushStaged(ctx, run, fsutil.Move, quietLogger())
+	n := kinopub.FlushStaged(ctx, run, fsutil.Move, journalLogger("staged"))
 	if n > 0 {
 		// Интерфейс должен увидеть переехавшие файлы сразу, а не по обновлению
 		// страницы: человек как раз в этот момент и смотрит, доехало ли.
@@ -63,9 +62,27 @@ func (s *Server) sweepStaged(ctx context.Context) int {
 	return n
 }
 
-// quietLogger пишет в никуда: у сборщика нет карточки задачи, в которую можно
-// было бы показать строку лога, а копить их в памяти у процесса, живущего
-// неделями, — верный способ съесть её незаметно.
-func quietLogger() domain.Logger {
-	return logx.New([]logx.Handler{logx.NewFileHandler(io.Discard, logx.NewCoordinator(io.Discard))})
+// journalLogger пишет только в журнал событий: у сборщика нет карточки задачи,
+// а без записи не понять, почему файлы из рабочей папки не доехали.
+func journalLogger(job string) domain.Logger {
+	return logx.New([]logx.Handler{journalHandler(job)})
+}
+
+type journalHandler string
+
+func (h journalHandler) Handle(rec logx.Record) {
+	var fields map[string]any
+	if len(rec.Fields) > 0 {
+		fields = make(map[string]any, len(rec.Fields))
+		for _, f := range rec.Fields {
+			fields[f.Key] = f.Value
+		}
+	}
+	events.Load().add(string(h), "", LogEntry{
+		Time:      rec.Time,
+		Level:     logx.LevelString(rec.Level),
+		Component: rec.Component,
+		Message:   rec.Message,
+		Fields:    fields,
+	})
 }

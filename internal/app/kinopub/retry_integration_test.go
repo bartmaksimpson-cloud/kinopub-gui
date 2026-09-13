@@ -267,3 +267,20 @@ func TestRunHLS_GivesUpAfterBudget(t *testing.T) {
 		t.Errorf("episode attempted %d times, want %d (budget)", got, maxEpisodeAttempts)
 	}
 }
+
+// Кончилось место — серия ждёт сколько угодно и попыток не тратит: иначе через
+// maxEpisodeAttempts она провалилась бы и стёрла скачанные сегменты.
+func TestRunHLS_DiskFullDoesNotBurnAttempts(t *testing.T) {
+	hls := newFakeHLS(errors.New("write seg_00223.ts: There is not enough space on the disk."))
+	key1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	hls.failsLeft[key1] = maxEpisodeAttempts + 3
+
+	e, _, _ := newRetryTestEngine(hls, &fakePageScraper{playlist: makePlaylist(1)})
+	res, err := e.runHLS(context.Background(), retryTestConfig())
+	if err != nil {
+		t.Fatalf("runHLS error: %v", err)
+	}
+	if res.Failed != 0 || res.Succeeded != 1 {
+		t.Fatalf("succeeded=%d failed=%d, want 1/0", res.Succeeded, res.Failed)
+	}
+}

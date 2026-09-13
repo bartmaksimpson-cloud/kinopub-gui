@@ -50,6 +50,30 @@ func outputUnavailable(err error) bool {
 	return false
 }
 
+// diskFullMarkers — «кончилось место». Это не провал серии: место освобождается
+// само (отложенные файлы уезжают в папку загрузки) или руками, а стирать при
+// этом скачанные сегменты — значит качать заново то, что уже было.
+var diskFullMarkers = []string{
+	"not enough space",        // Windows 112: There is not enough space on the disk
+	"no space left on device", // POSIX ENOSPC, ffmpeg
+	"disk full",
+	"disk quota exceeded",
+}
+
+// diskFull reports whether err means a disk ran out of space.
+func diskFull(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, m := range diskFullMarkers {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // stagedPathFor is where an episode waits out the outage: тот же путь, но в
 // рабочей папке, которая повторяет структуру папки загрузки. Пустая строка —
 // складывать некуда (рабочая папка не задана или совпадает с целевой).
@@ -134,10 +158,17 @@ func FlushStaged(ctx context.Context, cfg domain.RunConfig, move func(from, to s
 			return nil
 		}
 		if _, err := os.Stat(target); err == nil {
-			return nil // на месте уже есть файл — трогать чужое не будем
+			// На месте уже есть файл — трогать чужое не будем.
+			log.Warn("отложенный файл не перенесён: в папке загрузки уже есть такой",
+				domain.F("from", path), domain.F("to", target))
+			return nil
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return nil // папка загрузки всё ещё недоступна — подождём
+			// Папка загрузки всё ещё недоступна — подождём. Остальные файлы
+			// упрутся в то же самое, обходить их незачем.
+			log.Warn("отложенные файлы ждут папку загрузки",
+				domain.F("to", target), domain.F("error", err.Error()))
+			return filepath.SkipAll
 		}
 		if err := move(path, target); err != nil {
 			log.Warn("не удалось перенести отложенный файл",
