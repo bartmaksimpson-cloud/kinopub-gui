@@ -159,12 +159,24 @@ func (ix *downloadIndex) all() []DownloadRec {
 // Различать «папки нет» и «файла нет» важнее, чем кажется: первое — временно и
 // лечится включением диска, второе — окончательно и означает перекачивание.
 // Раньше оба случая выглядели одинаково: «не скачано».
-func checkDisk(path string) string {
+//
+// run даёт папки загрузки и рабочую: серия, собранная в рабочей на время
+// отключения диска, записана по месту в папке загрузки, а до переноса лежит в
+// рабочей. Считать её пропавшей — значит скачать заново 10 ГБ, которые ждут
+// своей очереди на перенос.
+func checkDisk(path string, run domain.RunConfig) string {
 	if path == "" {
 		return diskMissing
 	}
 	if _, err := os.Stat(path); err == nil {
 		return diskOK
+	}
+	if run.WorkPath != "" && run.OutputPath != "" && run.WorkPath != run.OutputPath {
+		if staged := domain.WorkPathFor(run.WorkPath, run.OutputPath, path); staged != path {
+			if _, err := os.Stat(staged); err == nil {
+				return diskOK
+			}
+		}
 	}
 	// Файла нет. Вопрос в том, есть ли папка: недоступная шара отвечает
 	// ошибкой на всё подряд, и принимать это за пропавший файл нельзя.
@@ -243,7 +255,7 @@ func (s indexingStateStore) Load(ctx context.Context, series domain.SeriesID) (d
 		if _, known := st.Completed[key]; known {
 			continue
 		}
-		if checkDisk(rec.Path) == diskMissing {
+		if checkDisk(rec.Path, s.run) == diskMissing {
 			continue
 		}
 		st.Completed[key] = domain.CompletedRec{

@@ -1026,6 +1026,8 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 // перекачивать сериал, который целиком лежал на выключенном NAS.
 func (s *Server) handleVerifyDownloads(w http.ResponseWriter, r *http.Request) {
 	recs := s.mgr.index.all()
+	saved := s.settings.get()
+	run := domain.RunConfig{OutputPath: saved.OutputPath, WorkPath: saved.WorkPath}
 	type item struct {
 		DownloadRec
 		Disk string `json:"disk"`
@@ -1034,7 +1036,7 @@ func (s *Server) handleVerifyDownloads(w http.ResponseWriter, r *http.Request) {
 	counts := map[string]int{diskOK: 0, diskOffline: 0, diskMissing: 0}
 	var okBytes int64
 	for _, rec := range recs {
-		st := checkDisk(rec.Path)
+		st := checkDisk(rec.Path, run)
 		counts[st]++
 		if st == diskOK {
 			okBytes += rec.Bytes

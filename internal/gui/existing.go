@@ -17,7 +17,7 @@ import (
 // весь интерфейс.
 func (m *JobManager) refreshExisting(j *Job) {
 	j.mu.Lock()
-	url, out, status := j.url, j.outputPath, j.status
+	url, out, status, run := j.url, j.outputPath, j.status, j.cfg
 	j.mu.Unlock()
 	if url == "" || out == "" {
 		return
@@ -44,7 +44,7 @@ func (m *JobManager) refreshExisting(j *Job) {
 	// читает файлы состояния, а те лежат вместе с фильмами и пропадают вместе
 	// с диском.
 	for key, rec := range m.index.forSeries(id) {
-		found[key] = onDisk{bytes: rec.Bytes, state: checkDisk(rec.Path)}
+		found[key] = onDisk{bytes: rec.Bytes, state: checkDisk(rec.Path, run)}
 	}
 
 	// Дополняем сканом папки: серии, скачанные до появления списка или другой

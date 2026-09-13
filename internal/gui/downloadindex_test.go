@@ -18,21 +18,21 @@ func TestCheckDisk(t *testing.T) {
 	if err := os.WriteFile(present, []byte("кино"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := checkDisk(present); got != diskOK {
+	if got := checkDisk(present, domain.RunConfig{}); got != diskOK {
 		t.Errorf("файл на месте: %q, ожидалось %q", got, diskOK)
 	}
 
 	// Папка есть, файла нет — его удалили.
-	if got := checkDisk(filepath.Join(dir, "S01E02.mkv")); got != diskMissing {
+	if got := checkDisk(filepath.Join(dir, "S01E02.mkv"), domain.RunConfig{}); got != diskMissing {
 		t.Errorf("удалённый файл: %q, ожидалось %q", got, diskMissing)
 	}
 
 	// Нет и папки — так выглядит отключённый сетевой диск.
-	if got := checkDisk(filepath.Join(dir, "нет-такой-папки", "S01E03.mkv")); got != diskOffline {
+	if got := checkDisk(filepath.Join(dir, "нет-такой-папки", "S01E03.mkv"), domain.RunConfig{}); got != diskOffline {
 		t.Errorf("недоступная папка: %q, ожидалось %q", got, diskOffline)
 	}
 
-	if got := checkDisk(""); got != diskMissing {
+	if got := checkDisk("", domain.RunConfig{}); got != diskMissing {
 		t.Errorf("пустой путь: %q", got)
 	}
 }
@@ -175,5 +175,29 @@ func TestIndexingStateStore_RemembersStagedByOutputPath(t *testing.T) {
 	want := filepath.Join(out, "Сериал", "Season 01", "S01E01.mkv")
 	if got := ix.forSeries("8739")["S1E1"].Path; got != want {
 		t.Fatalf("запомнен путь %q, ожидался %q", got, want)
+	}
+}
+
+// Серия ждёт переноса в рабочей папке: запись указывает на папку загрузки, где
+// файла ещё нет. Это «скачано», а не «пропал» — иначе её скачают заново.
+func TestCheckDisk_StagedCopyCounts(t *testing.T) {
+	out, work := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(out, "Show", "Season 04"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(work, "Show", "Season 04", "S04E02.mkv")
+	if err := os.MkdirAll(filepath.Dir(staged), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staged, []byte("кино"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := domain.RunConfig{OutputPath: out, WorkPath: work}
+	target := filepath.Join(out, "Show", "Season 04", "S04E02.mkv")
+	if got := checkDisk(target, run); got != diskOK {
+		t.Fatalf("staged copy: got %q, want %q", got, diskOK)
+	}
+	if got := checkDisk(filepath.Join(out, "Show", "Season 04", "S04E03.mkv"), run); got != diskMissing {
+		t.Fatalf("no copy anywhere: got %q, want %q", got, diskMissing)
 	}
 }
