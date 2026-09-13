@@ -84,6 +84,12 @@ func (m *JobManager) refreshExisting(j *Job) {
 		if ev.State == epCompleted && ev.Disk == disk.state {
 			continue
 		}
+		// «Ждёт переноса» и «переносится» — тоже «на месте» для checkDisk;
+		// перезаписывать их на «уже в папке» значит мигать неправдой до
+		// следующей отметки markStaged.
+		if ev.State == epCompleted && disk.state == diskOK && (ev.Disk == diskStaged || ev.Disk == diskMoving) {
+			continue
+		}
 		// Файла нет, а папка на месте — это не «скачано»: значит его удалили, и
 		// притворяться, что серия готова, значит прятать работу, которую придётся
 		// сделать заново.

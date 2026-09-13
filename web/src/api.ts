@@ -29,7 +29,7 @@ export interface EpisodeView {
   totalApprox?: boolean; // total is an estimate (HLS), not a known size
   // Что показала проверка готового файла: "ok" — на месте, "offline" — папка
   // сейчас недоступна, "missing" — папка есть, а файла нет.
-  disk?: "ok" | "offline" | "missing";
+  disk?: "ok" | "offline" | "missing" | "staged" | "moving";
   speedBps: number;
   etaSeconds: number;
   segDone: number;
@@ -40,6 +40,7 @@ export interface EpisodeView {
   stageEncoder?: string;
   stageThreads?: number;
   stagePercent?: number;
+  held?: boolean;
   stageEtaSeconds?: number;
   attempts: number;
   error?: string;

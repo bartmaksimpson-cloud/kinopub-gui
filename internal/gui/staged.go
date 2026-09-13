@@ -9,6 +9,7 @@ import (
 	"github.com/ZioSHik/kinopub-gui/internal/domain"
 	"github.com/ZioSHik/kinopub-gui/internal/lib/fsutil"
 	"github.com/ZioSHik/kinopub-gui/internal/lib/logx"
+	"github.com/ZioSHik/kinopub-gui/internal/services/kinopubapi"
 )
 
 // stagedSweepEvery — как часто проверять, не вернулась ли папка загрузки.
@@ -18,6 +19,11 @@ import (
 // перенос к запуску закачки мало — качать может быть уже нечего, и готовый файл
 // останется лежать в рабочей папке навсегда.
 const stagedSweepEvery = 10 * time.Minute
+
+// stagedShowEvery — как часто обновлять в строках серий «ждёт переноса» и
+// процент копирования. Без этого перенос 10-гигабайтной серии на NAS виден
+// только в журнале, а строка всё это время уверяет, что файл уже в папке.
+const stagedShowEvery = 3 * time.Second
 
 // startStagedSweeper watches for the download folder coming back and moves the
 // episodes that waited in the work folder.
@@ -29,12 +35,17 @@ func (s *Server) startStagedSweeper(ctx context.Context) {
 	go func() {
 		t := time.NewTicker(stagedSweepEvery)
 		defer t.Stop()
+		show := time.NewTicker(stagedShowEvery)
+		defer show.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
 				s.sweepStaged(ctx)
+			case <-show.C:
+				cfg := s.settings.get()
+				s.mgr.markStaged(domain.RunConfig{OutputPath: cfg.OutputPath, WorkPath: cfg.WorkPath})
 			}
 		}
 	}()
@@ -85,4 +96,77 @@ func (h journalHandler) Handle(rec logx.Record) {
 		Message:   rec.Message,
 		Fields:    fields,
 	})
+}
+
+type stagedState struct {
+	disk    string
+	percent int
+}
+
+// stagedStates says, for every file waiting in the work folder, whether it is
+// just waiting or being copied right now — keyed by its place in the download
+// folder, как его и помнит список скачанного.
+//
+// Идущее копирование видно по соседу цели: fsutil.Move пишет в target+".moving".
+// Старый .moving от оборванного копирования не должен вечно изображать перенос,
+// поэтому считается только свежий.
+func stagedStates(run domain.RunConfig) map[string]stagedState {
+	out := map[string]stagedState{}
+	for target, staged := range kinopub.StagedFiles(run) {
+		st := stagedState{disk: diskStaged}
+		src, err := os.Stat(staged)
+		mv, mvErr := os.Stat(target + ".moving")
+		if err == nil && mvErr == nil && time.Since(mv.ModTime()) < 2*time.Minute {
+			st.disk = diskMoving
+			if src.Size() > 0 {
+				st.percent = int(min(mv.Size()*100/src.Size(), 99))
+			}
+		}
+		out[target] = st
+	}
+	return out
+}
+
+// markStaged puts the transfer state on finished episode rows.
+func (m *JobManager) markStaged(run domain.RunConfig) {
+	staged := stagedStates(run)
+	m.mu.RLock()
+	jobs := make([]*Job, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	m.mu.RUnlock()
+	for _, j := range jobs {
+		j.mu.Lock()
+		id := kinopubapi.ItemIDFromURL(j.url)
+		j.mu.Unlock()
+		if id == "" {
+			continue
+		}
+		recs := m.index.forSeries(id)
+		changed := false
+		j.mu.Lock()
+		for key, rec := range recs {
+			ev, ok := j.episodes[key]
+			if !ok || ev.State != epCompleted {
+				continue
+			}
+			st, waiting := staged[rec.Path]
+			if !waiting {
+				// Доехал: был «переносится» — теперь просто на месте.
+				if ev.Disk != diskStaged && ev.Disk != diskMoving {
+					continue
+				}
+				st = stagedState{disk: diskOK}
+			}
+			if ev.Disk != st.disk || ev.StagePercent != st.percent {
+				ev.Disk, ev.StagePercent = st.disk, st.percent
+				changed = true
+			}
+		}
+		j.mu.Unlock()
+		if changed {
+			m.publishNow(j)
+		}
+	}
 }

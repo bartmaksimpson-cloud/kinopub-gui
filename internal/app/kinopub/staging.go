@@ -127,6 +127,34 @@ func isTempDir(name string) bool {
 	return strings.HasSuffix(lower, ".hls-tmp") || strings.HasSuffix(lower, ".tmp")
 }
 
+// StagedFiles lists finished files waiting in the work folder, keyed by their
+// place in the download folder. Обход тот же, что у FlushStaged: папки с
+// сегментами пропускаются, поэтому проход по рабочей папке дешёвый.
+func StagedFiles(cfg domain.RunConfig) map[string]string {
+	out := map[string]string{}
+	if cfg.WorkPath == "" || cfg.OutputPath == "" || cfg.WorkPath == cfg.OutputPath {
+		return out
+	}
+	_ = filepath.Walk(cfg.WorkPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil {
+			return nil
+		}
+		if info.IsDir() {
+			if isTempDir(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isMediaFile(info.Name()) {
+			if target := OutputPathFor(cfg, path); target != "" {
+				out[target] = path
+			}
+		}
+		return nil
+	})
+	return out
+}
+
 var flushMu sync.Mutex
 
 // FlushStaged moves everything that waited out an outage into the download

@@ -99,6 +99,8 @@ const RU: Record<string, string> = {
   "In the queue — open": "В очереди — открыть",
   "Already downloaded — open": "Уже скачано — открыть",
   "In the queue": "В очереди",
+  "In the queue — the slot is held by a paused episode: {eps}": "В очереди — место занято серией на паузе: {eps}. Снимите её с паузы, чтобы очередь пошла",
+  "In the queue — starts when a download slot frees up": "В очереди — начнётся, когда освободится место",
   "Open the queue": "Открыть очередь",
   "{n} already in the queue": "{n} уже в очереди",
   // Verbatim from the server: the duplicate guard in handleCreateJob.
@@ -261,6 +263,7 @@ const RU: Record<string, string> = {
   "assembling the file": "сборка файла из сегментов",
   "re-encoding": "перекодирование",
   "moving to the output folder": "перенос в папку загрузки",
+  "downloaded — waiting to move to the output folder": "скачано — ждёт переноса в папку загрузки",
   Version: "Версия",
   "(the service publishes this film as several files)": "(сервис выкладывает этот фильм несколькими файлами)",
   "Loading subtitle list…": "Загружаю список субтитров…",

@@ -46,6 +46,8 @@ const (
 	diskOK      = "ok"      // файл на месте
 	diskOffline = "offline" // папка недоступна — диск отключён, сеть пропала
 	diskMissing = "missing" // папка доступна, а файла в ней нет
+	diskStaged  = "staged"  // готов, лежит в рабочей папке и ждёт переноса
+	diskMoving  = "moving"  // прямо сейчас копируется в папку загрузки
 )
 
 type downloadIndex struct {

@@ -78,10 +78,15 @@ function EpisodeRow({
   ep,
   jobId,
   jobStatus,
+  slotHolders = [],
 }: {
   ep: EpisodeView;
   jobId: string;
   jobStatus: JobView["status"];
+  // Серии, поставленные на паузу посреди загрузки: они держат место, и
+  // ожидающая серия без этой подсказки выглядела просто сломанной — «0%» и
+  // кнопки, ни слова о том, чего она ждёт.
+  slotHolders?: string[];
 }) {
   const { t } = useI18n();
   const { toast } = useApp();
@@ -246,6 +251,17 @@ function EpisodeRow({
             active={active}
             className="mt-1.5"
           />
+          {ep.state === "pending" && (
+            <div className="mt-1.5 text-[11px] text-slate-400">
+              <span className="rounded-full bg-white/[0.06] px-2 py-0.5 font-medium">
+                {jobStatus !== "running"
+                  ? t("In the queue")
+                  : slotHolders.length > 0
+                    ? t("In the queue — the slot is held by a paused episode: {eps}", { eps: slotHolders.join(", ") })
+                    : t("In the queue — starts when a download slot frees up")}
+              </span>
+            </div>
+          )}
           <EpisodeMeta ep={ep} active={active} />
         </div>
       </div>
@@ -322,6 +338,7 @@ function EpisodeMeta({
                 ep.disk === "ok" && "bg-emerald-500/[0.14] text-emerald-300",
                 ep.disk === "offline" && "bg-amber-500/[0.14] text-amber-300",
                 ep.disk === "missing" && "bg-ember-500/[0.14] text-ember-400",
+                (ep.disk === "staged" || ep.disk === "moving") && "bg-sky-500/[0.14] text-sky-300",
               )}
             >
               {ep.disk === "ok" && <Check className="h-3 w-3" strokeWidth={3} />}
@@ -329,7 +346,11 @@ function EpisodeMeta({
                 ? t("already in the folder")
                 : ep.disk === "offline"
                   ? t("downloaded — folder unavailable")
-                  : t("downloaded — file is gone")}
+                  : ep.disk === "staged"
+                    ? t("downloaded — waiting to move to the output folder")
+                    : ep.disk === "moving"
+                      ? `${t("moving to the output folder")} · ${ep.stagePercent ?? 0}%`
+                      : t("downloaded — file is gone")}
             </span>
             {ep.bytes > 0 && <span>{bytes(ep.bytes)}</span>}
           </>
@@ -416,6 +437,7 @@ function SeasonList({ job }: { job: JobView }) {
       return { season, eps, done, total: eps.length, active, size };
     });
   }, [job.episodes]);
+  const slotHolders = job.episodes.filter((e) => e.state === "paused" && e.held && e.segDone > 0).map((e) => e.key);
 
   return (
     <>
@@ -446,7 +468,7 @@ function SeasonList({ job }: { job: JobView }) {
             {open && (
               <div className="mt-2 grid gap-2 xl:grid-cols-2">
                 {eps.map((ep) => (
-                  <EpisodeRow key={ep.key} ep={ep} jobId={job.id} jobStatus={job.status} />
+                  <EpisodeRow key={ep.key} ep={ep} jobId={job.id} jobStatus={job.status} slotHolders={slotHolders} />
                 ))}
               </div>
             )}

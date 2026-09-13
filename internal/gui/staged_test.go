@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ZioSHik/kinopub-gui/internal/domain"
 )
 
 // Сборщик отложенного: пока папка загрузки не отвечает — ничего не делает;
@@ -46,5 +48,32 @@ func TestSweepStaged(t *testing.T) {
 	}
 	if _, err := os.Stat(staged); !os.IsNotExist(err) {
 		t.Error("исходник остался в рабочей папке")
+	}
+}
+
+// Строка серии должна отличать «ждёт переноса» от «переносится N%»: второе
+// видно по свежему target+".moving", который пишет fsutil.Move.
+func TestStagedStates(t *testing.T) {
+	work, out := t.TempDir(), t.TempDir()
+	run := domain.RunConfig{OutputPath: out, WorkPath: work}
+	staged := filepath.Join(work, "S", "S01E01.mkv")
+	target := filepath.Join(out, "S", "S01E01.mkv")
+	if err := os.MkdirAll(filepath.Dir(staged), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staged, make([]byte, 100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st := stagedStates(run)[target]; st.disk != diskStaged {
+		t.Fatalf("got %+v, want staged", st)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target+".moving", make([]byte, 40), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st := stagedStates(run)[target]; st.disk != diskMoving || st.percent != 40 {
+		t.Fatalf("got %+v, want moving 40%%", st)
 	}
 }
