@@ -558,3 +558,77 @@ func (m *pathMuxer) MuxHLS(_ context.Context, j domain.Job, _ *domain.HLSDownloa
 	m.out = j.OutPath
 	return nil
 }
+
+// scriptedHLS: каждая попытка серии ждёт, что ей скажут вернуть.
+type scriptedHLS struct {
+	fakeHLSDownloader
+	started map[domain.EpisodeKey]chan struct{}
+	result  map[domain.EpisodeKey]chan error
+}
+
+func (s *scriptedHLS) DownloadEpisode(ctx context.Context, _ string, _ domain.Quality, _ string, key domain.EpisodeKey, _ domain.ProgressSink) (*domain.HLSDownloadResult, error) {
+	s.started[key] <- struct{}{}
+	select {
+	case err := <-s.result[key]:
+		if err != nil {
+			return nil, err
+		}
+		return &domain.HLSDownloadResult{Resolution: "1280x720", BitrateKbps: 2000, Codec: "h264", VideoPath: "/tmp/v.ts"}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Как у подруги: S5E14 оборвалась, пока качалась следующая, а следующую
+// поставили на паузу. Пауза держит слот от НОВЫХ серий, но автоповтор уже
+// начатой не должен из-за неё стоять вечно.
+func TestRunHLS_RetryNotBlockedByPausedEpisode(t *testing.T) {
+	k1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	k2 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 2}
+	s := &scriptedHLS{
+		fakeHLSDownloader: *newFakeHLS(nil),
+		started:           map[domain.EpisodeKey]chan struct{}{k1: make(chan struct{}, 4), k2: make(chan struct{}, 4)},
+		result:            map[domain.EpisodeKey]chan error{k1: make(chan error, 4), k2: make(chan error, 4)},
+	}
+	e, _, _ := newRetryTestEngine(s, &fakePageScraper{playlist: makePlaylist(2)})
+	e.retryBackoff = func(int) time.Duration { return 300 * time.Millisecond }
+	pause := make(chan domain.EpisodeKey, 4)
+	e.deps.PauseRequests = pause
+	e.deps.ResumeRequests = make(chan domain.EpisodeKey, 4)
+	cancel := make(chan domain.EpisodeKey, 4)
+	e.deps.CancelRequests = cancel
+
+	cfg := retryTestConfig()
+	cfg.MaxConcurrency = 1
+	done := make(chan domain.RunResult, 1)
+	go func() {
+		res, _ := e.runHLS(context.Background(), cfg)
+		done <- res
+	}()
+	wait := func(ch chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(3 * time.Second):
+			t.Fatal(what)
+		}
+	}
+
+	wait(s.started[k1], "первая серия не началась")
+	s.result[k1] <- errors.New("unexpected EOF") // обрыв → повтор через 300 мс
+	wait(s.started[k2], "вторая серия не заняла освободившийся слот")
+	pause <- k2 // качающуюся вторую ставят на паузу
+
+	wait(s.started[k1], "повтор первой серии встал из-за паузы второй")
+	s.result[k1] <- nil
+	cancel <- k2 // иначе запуск ждал бы снятия паузы вечно
+
+	select {
+	case res := <-done:
+		if res.Succeeded != 1 {
+			t.Errorf("Succeeded = %d, want 1", res.Succeeded)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("запуск не завершился")
+	}
+}

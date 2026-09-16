@@ -318,6 +318,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 	// попытка свернулась. Снятая к тому моменту отметка означала бы стёртые
 	// сегменты — ровно то, чего мы избегаем.
 	downloaded := map[string]bool{}
+	downloading := map[string]bool{} // получила место в общей очереди скачки
 	dropCanceledTemp := func(ep domain.Episode) {
 		ks := episodeKeyStr(ep.Key)
 		mu.Lock()
@@ -408,6 +409,14 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		// может дольше, чем качалась. Держать при этом слот скачивания — значит
 		// простаивать канал: поэтому слот отдаётся новому работнику сразу, как
 		// скачались сегменты.
+		// Серия дождалась общей очереди и правда качает. Только такая держит
+		// слот, если её поставят на паузу: стоявшая в ожидании очереди ничего
+		// не качала, и её пауза иначе останавливала весь сериал.
+		markDownloading := func() {
+			mu.Lock()
+			downloading[ks] = true
+			mu.Unlock()
+		}
 		markDownloaded := func() {
 			mu.Lock()
 			downloaded[episodeKeyStr(pe.ep.Key)] = true
@@ -421,12 +430,14 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 				spawnWorker()
 			}
 		}
-		res, err := e.attemptHLSEpisode(epCtx, cfg, series, pe.ep, pe.manifest, posterPath, markDownloaded)
+		res, err := e.attemptHLSEpisode(epCtx, cfg, series, pe.ep, pe.manifest, posterPath, markDownloading, markDownloaded)
 
 		mu.Lock()
 		delete(epCancels, ks)
 		pausedHere := pauseMark[ks]
 		delete(pauseMark, ks)
+		wasDownloading := downloading[ks]
+		delete(downloading, ks)
 		canceledHere := cancelMark[ks]
 		delete(cancelMark, ks)
 		mu.Unlock()
@@ -457,7 +468,7 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			pe.lastErr = nil
 			// It was downloading when the user paused it: its slot stays empty
 			// until it is resumed or canceled. На склейке слот уже отдан.
-			pe.heldFromRunning = !released
+			pe.heldFromRunning = !released && wasDownloading
 			mu.Lock()
 			pausedHold = append(pausedHold, pe)
 			mu.Unlock()
@@ -733,6 +744,17 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		// exactly what the user saw and did not ask for. An episode paused while
 		// still queued holds no slot: there it means "not this one, carry on".
 		if held := heldRunningCount(); held > 0 && inFlight-muxing+held >= cfg.MaxConcurrency {
+			// Повтор серии с ошибкой — не «следующая серия»: её уже качали, и
+			// автоповтор, вставший из-за чужой паузы, выглядел как зависание.
+			// Пускаем, если свободен хоть один настоящий слот.
+			if inFlight-muxing < cfg.MaxConcurrency {
+				if idx := readyDeferredIndex(retryQueue, time.Now()); idx >= 0 {
+					pe := retryQueue[idx]
+					retryQueue = append(retryQueue[:idx], retryQueue[idx+1:]...)
+					inFlight++
+					return pe, 0, false
+				}
+			}
 			return nil, 300 * time.Millisecond, false
 		}
 		// Серия с ошибкой идёт раньше новых: иначе она ждала конца всего сезона, и
@@ -871,6 +893,12 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			case key := <-retryReq:
 				ks := episodeKeyStr(key)
 				mu.Lock()
+				// Серия уже ждёт автоповтора — «Повторить» значит «не жди паузу».
+				for _, pe := range retryQueue {
+					if episodeKeyStr(pe.ep.Key) == ks {
+						pe.nextAt = time.Time{}
+					}
+				}
 				// Skip when the run is winding down (no worker would pick it up — it
 				// would otherwise be re-queued only to be swept as failed), when the
 				// episode is already active/queued/held, or when it already SUCCEEDED
@@ -1115,6 +1143,8 @@ func (e *engine) attemptHLSEpisode(
 	ep domain.Episode,
 	manifestURL string,
 	posterPath string,
+	// markDownloading — серия получила место в общей очереди скачки.
+	markDownloading func(),
 	// markDownloaded сообщает наружу, что скачивание кончилось и пошла склейка:
 	// отмена на этой стадии не должна стирать скачанные сегменты.
 	markDownloaded func(),
@@ -1172,6 +1202,9 @@ func (e *engine) attemptHLSEpisode(
 		return epRetryable, ctx.Err()
 	}
 
+	if markDownloading != nil {
+		markDownloading()
+	}
 	e.deps.ProgressReporter.EpisodeStarted(ep.Key)
 
 	// Segments and the concatenated stream are intermediate files: they follow

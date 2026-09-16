@@ -106,8 +106,12 @@ function EpisodeRow({
   // left behind on a finished job. Not on a paused job — there the right action
   // is Resume (which re-attempts the failed episode), so Retry would contradict
   // the pause and start a download while the job is paused.
+  // Серия, ждущая автоповтора, тоже: «Повторить» запускает её, не дожидаясь паузы
+  // между попытками. Без кнопки строка с красной ошибкой выглядела брошенной.
   const canRetryEp =
-    (ep.state === "failed" && jobStatus !== "paused") || (jobFinished && ep.state !== "completed");
+    (ep.state === "failed" && jobStatus !== "paused") ||
+    (jobLive && ep.state === "deferred") ||
+    (jobFinished && ep.state !== "completed");
   // Per-episode pause holds an episode aside — including one that is actively
   // downloading (its download stops and partial segments are kept). Resume
   // releases it. Only meaningful while the job itself is downloading.
