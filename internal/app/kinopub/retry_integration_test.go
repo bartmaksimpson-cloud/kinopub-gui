@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -282,5 +283,46 @@ func TestRunHLS_DiskFullDoesNotBurnAttempts(t *testing.T) {
 	}
 	if res.Failed != 0 || res.Succeeded != 1 {
 		t.Fatalf("succeeded=%d failed=%d, want 1/0", res.Succeeded, res.Failed)
+	}
+}
+
+// countingHLS records how many DownloadEpisode calls overlap.
+type countingHLS struct {
+	fakeHLSDownloader
+	active, peak atomic.Int32
+}
+
+func (c *countingHLS) DownloadEpisode(ctx context.Context, url string, q domain.Quality, out string, key domain.EpisodeKey, sink domain.ProgressSink) (*domain.HLSDownloadResult, error) {
+	n := c.active.Add(1)
+	for {
+		p := c.peak.Load()
+		if n <= p || c.peak.CompareAndSwap(p, n) {
+			break
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	c.active.Add(-1)
+	return c.fakeHLSDownloader.DownloadEpisode(ctx, url, q, out, key, sink)
+}
+
+// Два сериала, у каждого по три потока — а качается всё равно одна серия.
+func TestRunHLS_OneDownloadAcrossJobs(t *testing.T) {
+	hls := &countingHLS{fakeHLSDownloader: *newFakeHLS(nil)}
+	var wg sync.WaitGroup
+	for range 2 {
+		e, _, _ := newRetryTestEngine(hls, &fakePageScraper{playlist: makePlaylist(3)})
+		cfg := retryTestConfig()
+		cfg.MaxConcurrency = 3
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := e.runHLS(context.Background(), cfg); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if p := hls.peak.Load(); p != 1 {
+		t.Fatalf("одновременно качалось %d серий, want 1", p)
 	}
 }

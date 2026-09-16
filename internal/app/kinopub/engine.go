@@ -28,6 +28,13 @@ type engine struct {
 
 // backoffFor returns the retry backoff for the given attempt count, using the
 // engine's override when present.
+// downloadGate — одна скачивающаяся серия на всё приложение (у каждой задачи
+// свой engine, поэтому переменная пакета). Склейкой ведает своя очередь.
+//
+// ponytail: один слот на процесс; если понадобятся параллельные скачки,
+// вынести размер в настройки.
+var downloadGate = make(chan struct{}, 1)
+
 func (e *engine) backoffFor(attempts int) time.Duration {
 	if e.retryBackoff != nil {
 		return e.retryBackoff(attempts)
@@ -1155,6 +1162,16 @@ func (e *engine) attemptHLSEpisode(
 		return res, err
 	}
 
+	// Одна серия качается на всё приложение, сколько бы сериалов ни стояло в
+	// очереди: две скачки 4K делят канал и диск, и каждая идёт вдвое дольше, а
+	// склейки за ними выстраиваются в хвост. Пока ждёт — строка остаётся «в
+	// очереди», а не «качается 0%».
+	select {
+	case downloadGate <- struct{}{}:
+	case <-ctx.Done():
+		return epRetryable, ctx.Err()
+	}
+
 	e.deps.ProgressReporter.EpisodeStarted(ep.Key)
 
 	// Segments and the concatenated stream are intermediate files: they follow
@@ -1162,6 +1179,8 @@ func (e *engine) attemptHLSEpisode(
 	tsPath := domain.WorkPathFor(cfg.WorkPath, cfg.OutputPath, outPath) + ".ts"
 	adoptLegacyTemp(cfg, series, ep, tsPath, log)
 	hlsResult, dlErr := e.deps.HLSDownloader.DownloadEpisode(ctx, manifestURL, cfg.Quality, tsPath, ep.Key, e.deps.ProgressReporter)
+	// Скачка кончилась — место следующей серии, склейка ждёт в своей очереди.
+	<-downloadGate
 	if dlErr != nil {
 		if ctx.Err() != nil {
 			return epRetryable, dlErr
