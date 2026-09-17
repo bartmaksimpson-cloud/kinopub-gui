@@ -97,8 +97,18 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 		if ctx.Err() != nil {
 			return domain.RunResult{}, fmt.Errorf("page scrape: %w", ctx.Err())
 		}
+		// Сервис лежит (502, таймаут) — ждём сколько нужно: иначе задача,
+		// запущенная во время сбоя, проваливалась за 12 секунд. Попытку не
+		// считаем, пауза растёт до минуты.
+		down := isTransientDownloadError(err)
+		if down {
+			attempt = min(attempt, scrapeAttempts-1)
+		}
 		if attempt < scrapeAttempts {
 			delay := time.Duration(attempt) * 2 * time.Second
+			if down {
+				delay = e.scrapeWait(delay)
+			}
 			log.Warn("page scrape failed, retrying",
 				domain.F("attempt", attempt),
 				domain.F("max_attempts", scrapeAttempts),
@@ -502,7 +512,11 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 			}
 			// Нет места — ждём, пока появится, сколько бы ни пришлось: попытку не
 			// тратим, иначе через пять минут серия провалится и сотрёт сегменты.
-			noSpace := diskFull(err)
+			//
+			// Лежит сам источник (502 от kino.watch, не отвечает манифест) — то же
+			// самое: 17.09 сервис лежал восемь минут, а восемь попыток кончились
+			// за четыре, и фильм провалился вместе с 7 ГБ скачанного.
+			noSpace := diskFull(err) || sourceDown(err)
 			if noSpace {
 				pe.attempts--
 			}
@@ -1082,6 +1096,14 @@ const (
 	epFatal                           // permanent failure — do not retry
 )
 
+// scrapeWait caps the wait between page scrapes while the service is down.
+func (e *engine) scrapeWait(d time.Duration) time.Duration {
+	if e.retryBackoff != nil {
+		return e.retryBackoff(0) // тесты не ждут
+	}
+	return min(d*5, time.Minute)
+}
+
 // episodeRetryBackoff returns how long to wait before the next attempt of an
 // episode that has failed `attempts` times. It grows linearly and is capped so
 // a stuck CDN segment doesn't stall the whole run indefinitely.
@@ -1421,6 +1443,23 @@ var transientErrorMarkers = []string{
 	"http 503", "503",
 	"http 504", "504",
 	"server misbehaving",
+}
+
+// sourceDown reports whether err means kino.watch or its CDN is down as a
+// whole, rather than one segment misbehaving: the manifest itself is
+// unreachable, or a gateway answers 5xx. Такое проходит само, и ждать его надо
+// сколько потребуется, не расходуя попытки.
+func sourceDown(err error) bool {
+	if !isTransientDownloadError(err) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, m := range []string{"master playlist", "http 502", "http 503", "http 504", "no such host"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // isTransientDownloadError reports whether err looks like a recoverable

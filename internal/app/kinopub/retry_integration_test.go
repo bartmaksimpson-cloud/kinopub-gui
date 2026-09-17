@@ -326,3 +326,43 @@ func TestRunHLS_OneDownloadAcrossJobs(t *testing.T) {
 		t.Fatalf("одновременно качалось %d серий, want 1", p)
 	}
 }
+
+// Лежит сам kino.watch: серия ждёт, сколько бы ни пролежал, и не проваливается,
+// когда попытки «кончились».
+func TestRunHLS_SourceDownDoesNotBurnAttempts(t *testing.T) {
+	hls := newFakeHLS(errors.New(`master playlist: fetch master playlist: Get "https://api.service-kp.com/manifest/hls4/x.m3u8": context deadline exceeded`))
+	key1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	hls.failsLeft[key1] = maxEpisodeAttempts + 3
+
+	e, _, _ := newRetryTestEngine(hls, &fakePageScraper{playlist: makePlaylist(1)})
+	res, err := e.runHLS(context.Background(), retryTestConfig())
+	if err != nil {
+		t.Fatalf("runHLS error: %v", err)
+	}
+	if res.Failed != 0 || res.Succeeded != 1 {
+		t.Fatalf("succeeded=%d failed=%d, want 1/0", res.Succeeded, res.Failed)
+	}
+}
+
+func TestSourceDown(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"video track: segment 188 failed: after 5 attempts: HTTP 502":                    true,
+		`master playlist: fetch master playlist: Get "x": context deadline exceeded`:     true,
+		"video track: segment 225 failed: after 5 attempts: unexpected EOF (got 1 of 2)": false,
+		"no variants found in master playlist":                                           false,
+	} {
+		if got := sourceDown(errors.New(msg)); got != want {
+			t.Errorf("sourceDown(%q) = %v, want %v", msg, got, want)
+		}
+	}
+}
+
+// Задача, запущенная во время сбоя, дожидается сервиса, а не падает за 12 секунд.
+func TestRunHLS_ScrapeWaitsOutOutage(t *testing.T) {
+	sc := &flakyScraper{failUntil: 11, err: errors.New("kino.watch API items/42: HTTP 502: Bad Gateway"), playlist: makePlaylist(1)}
+	e, _, _ := newRetryTestEngine(newFakeHLS(nil), sc)
+	res, err := e.runHLS(context.Background(), retryTestConfig())
+	if err != nil || res.Succeeded != 1 {
+		t.Fatalf("res=%+v err=%v, want 1 succeeded", res, err)
+	}
+}
