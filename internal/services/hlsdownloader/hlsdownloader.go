@@ -755,86 +755,63 @@ func (d *Downloader) downloadEpisodeInternal(
 		)
 	}
 
-	var (
-		trackWG  sync.WaitGroup
-		trackErr error
-		errOnce  sync.Once
-	)
-	recordErr := func(err error) {
-		if err != nil {
-			errOnce.Do(func() { trackErr = err })
-		}
-	}
-
-	// Video track (index 0).
-	trackWG.Add(1)
-	go func() {
-		defer trackWG.Done()
-		// Показывается ход сборки только видео: остальные дорожки на его фоне —
-		// доли процента, и три счётчика сразу мешали бы друг другу.
-		videoBytes := func() int64 {
-			progMu.Lock()
-			defer progMu.Unlock()
-			return trackInfos[0].DownloadedBytes
-		}
-		if err := downloadTrack(ctx, 0, videoPlaylist.InitURI, videoPlaylist.Segments, videoDir, videoPath, assembleProgress(videoBytes), false); err != nil {
-			recordErr(fmt.Errorf("video track: %w", err))
-		}
-	}()
-
-	// Audio tracks (indices 1..N).
-	for ai, aj := range audioJobs {
-		trackWG.Add(1)
-		go func(ai int, aj audioJob) {
-			defer trackWG.Done()
-			audioDir := filepath.Join(tmpDir, fmt.Sprintf("audio_%d", ai))
-			if err := downloadTrack(ctx, 1+ai, aj.playlist.InitURI, aj.playlist.Segments, audioDir, aj.outFile, nil, true); err != nil {
-				recordErr(fmt.Errorf("audio track %d: %w", ai, err))
-				return
-			}
-			resultAudio[ai] = domain.HLSAudioTrack{
-				Path:     aj.outFile,
-				Name:     aj.rendition.Name,
-				Language: aj.rendition.Language,
-			}
-		}(ai, aj)
-	}
+	// Дорожки качаются по очереди: сначала субтитры, потом озвучки одна за
+	// другой, последним видео. Разом они делили канал, и каждая шла медленнее;
+	// по очереди мелкие дорожки готовы за секунды, а внутри дорожки сегменты
+	// всё равно качаются параллельно — скорость не теряется.
 
 	// Subtitle tracks (indices after the audio ones). A failure only drops that
 	// track: see the playlist loop above.
 	for si, sj := range subJobs {
-		trackWG.Add(1)
-		go func(si int, sj subtitleJob) {
-			defer trackWG.Done()
-			subDir := filepath.Join(tmpDir, fmt.Sprintf("sub_%d", si))
-			if err := downloadTrack(ctx, 1+len(audioJobs)+si, sj.playlist.InitURI, sj.playlist.Segments, subDir, sj.outFile, nil, true); err != nil {
-				d.logger.Warn("subtitle track failed, continuing without it",
-					domain.F("episode", epLabel),
-					domain.F("subtitle", sj.rendition.Name),
-					domain.F("error", err.Error()),
-				)
-				return
+		subDir := filepath.Join(tmpDir, fmt.Sprintf("sub_%d", si))
+		if err := downloadTrack(ctx, 1+len(audioJobs)+si, sj.playlist.InitURI, sj.playlist.Segments, subDir, sj.outFile, nil, true); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
-			if err := joinWebVTT(sj.outFile); err != nil {
-				d.logger.Warn("subtitle file unusable, continuing without it",
-					domain.F("episode", epLabel),
-					domain.F("subtitle", sj.rendition.Name),
-					domain.F("error", err.Error()),
-				)
-				return
-			}
-			resultSubs[si] = domain.HLSSubtitleTrack{
-				Path:     sj.outFile,
-				Name:     sj.rendition.Name,
-				Language: sj.rendition.Language,
-			}
-		}(si, sj)
+			d.logger.Warn("subtitle track failed, continuing without it",
+				domain.F("episode", epLabel),
+				domain.F("subtitle", sj.rendition.Name),
+				domain.F("error", err.Error()),
+			)
+			continue
+		}
+		if err := joinWebVTT(sj.outFile); err != nil {
+			d.logger.Warn("subtitle file unusable, continuing without it",
+				domain.F("episode", epLabel),
+				domain.F("subtitle", sj.rendition.Name),
+				domain.F("error", err.Error()),
+			)
+			continue
+		}
+		resultSubs[si] = domain.HLSSubtitleTrack{
+			Path:     sj.outFile,
+			Name:     sj.rendition.Name,
+			Language: sj.rendition.Language,
+		}
 	}
 
-	trackWG.Wait()
+	// Audio tracks (indices 1..N).
+	for ai, aj := range audioJobs {
+		audioDir := filepath.Join(tmpDir, fmt.Sprintf("audio_%d", ai))
+		if err := downloadTrack(ctx, 1+ai, aj.playlist.InitURI, aj.playlist.Segments, audioDir, aj.outFile, nil, true); err != nil {
+			return nil, fmt.Errorf("audio track %d: %w", ai, err)
+		}
+		resultAudio[ai] = domain.HLSAudioTrack{
+			Path:     aj.outFile,
+			Name:     aj.rendition.Name,
+			Language: aj.rendition.Language,
+		}
+	}
 
-	if trackErr != nil {
-		return nil, trackErr
+	// Video track (index 0). Показывается ход сборки только видео: остальные
+	// дорожки на его фоне — доли процента.
+	videoBytes := func() int64 {
+		progMu.Lock()
+		defer progMu.Unlock()
+		return trackInfos[0].DownloadedBytes
+	}
+	if err := downloadTrack(ctx, 0, videoPlaylist.InitURI, videoPlaylist.Segments, videoDir, videoPath, assembleProgress(videoBytes), false); err != nil {
+		return nil, fmt.Errorf("video track: %w", err)
 	}
 
 	var totalBytes int64

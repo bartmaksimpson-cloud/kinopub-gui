@@ -644,3 +644,57 @@ func readParts(parts []string) ([]byte, error) {
 	}
 	return out, nil
 }
+
+// Дорожки качаются по очереди: все куски озвучек (одна за другой) приходят
+// раньше первого куска видео.
+func TestDownloadEpisode_TracksSequential(t *testing.T) {
+	master := `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="RUS",LANGUAGE="rus",URI="/audio/rus.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="ENG",LANGUAGE="eng",URI="/audio/eng.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=2400000,RESOLUTION=1280x720,CODECS="avc1.4d401f",AUDIO="aud"
+/720/media.m3u8
+`
+	media := func(prefix string) string {
+		return "#EXTM3U\n#EXTINF:6.0,\n" + prefix + "0.ts\n#EXTINF:6.0,\n" + prefix + "1.ts\n#EXT-X-ENDLIST\n"
+	}
+	files := map[string]string{
+		"/master.m3u8":    master,
+		"/720/media.m3u8": media("/720/v"),
+		"/audio/rus.m3u8": media("/audio/r"),
+		"/audio/eng.m3u8": media("/audio/e"),
+	}
+	var mu sync.Mutex
+	var order []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if body, ok := files[r.URL.Path]; ok {
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		mu.Lock()
+		order = append(order, r.URL.Path)
+		mu.Unlock()
+		_, _ = w.Write([]byte("DATA"))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	d := newTestDownloader(t, srv.Client())
+
+	outPath := filepath.Join(t.TempDir(), "ep.ts")
+	res, err := d.DownloadEpisode(context.Background(), srv.URL+"/master.m3u8", "720p", outPath, domain.EpisodeKey{Season: 1, Episode: 1}, nil)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	defer os.RemoveAll(res.TempDir)
+
+	track := func(p string) string { return p[:len(p)-len("0.ts")] }
+	var tracks []string
+	for _, p := range order {
+		if len(tracks) == 0 || tracks[len(tracks)-1] != track(p) {
+			tracks = append(tracks, track(p))
+		}
+	}
+	if len(tracks) != 3 || tracks[2] != "/720/v" {
+		t.Fatalf("дорожки перемешаны или видео не последним: %v (запросы %v)", tracks, order)
+	}
+}
