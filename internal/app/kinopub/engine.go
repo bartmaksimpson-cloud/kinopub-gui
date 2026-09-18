@@ -526,14 +526,9 @@ func (e *engine) runHLS(ctx context.Context, cfg domain.RunConfig) (domain.RunRe
 					domain.F("attempts", pe.attempts),
 					domain.F("error", err.Error()),
 				)
-				// Budget exhausted — clean up the segment temp directory that
-				// was preserved across retries for resume (unless the run is being
-				// paused, where partial data is kept for a later resume).
-				if e.deps.Paused == nil || !e.deps.Paused() {
-					if outPath, pathErr := e.deps.OutputLayout.EpisodePath(cfg.OutputPath, series, pe.ep); pathErr == nil {
-						os.RemoveAll(domain.WorkPathFor(cfg.WorkPath, cfg.OutputPath, outPath) + ".ts.hls-tmp")
-					}
-				}
+				// Скачанные куски НЕ стираем: «Повторить» продолжит с них, а
+				// стирание стоило человеку трёх часов 4K по одной оборванной
+				// связи. Место освободит успешная склейка или отмена серии.
 				mu.Lock()
 				failed++
 				outcomes = append(outcomes, domain.JobOutcome{Key: pe.ep.Key, Err: err, Attempts: pe.attempts})
@@ -1240,7 +1235,12 @@ func (e *engine) attemptHLSEpisode(
 		if ctx.Err() != nil {
 			return epRetryable, dlErr
 		}
-		if isTransientDownloadError(dlErr) || diskFull(dlErr) {
+		// По умолчанию ошибка скачивания — временная. Список «временных» слов
+		// всегда отставал от жизни: 17.09 Windows ответила «доступ к сокету
+		// запрещён» (антивирус или кончились порты), слова в списке не нашлось,
+		// и три часа скачанного 4K стёрлись как при неисправимой ошибке.
+		// Вечного повтора это не даёт: попытки серии всё равно ограничены.
+		if !permanentDownloadError(dlErr) {
 			return epRetryable, dlErr
 		}
 		// Terminal failure: clean up the segment temp directory so it does not
@@ -1455,6 +1455,29 @@ func sourceDown(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	for _, m := range []string{"master playlist", "http 502", "http 503", "http 504", "no such host"} {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// permanentDownloadErrorMarkers — ошибки, которые повтором не лечатся: сервер
+// сказал «такого нет» или «сюда нельзя», либо в манифесте нечего качать.
+var permanentDownloadErrorMarkers = []string{
+	"http 401", "http 403", "http 404", "http 410",
+	"no variants found",
+	"no segments",
+	"unsupported",
+}
+
+// permanentDownloadError reports whether retrying is pointless.
+func permanentDownloadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, m := range permanentDownloadErrorMarkers {
 		if strings.Contains(msg, m) {
 			return true
 		}

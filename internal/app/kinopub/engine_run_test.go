@@ -665,7 +665,7 @@ func TestBuildSeriesFromPlaylist_GroupsAndSortsSeasons(t *testing.T) {
 // on disk: the state file is what the GUI library scans for, so writing it up
 // front turned every failed run into a phantom "downloaded" card.
 func TestRunHLS_NoMetadataOrFolderWhenNothingDownloads(t *testing.T) {
-	hls := newFakeHLS(errors.New("boom")) // not a transient marker → fatal, no retries
+	hls := newFakeHLS(errors.New("segment 1: HTTP 404")) // неисправимая → без повторов
 	for i := 1; i <= 2; i++ {
 		hls.failsLeft[domain.EpisodeKey{Series: "42", Season: 1, Episode: i}] = 1
 	}

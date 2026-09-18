@@ -366,3 +366,21 @@ func TestRunHLS_ScrapeWaitsOutOutage(t *testing.T) {
 		t.Fatalf("res=%+v err=%v, want 1 succeeded", res, err)
 	}
 }
+
+// Оборванная связь (какими бы словами её ни назвала система) — повод повторить,
+// а не стереть скачанное: Windows отвечает «доступ к сокету запрещён», и такого
+// слова ни в одном списке «временных» не было.
+func TestRunHLS_UnknownNetworkErrorIsRetried(t *testing.T) {
+	hls := newFakeHLS(errors.New(`video track: segment 881 failed: after 5 attempts: dial tcp 31.40.217.114:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.`))
+	key1 := domain.EpisodeKey{Series: "42", Season: 1, Episode: 1}
+	hls.failsLeft[key1] = 2
+
+	e, _, _ := newRetryTestEngine(hls, &fakePageScraper{playlist: makePlaylist(1)})
+	res, err := e.runHLS(context.Background(), retryTestConfig())
+	if err != nil {
+		t.Fatalf("runHLS error: %v", err)
+	}
+	if res.Succeeded != 1 || res.Failed != 0 {
+		t.Fatalf("succeeded=%d failed=%d, want 1/0", res.Succeeded, res.Failed)
+	}
+}
